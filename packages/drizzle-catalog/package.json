@@ -1,0 +1,39 @@
+{
+  "name": "@mspbyte/drizzle-catalog",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./src/*/index.ts",
+      "import": "./dist/*/index.js",
+      "default": "./dist/*.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check-types": "tsc --noEmit",
+    "db:pull": "drizzle-kit pull",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "npx run src/migrate.ts",
+    "db:push": "drizzle-kit push",
+    "seed:better-auth-org": "bun run src/seeds/provision-better-auth-org.ts"
+  },
+  "dependencies": {
+    "@mspbyte/drizzle": "*",
+    "@neondatabase/serverless": "^1.0.2",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^1.0.0-beta.22",
+    "postgres": "^3.4.5",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@mspbyte/typescript-config": "*",
+    "@types/node": "^25.9.3",
+    "drizzle-kit": "^1.0.0-beta.22",
+    "typescript": "^5.4.0"
+  }
+}

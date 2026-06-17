@@ -1,0 +1,20 @@
+{
+  "name": "@mspbyte/backend-ingestion",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mspbyte/logging": "*",
+    "@mspbyte/pipeline": "*"
+  },
+  "devDependencies": {
+    "@mspbyte/typescript-config": "*",
+    "typescript": "^5.4.0"
+  }
+}

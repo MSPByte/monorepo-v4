@@ -1,0 +1,32 @@
+import crypto from 'node:crypto';
+
+const ALGORITHM = 'aes-256-gcm';
+
+export class Encryption {
+  static encrypt(text: string, key: string): string {
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(key, 'hex'), iv);
+    const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return [iv.toString('base64'), tag.toString('base64'), encrypted.toString('base64')].join(':');
+  }
+
+  static decrypt(encryptedText: string, key: string): string | undefined {
+    const [ivB64, tagB64, dataB64] = encryptedText.split(':');
+    if (!ivB64 || !tagB64 || !dataB64) return undefined;
+    const iv = Buffer.from(ivB64, 'base64');
+    const tag = Buffer.from(tagB64, 'base64');
+    const encrypted = Buffer.from(dataB64, 'base64');
+    const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(key, 'hex'), iv);
+    decipher.setAuthTag(tag);
+    return decipher.update(encrypted, undefined, 'utf8') + decipher.final('utf8');
+  }
+
+  static sha256(s: string): string {
+    return crypto.createHash('sha256').update(s).digest('hex');
+  }
+
+  static genKey(): string {
+    return crypto.randomBytes(32).toString('hex');
+  }
+}
