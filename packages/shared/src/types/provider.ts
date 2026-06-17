@@ -1,4 +1,4 @@
-import type { ZodSchema } from "zod";
+import type { ZodObject } from "zod";
 
 export type AdapterContext = {
   linkMeta?: Record<string, unknown>;
@@ -49,7 +49,7 @@ export interface ProviderAdapter<TRaw = unknown, TNormalized = unknown> {
     ctx?: AdapterContext,
   ): AsyncGenerator<TRaw[], FetchCursor>;
   normalize(raw: TRaw, facet: ProviderFacet): TNormalized;
-  rawSchema: ZodSchema<TRaw>;
+  rawSchema: ZodObject;
 }
 
 export const PROVIDER_IDS = {

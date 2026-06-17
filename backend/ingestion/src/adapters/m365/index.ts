@@ -132,7 +132,7 @@ const M365RiskyUserSchema = z.looseObject({
   riskLastUpdatedDateTime: z.string().nullable().optional(),
 });
 
-const schemas: Partial<Record<ProviderFacet, z.ZodSchema<unknown>>> = {
+const schemas: Partial<Record<ProviderFacet, z.ZodObject>> = {
   [ProviderFacet.M365Identities]: M365UserSchema,
   [ProviderFacet.M365Groups]: M365GroupSchema,
   [ProviderFacet.M365Licenses]: M365SubscribedSkuSchema,
