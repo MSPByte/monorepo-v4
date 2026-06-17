@@ -20,5 +20,8 @@
   "devDependencies": {
     "@mspbyte/typescript-config": "*",
     "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
   }
 }

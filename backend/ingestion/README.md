@@ -21,6 +21,7 @@ project, evaluate policy, or write vendor/canonical tables.
 - Use BullMQ and Redis as in monorepo-v2.
 - Scheduler enqueues link-scoped ingestion jobs into
   `orgQueueName(QUEUES.INGEST, orgId)`.
+- BullMQ queue names, job names, and job IDs must not contain `:`.
 - Ingestion workers run per active org or use org-scoped queue names, matching
   the v2 isolation model.
 - Manual development jobs should use the same queue and job contract as
@@ -54,12 +55,63 @@ default to `op: "upsert"`.
 
 ## First Implementation Slice
 
-1. Add Redis/env setup and an ingestion worker factory.
-2. Add adapter registry with no vendor implementations beyond a test adapter.
-3. Add DB helpers for creating runs, batches, records, and sync context updates.
-4. Implement manual enqueue entry point for development testing.
-5. Add one real provider type end to end.
-6. Add projection handoff after raw batch insert.
+1. Redis/env setup and org-scoped worker management.
+2. Adapter registry with an opt-in `dev` adapter for local pipeline testing.
+3. DB helpers for runs, stages, batches, records, and sync context updates.
+4. Scheduled enqueue from catalog orgs and tenant `integration_links`.
+5. Manual enqueue entry point for development testing.
+6. Add one real provider type end to end.
+7. Add projection handoff after raw batch insert.
+
+## Runtime
+
+Required environment:
+
+- `REDIS_URL`, defaults to `redis://localhost:6379`.
+- `CATALOG_DATABASE_URL`, used by `@mspbyte/drizzle-catalog`.
+- `ENCRYPTION_KEY`, used to decrypt tenant service connection strings.
+- `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET`, required for
+  Microsoft 365 Graph ingestion.
+
+Useful development flags:
+
+- Non-production runtimes only process catalog organizations where
+  `organization.is_dev = true`. Production is detected when `INGESTION_ENV`,
+  `APP_ENV`, or `NODE_ENV` is `production`.
+- `INGESTION_REQUIRE_DEV_ORGS=false` can disable the dev-org guard for a local
+  one-off run, but should not be used for normal development testing.
+- `INGESTION_ENABLE_DEV_ADAPTER=true` registers provider `dev` with type
+  `dev_entities`.
+- `INGESTION_SCHEDULER_ENABLED=false` starts workers without scheduled scans.
+- `INGESTION_WORKER_CONCURRENCY=4` controls per-org worker concurrency.
+- `INGESTION_ACTIVE_RUN_STALE_MS=7200000` controls when a stuck active run is
+  marked failed and allowed to be scheduled again.
+
+Manual enqueue example:
+
+```sh
+INGESTION_ENABLE_DEV_ADAPTER=true bun --filter ingestion run enqueue:manual -- --org-id <org-id> --link-id <link-id> --type dev_entities --mode full
+```
+
+Microsoft 365 example:
+
+```sh
+bun --filter ingestion run enqueue:manual -- --org-id <org-id> --link-id <link-id> --type m365_identities --mode full
+```
+
+The first Microsoft 365 adapter covers Graph-backed facets:
+
+- `m365_identities`
+- `m365_groups`
+- `m365_licenses`
+- `m365_ca_policies`
+- `m365_auth_methods`
+- `m365_devices`
+- `m365_oauth_grants`
+- `m365_risky_users`
+
+Exchange, Teams, mailbox forwarding, inbox rules, and domain config still need
+PowerShell-backed runners before they should be registered as ingestion types.
 
 ## Test Strategy
 

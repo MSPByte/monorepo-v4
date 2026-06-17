@@ -1,14 +1,17 @@
+import type { ProviderFacet, ProviderId } from "@mspbyte/shared";
+
 export type SyncMode = "full" | "incremental";
 export type RawRecordOp = "upsert" | "delete";
 
-export type IngestionFacet = string;
+export type IngestionFacet = ProviderFacet | (string & {});
+export type IngestionProviderId = ProviderId | (string & {});
 
 export type IngestionJobData = {
   orgId: string;
   linkId: string;
   siteId?: string;
-  integrationId: string;
-  provider: string;
+  integrationId: IngestionProviderId;
+  provider: IngestionProviderId;
   type: IngestionFacet;
   syncRunId: string;
   mode: SyncMode;
