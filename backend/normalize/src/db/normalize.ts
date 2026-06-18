@@ -1,13 +1,18 @@
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import {
   assets,
+  coveEndpoints,
+  dattoEndpoints,
   entitySources,
   m365Devices,
   m365Identities,
   people,
+  sophosEndpoints,
+  sophosFirewalls,
   syncRuns,
   syncRunStages,
 } from "@mspbyte/drizzle";
+import { ProviderFacet } from "@mspbyte/shared";
 
 type Db = any;
 
@@ -26,6 +31,34 @@ type ConfidenceLabel = "high" | "medium" | "low";
 type SourceStatus = "candidate" | "confirmed" | "rejected" | "superseded";
 
 const CONFIRMED_THRESHOLD = 85;
+
+type AssetTable =
+  | typeof m365Devices
+  | typeof sophosEndpoints
+  | typeof sophosFirewalls
+  | typeof dattoEndpoints
+  | typeof coveEndpoints;
+
+type AssetInput = {
+  vendorTable: string;
+  canonicalType: "asset";
+  row: {
+    id: string;
+    linkId: string;
+    siteId: string | null;
+    externalId: string;
+    [key: string]: unknown;
+  };
+  displayName: string;
+  hostname?: string;
+  serialNumber?: string;
+  assetType: "workstation" | "server" | "network" | "mobile" | "unknown";
+  status: "active" | "inactive" | "unknown";
+  sourceConfidence: ConfidenceLabel;
+  attributes: Record<string, unknown>;
+  createMatchMethod: string;
+  allowHostnameMatch?: boolean;
+};
 
 export async function startNormalizeStage(
   db: Db,
@@ -120,20 +153,19 @@ export async function normalizeProjectedRun(
     type: string;
   },
 ): Promise<NormalizeMetrics> {
-  if (!["m365", "microsoft-365"].includes(params.provider)) {
-    return emptyMetrics();
-  }
-
   switch (params.type) {
-    case "m365_identities":
-    case "identities":
-    case "identity":
-    case "m365Identities":
+    case ProviderFacet.M365Identities:
       return normalizeM365Identities(db, params);
-    case "m365_devices":
-    case "devices":
-    case "m365Devices":
+    case ProviderFacet.M365Devices:
       return normalizeM365Devices(db, params);
+    case ProviderFacet.SophosEndpoints:
+      return normalizeSophosEndpoints(db, params);
+    case ProviderFacet.SophosFirewalls:
+      return normalizeSophosFirewalls(db, params);
+    case ProviderFacet.DattoEndpoints:
+      return normalizeDattoEndpoints(db, params);
+    case ProviderFacet.CoveEndpoints:
+      return normalizeCoveEndpoints(db, params);
     default:
       return emptyMetrics();
   }
@@ -186,11 +218,10 @@ async function normalizeM365Identities(
         sourceConfidence: "high",
         attributes: {
           m365: {
+            linkId: params.linkId,
             externalId: row.externalId,
-            type: row.type,
-            mfaEnforced: row.mfaEnforced,
-            assignedLicenses: row.assignedLicenses ?? [],
-            lastSignInAt: row.lastSignInAt,
+            email,
+            displayName: row.name || email,
           },
         },
       });
@@ -203,11 +234,10 @@ async function normalizeM365Identities(
         sourceConfidence: confidenceLabel(match.confidence),
         attributes: {
           m365: {
+            linkId: params.linkId,
             externalId: row.externalId,
-            type: row.type,
-            mfaEnforced: row.mfaEnforced,
-            assignedLicenses: row.assignedLicenses ?? [],
-            lastSignInAt: row.lastSignInAt,
+            email,
+            displayName: row.name || email,
           },
         },
       });
@@ -270,7 +300,10 @@ async function normalizeM365Devices(
           method: "existing_source",
           evidence: { entitySourceId: existingSource.id },
         }
-      : await matchAsset(db, row.siteId ?? params.siteId, hostname);
+      : await matchAsset(db, {
+          siteId: row.siteId ?? params.siteId,
+          hostname,
+        });
     const status: SourceStatus =
       match.confidence >= CONFIRMED_THRESHOLD ? "confirmed" : "candidate";
     if (match.canonicalId && status === "candidate") metrics.candidateCt++;
@@ -287,13 +320,10 @@ async function normalizeM365Devices(
         sourceConfidence: "medium",
         attributes: {
           m365: {
+            linkId: params.linkId,
             externalId: row.externalId,
-            operatingSystem: row.operatingSystem,
-            operatingSystemVersion: row.operatingSystemVersion,
-            isCompliant: row.isCompliant,
-            isManaged: row.isManaged,
-            deviceOwnership: row.deviceOwnership,
-            approximateLastSignInAt: row.approximateLastSignInAt,
+            hostname,
+            displayName: row.displayName,
           },
         },
       });
@@ -308,13 +338,10 @@ async function normalizeM365Devices(
         sourceConfidence: confidenceLabel(match.confidence),
         attributes: {
           m365: {
+            linkId: params.linkId,
             externalId: row.externalId,
-            operatingSystem: row.operatingSystem,
-            operatingSystemVersion: row.operatingSystemVersion,
-            isCompliant: row.isCompliant,
-            isManaged: row.isManaged,
-            deviceOwnership: row.deviceOwnership,
-            approximateLastSignInAt: row.approximateLastSignInAt,
+            hostname,
+            displayName: row.displayName,
           },
         },
       });
@@ -345,6 +372,241 @@ async function normalizeM365Devices(
   }
 
   return metrics;
+}
+
+async function normalizeSophosEndpoints(
+  db: Db,
+  params: { linkId: string; siteId?: string; provider: string; type: string },
+): Promise<NormalizeMetrics> {
+  const rows = await activeVendorRows(db, sophosEndpoints, params.linkId);
+  const metrics = emptyMetrics();
+  metrics.recordsIn = rows.length;
+
+  for (const row of rows) {
+    await normalizeAsset(db, params, metrics, {
+      vendorTable: "sophos_endpoints",
+      canonicalType: "asset",
+      row,
+      displayName: row.hostname,
+      hostname: row.hostname,
+      assetType: row.type === "server" ? "server" : "workstation",
+      status: row.online ? "active" : "inactive",
+      sourceConfidence: "high",
+      attributes: {
+        sophosEndpoint: {
+          linkId: params.linkId,
+          externalId: row.externalId,
+          hostname: normalizeHostname(row.hostname),
+          displayName: row.hostname,
+        },
+      },
+      createMatchMethod: "created_from_sophos_endpoint",
+    });
+  }
+
+  return metrics;
+}
+
+async function normalizeSophosFirewalls(
+  db: Db,
+  params: { linkId: string; siteId?: string; provider: string; type: string },
+): Promise<NormalizeMetrics> {
+  const rows = await activeVendorRows(db, sophosFirewalls, params.linkId);
+  const metrics = emptyMetrics();
+  metrics.recordsIn = rows.length;
+
+  for (const row of rows) {
+    await normalizeAsset(db, params, metrics, {
+      vendorTable: "sophos_firewalls",
+      canonicalType: "asset",
+      row,
+      displayName:
+        row.name || row.hostname || row.serialNumber || row.externalId,
+      hostname: row.hostname,
+      serialNumber: row.serialNumber,
+      assetType: "network",
+      status: row.suspended ? "inactive" : row.connected ? "active" : "unknown",
+      sourceConfidence: "high",
+      attributes: {
+        sophosFirewall: {
+          linkId: params.linkId,
+          externalId: row.externalId,
+          name: row.name,
+          hostname: normalizeHostname(row.hostname),
+          serialNumber: row.serialNumber,
+        },
+      },
+      createMatchMethod: "created_from_sophos_firewall",
+      allowHostnameMatch: false,
+    });
+  }
+
+  return metrics;
+}
+
+async function normalizeDattoEndpoints(
+  db: Db,
+  params: { linkId: string; siteId?: string; provider: string; type: string },
+): Promise<NormalizeMetrics> {
+  const rows = await activeVendorRows(db, dattoEndpoints, params.linkId);
+  const metrics = emptyMetrics();
+  metrics.recordsIn = rows.length;
+
+  for (const row of rows) {
+    await normalizeAsset(db, params, metrics, {
+      vendorTable: "datto_endpoints",
+      canonicalType: "asset",
+      row,
+      displayName: row.hostname,
+      hostname: row.hostname,
+      assetType: row.category === "other" ? "unknown" : row.category,
+      status: row.online ? "active" : "inactive",
+      sourceConfidence: "high",
+      attributes: {
+        datto: {
+          linkId: params.linkId,
+          externalId: row.externalId,
+          hostname: normalizeHostname(row.hostname),
+          displayName: row.hostname,
+        },
+      },
+      createMatchMethod: "created_from_datto_endpoint",
+    });
+  }
+
+  return metrics;
+}
+
+async function normalizeCoveEndpoints(
+  db: Db,
+  params: { linkId: string; siteId?: string; provider: string; type: string },
+): Promise<NormalizeMetrics> {
+  const rows = await activeVendorRows(db, coveEndpoints, params.linkId);
+  const metrics = emptyMetrics();
+  metrics.recordsIn = rows.length;
+
+  for (const row of rows) {
+    await normalizeAsset(db, params, metrics, {
+      vendorTable: "cove_endpoints",
+      canonicalType: "asset",
+      row,
+      displayName: row.endpointName || row.hostname || row.externalId,
+      hostname: row.hostname || row.endpointName,
+      assetType: row.type,
+      status: row.status === "inactive" ? "inactive" : "active",
+      sourceConfidence: "medium",
+      attributes: {
+        cove: {
+          linkId: params.linkId,
+          externalId: row.externalId,
+          endpointName: row.endpointName,
+          hostname: normalizeHostname(row.hostname || row.endpointName),
+        },
+      },
+      createMatchMethod: "created_from_cove_endpoint",
+    });
+  }
+
+  return metrics;
+}
+
+async function normalizeAsset(
+  db: Db,
+  params: { linkId: string; siteId?: string; provider: string; type: string },
+  metrics: NormalizeMetrics,
+  input: AssetInput,
+): Promise<void> {
+  const hostname = normalizeHostname(input.hostname);
+  const serialNumber = normalizeSerial(input.serialNumber);
+
+  if (!hostname && !serialNumber) {
+    metrics.skippedCt++;
+    return;
+  }
+
+  const siteId = input.row.siteId ?? params.siteId;
+  const existingSource = await findSource(db, input.vendorTable, input.row.id);
+  const match = existingSource
+    ? {
+        canonicalId: existingSource.canonicalId,
+        confidence: 100,
+        method: "existing_source",
+        evidence: { entitySourceId: existingSource.id },
+      }
+    : await matchAsset(db, {
+        siteId,
+        hostname,
+        serialNumber,
+        allowHostnameMatch: input.allowHostnameMatch !== false,
+      });
+  const status: SourceStatus =
+    match.confidence >= CONFIRMED_THRESHOLD ? "confirmed" : "candidate";
+  if (match.canonicalId && status === "candidate") metrics.candidateCt++;
+
+  let canonicalId = match.canonicalId;
+  let canonicalCreated = false;
+  if (!canonicalId || status !== "confirmed") {
+    const created = await createAsset(db, {
+      siteId,
+      displayName: input.displayName,
+      hostname,
+      serialNumber,
+      assetType: input.assetType,
+      status: input.status,
+      sourceConfidence: input.sourceConfidence,
+      attributes: input.attributes,
+    });
+    canonicalId = created.id;
+    canonicalCreated = true;
+  } else {
+    await updateAsset(db, canonicalId, {
+      displayName: input.displayName,
+      hostname,
+      serialNumber,
+      assetType: input.assetType,
+      status: input.status,
+      sourceConfidence: confidenceLabel(match.confidence),
+      attributes: input.attributes,
+    });
+    metrics.canonicalUpdatedCt++;
+  }
+
+  if (canonicalCreated) metrics.canonicalCreatedCt++;
+  const sourceResult = await upsertEntitySource(db, {
+    canonicalType: input.canonicalType,
+    canonicalId,
+    vendorTable: input.vendorTable,
+    vendorRecordId: input.row.id,
+    linkId: params.linkId,
+    siteId,
+    provider: params.provider,
+    type: params.type,
+    externalId: input.row.externalId,
+    confidence: canonicalCreated ? 100 : match.confidence,
+    matchMethod: canonicalCreated ? input.createMatchMethod : match.method,
+    matchEvidence: canonicalCreated
+      ? {
+          hostname,
+          serialNumber,
+          reason: "no confirmed existing asset match",
+        }
+      : match.evidence,
+    status: "confirmed",
+  });
+  if (sourceResult.created) metrics.sourceCreatedCt++;
+  else metrics.sourceUpdatedCt++;
+  metrics.recordsOut++;
+}
+
+async function activeVendorRows(
+  db: Db,
+  table: AssetTable,
+  linkId: string,
+): Promise<Array<any>> {
+  return db
+    .select()
+    .from(table)
+    .where(and(eq(table.linkId, linkId), isNull(table.deletedAt)));
 }
 
 async function findSource(db: Db, vendorTable: string, vendorRecordId: string) {
@@ -399,9 +661,52 @@ async function matchPerson(db: Db, siteId: string | undefined, email: string) {
 
 async function matchAsset(
   db: Db,
-  siteId: string | undefined,
-  hostname: string,
+  options: {
+    siteId: string | undefined;
+    hostname?: string;
+    serialNumber?: string;
+    allowHostnameMatch?: boolean;
+  },
 ) {
+  const { siteId, hostname, serialNumber } = options;
+  const allowHostnameMatch = options.allowHostnameMatch !== false;
+  if (serialNumber) {
+    const [row] = await db
+      .select({
+        id: assets.id,
+        siteId: assets.siteId,
+        serialNumber: assets.serialNumber,
+      })
+      .from(assets)
+      .where(
+        siteId
+          ? and(
+              eq(assets.serialNumber, serialNumber),
+              or(eq(assets.siteId, siteId), isNull(assets.siteId)),
+            )
+          : eq(assets.serialNumber, serialNumber),
+      )
+      .limit(1);
+
+    if (row) {
+      return {
+        canonicalId: row.id,
+        confidence: row.siteId === siteId ? 98 : 93,
+        method: "serial_number",
+        evidence: { serialNumber, siteId },
+      };
+    }
+  }
+
+  if (!hostname || !allowHostnameMatch) {
+    return {
+      canonicalId: undefined,
+      confidence: 0,
+      method: "no_match",
+      evidence: { hostname, serialNumber },
+    };
+  }
+
   const [row] = await db
     .select({
       id: assets.id,
@@ -431,7 +736,7 @@ async function matchAsset(
       canonicalId: undefined,
       confidence: 0,
       method: "no_match",
-      evidence: { hostname },
+      evidence: { hostname, serialNumber },
     };
   }
 
@@ -439,7 +744,7 @@ async function matchAsset(
     canonicalId: row.id,
     confidence: row.siteId === siteId ? 90 : 85,
     method: row.hostname === hostname ? "hostname" : "display_name",
-    evidence: { hostname, siteId },
+    evidence: { hostname, serialNumber, siteId },
   };
 }
 
@@ -456,6 +761,9 @@ async function updatePerson(
   id: string,
   values: Partial<typeof people.$inferInsert>,
 ): Promise<void> {
+  if (values.attributes) {
+    values.attributes = await mergePersonAttributes(db, id, values.attributes);
+  }
   await db
     .update(people)
     .set({ ...values, updatedAt: new Date().toISOString() })
@@ -475,6 +783,9 @@ async function updateAsset(
   id: string,
   values: Partial<typeof assets.$inferInsert>,
 ): Promise<void> {
+  if (values.attributes) {
+    values.attributes = await mergeAssetAttributes(db, id, values.attributes);
+  }
   await db
     .update(assets)
     .set({ ...values, updatedAt: new Date().toISOString() })
@@ -524,6 +835,46 @@ function emptyMetrics(): NormalizeMetrics {
   };
 }
 
+async function mergePersonAttributes(
+  db: Db,
+  id: string,
+  incoming: unknown,
+): Promise<Record<string, unknown>> {
+  const [row] = await db
+    .select({ attributes: people.attributes })
+    .from(people)
+    .where(eq(people.id, id))
+    .limit(1);
+  return mergeRecord(row?.attributes, incoming);
+}
+
+async function mergeAssetAttributes(
+  db: Db,
+  id: string,
+  incoming: unknown,
+): Promise<Record<string, unknown>> {
+  const [row] = await db
+    .select({ attributes: assets.attributes })
+    .from(assets)
+    .where(eq(assets.id, id))
+    .limit(1);
+  return mergeRecord(row?.attributes, incoming);
+}
+
+function mergeRecord(
+  existing: unknown,
+  incoming: unknown,
+): Record<string, unknown> {
+  return {
+    ...(isRecord(existing) ? existing : {}),
+    ...(isRecord(incoming) ? incoming : {}),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function normalizeEmail(value: string | null | undefined): string | undefined {
   const email = value?.trim().toLowerCase();
   return email && email.includes("@") ? email : undefined;
@@ -532,8 +883,14 @@ function normalizeEmail(value: string | null | undefined): string | undefined {
 function normalizeHostname(
   value: string | null | undefined,
 ): string | undefined {
-  const hostname = value?.trim().toLowerCase();
-  return hostname || undefined;
+  const hostname = value?.trim().toLowerCase().replace(/\.$/, "");
+  if (!hostname) return undefined;
+  return hostname.includes(".") ? hostname.split(".")[0] : hostname;
+}
+
+function normalizeSerial(value: string | null | undefined): string | undefined {
+  const serial = value?.trim().toLowerCase();
+  return serial || undefined;
 }
 
 function confidenceLabel(confidence: number): ConfidenceLabel {
