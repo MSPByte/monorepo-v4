@@ -109,7 +109,7 @@ export const tags = wikiSchema.table(
       .notNull()
       .defaultNow()
   },
-  (t) => [rls]
+  () => [rls]
 );
 
 export const articleTags = wikiSchema.table(

@@ -1,4 +1,4 @@
-import { uuid, text, boolean, integer, bigint, timestamp, unique } from 'drizzle-orm/pg-core';
+import { uuid, text, integer, bigint, timestamp, unique } from 'drizzle-orm/pg-core';
 import { crudPolicy, authenticatedRole } from 'drizzle-orm/neon';
 import { vendorsSchema } from '../schemas.js';
 import { integrationLinks, sites } from '../public/index.js';
