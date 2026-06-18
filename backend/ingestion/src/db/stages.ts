@@ -87,6 +87,10 @@ export async function completeRun(db: Db, syncRunId: string): Promise<void> {
     .where(eq(syncRuns.id, syncRunId));
 }
 
+export async function markRunIngested(db: Db, syncRunId: string): Promise<void> {
+  await db.update(syncRuns).set({ status: "ingested" }).where(eq(syncRuns.id, syncRunId));
+}
+
 export async function failRun(db: Db, syncRunId: string, _error: unknown): Promise<void> {
   await db
     .update(syncRuns)

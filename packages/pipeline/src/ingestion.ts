@@ -20,6 +20,16 @@ export type IngestionJobData = {
   integrationConfig?: Record<string, unknown>;
 };
 
+export type ProjectionJobData = {
+  orgId: string;
+  linkId: string;
+  siteId?: string;
+  provider: IngestionProviderId;
+  type: IngestionFacet;
+  syncRunId: string;
+  rawBatchId: string;
+};
+
 export type RawRecordEnvelope<TPayload = unknown> = {
   externalId: string;
   op?: RawRecordOp;

@@ -13,6 +13,8 @@ import { sql } from "drizzle-orm";
 import { ingestorSchema } from "../schemas.js";
 import { integrationLinks, sites } from "../public/index.js";
 
+const rls = crudPolicy({ role: authenticatedRole, read: true, modify: false });
+
 export const syncRuns = ingestorSchema.table(
   "sync_runs",
   {
@@ -36,10 +38,7 @@ export const syncRuns = ingestorSchema.table(
       .notNull()
       .defaultNow(),
   },
-  () => [
-    check("valid_mode", sql`mode in ('full', 'incremental')`),
-    crudPolicy({ role: authenticatedRole, read: true, modify: false }),
-  ],
+  () => [check("valid_mode", sql`mode in ('full', 'incremental')`), rls],
 );
 
 export const syncRunStages = ingestorSchema.table(
@@ -70,7 +69,7 @@ export const syncRunStages = ingestorSchema.table(
       .notNull()
       .defaultNow(),
   },
-  () => [crudPolicy({ role: authenticatedRole, read: true, modify: false })],
+  () => [rls],
 );
 
 export const syncContext = ingestorSchema.table(
@@ -110,7 +109,7 @@ export const syncContext = ingestorSchema.table(
   },
   (t) => [
     unique("unique_sync_context").on(t.linkId, t.integrationId, t.type),
-    crudPolicy({ role: authenticatedRole, read: true, modify: false }),
+    rls,
   ],
 );
 
@@ -161,7 +160,7 @@ export const rawBatches = ingestorSchema.table(
       t.type,
       t.mode,
     ),
-    crudPolicy({ role: authenticatedRole, read: true, modify: false }),
+    rls,
   ],
 );
 
@@ -211,6 +210,9 @@ export const rawRecords = ingestorSchema.table(
       t.provider,
       t.type,
     ),
+    index("raw_records_pending_projection_idx")
+      .on(t.provider, t.type, t.createdAt)
+      .where(sql`projection_status = 'pending'`),
     index("raw_records_source_lookup_idx").on(t.linkId, t.type, t.externalId),
     index("raw_records_reconciliation_idx").on(
       t.syncRunId,
@@ -218,7 +220,13 @@ export const rawRecords = ingestorSchema.table(
       t.type,
       t.externalId,
     ),
-    crudPolicy({ role: authenticatedRole, read: true, modify: false }),
+    index("raw_records_full_reconcile_idx")
+      .on(t.syncRunId, t.linkId, t.type, t.externalId)
+      .where(sql`projection_status = 'completed'`),
+    index("raw_records_projected_cleanup_idx")
+      .on(t.projectedAt)
+      .where(sql`projected_at is not null`),
+    rls,
   ],
 );
 

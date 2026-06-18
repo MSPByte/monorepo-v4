@@ -8,7 +8,7 @@ import {
   M365_BLOAT_LICENSES,
   type MSGraphCapabilities,
 } from "@mspbyte/shared/config/integrations/microsoft-365";
-import { PROVIDER_IDS, ProviderFacet } from "@mspbyte/shared";
+import { getM365RawSchema, PROVIDER_IDS, ProviderFacet } from "@mspbyte/shared";
 import type {
   FetchPage,
   FetchResultCursor,
@@ -17,7 +17,6 @@ import type {
   RawRecordEnvelope,
   SyncMode,
 } from "@mspbyte/pipeline";
-import { z } from "zod";
 import { requireMicrosoftCredentials } from "../../env.js";
 import { logger } from "../../logger.js";
 import { serializeError } from "../../errors.js";
@@ -37,111 +36,6 @@ const M365_IDENTITY_DELTA_FIELDS = [
   "userPrincipalName",
   "accountEnabled",
 ].join(",");
-
-const M365UserSchema = z.looseObject({
-  id: z.string(),
-  displayName: z.string().nullable().optional(),
-  userType: z.string().nullable().optional(),
-  userPrincipalName: z.string(),
-  accountEnabled: z.boolean().optional(),
-  assignedLicenses: z.array(z.object({ skuId: z.string() })).optional(),
-  signInActivity: z
-    .object({
-      lastSignInDateTime: z.string().nullable().optional(),
-      lastNonInteractiveSignInDateTime: z.string().nullable().optional(),
-    })
-    .optional(),
-});
-
-const M365GroupSchema = z.looseObject({
-  id: z.string(),
-  displayName: z.string(),
-  description: z.string().nullable().optional(),
-  groupTypes: z.array(z.string()).optional(),
-  mailEnabled: z.boolean(),
-  securityEnabled: z.boolean().optional(),
-});
-
-const M365SubscribedSkuSchema = z.looseObject({
-  skuId: z.string(),
-  skuPartNumber: z.string(),
-  capabilityStatus: z.string(),
-  consumedUnits: z.number().optional(),
-  prepaidUnits: z
-    .object({
-      enabled: z.number().optional(),
-      suspended: z.number().optional(),
-      warning: z.number().optional(),
-      lockedOut: z.number().optional(),
-    })
-    .optional(),
-  servicePlans: z
-    .array(z.object({ servicePlanName: z.string() }))
-    .optional()
-    .default([]),
-  _friendlyName: z.string().optional(),
-});
-
-const M365CAPolicySchema = z.looseObject({
-  id: z.string(),
-  displayName: z.string(),
-  state: z.enum(["enabled", "disabled", "enabledForReportingButNotEnforced"]),
-  conditions: z.record(z.string(), z.unknown()).optional(),
-  grantControls: z.record(z.string(), z.unknown()).nullable().optional(),
-  sessionControls: z.record(z.string(), z.unknown()).nullable().optional(),
-});
-
-const M365AuthMethodSchema = z.looseObject({
-  id: z.string(),
-  "@odata.type": z.string(),
-  createdDateTime: z.string().nullable().optional(),
-  _identity_external_id: z.string(),
-  _method_type: z.string(),
-});
-
-const M365DeviceSchema = z.looseObject({
-  id: z.string(),
-  displayName: z.string(),
-  operatingSystem: z.string().nullable().optional(),
-  operatingSystemVersion: z.string().nullable().optional(),
-  isCompliant: z.boolean().nullable().optional(),
-  isManaged: z.boolean().nullable().optional(),
-  deviceOwnership: z.string().nullable().optional(),
-  approximateLastSignInDateTime: z.string().nullable().optional(),
-  registrationDateTime: z.string().nullable().optional(),
-});
-
-const M365OAuthGrantSchema = z.looseObject({
-  id: z.string(),
-  clientId: z.string(),
-  consentType: z.string(),
-  principalId: z.string().nullable().optional(),
-  resourceId: z.string(),
-  scope: z.string().nullable().optional(),
-  clientDisplayName: z.string().nullable().optional(),
-  resourceDisplayName: z.string().nullable().optional(),
-});
-
-const M365RiskyUserSchema = z.looseObject({
-  id: z.string(),
-  userPrincipalName: z.string(),
-  userDisplayName: z.string().nullable().optional(),
-  riskLevel: z.string(),
-  riskState: z.string(),
-  riskDetail: z.string().nullable().optional(),
-  riskLastUpdatedDateTime: z.string().nullable().optional(),
-});
-
-const schemas: Partial<Record<ProviderFacet, z.ZodObject>> = {
-  [ProviderFacet.M365Identities]: M365UserSchema,
-  [ProviderFacet.M365Groups]: M365GroupSchema,
-  [ProviderFacet.M365Licenses]: M365SubscribedSkuSchema,
-  [ProviderFacet.M365CAPolicies]: M365CAPolicySchema,
-  [ProviderFacet.M365AuthMethods]: M365AuthMethodSchema,
-  [ProviderFacet.M365Devices]: M365DeviceSchema,
-  [ProviderFacet.M365OAuthGrants]: M365OAuthGrantSchema,
-  [ProviderFacet.M365RiskyUsers]: M365RiskyUserSchema,
-};
 
 export const m365Adapter: IngestionAdapter = {
   providerId: PROVIDER_IDS.M365,
@@ -469,7 +363,7 @@ function envelope(facet: ProviderFacet, record: unknown): RawRecordEnvelope {
   const removed = raw["@removed"] != null;
 
   if (!removed) {
-    const schema = schemas[facet];
+    const schema = getM365RawSchema(facet);
     if (schema) schema.parse(raw);
   }
 

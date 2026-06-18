@@ -1,17 +1,23 @@
-import { Worker } from "bullmq";
+import { Queue, Worker } from "bullmq";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
-import type { IngestionJobData } from "@mspbyte/pipeline";
+import {
+  assertBullMqName,
+  orgQueueName,
+  QUEUES,
+  type IngestionJobData,
+  type ProjectionJobData,
+} from "@mspbyte/pipeline";
 import { canProcessOrg, env, requireEncryptionKey } from "../env.js";
 import { logger } from "../logger.js";
 import type { RedisConnection } from "../redis.js";
 import { getAdapter } from "../adapters/registry.js";
 import {
-  completeRun,
   completeStage,
   createRawBatch,
   failRun,
   failStage,
   insertRawRecords,
+  markRunIngested,
   recordFetchFailure,
   recordFetchSuccess,
   startStage,
@@ -19,6 +25,20 @@ import {
 import { serializeError } from "../errors.js";
 
 export function createIngestionWorker(redis: RedisConnection, queueName: string): Worker {
+  const projectionQueues = new Map<string, Queue<ProjectionJobData, unknown, string>>();
+
+  function getProjectionQueue(orgId: string): Queue<ProjectionJobData, unknown, string> {
+    const name = orgQueueName(QUEUES.PROJECT, orgId);
+    const existing = projectionQueues.get(name);
+    if (existing) return existing;
+
+    const queue = new Queue<ProjectionJobData, unknown, string>(name, {
+      connection: redis as never,
+    });
+    projectionQueues.set(name, queue);
+    return queue;
+  }
+
   return new Worker<IngestionJobData, void, string>(
     queueName,
     async (job) => {
@@ -103,6 +123,33 @@ export function createIngestionWorker(redis: RedisConnection, queueName: string)
               records,
             });
 
+            const projectQueue = getProjectionQueue(data.orgId);
+            await projectQueue.add(
+              assertBullMqName(
+                `project_${data.provider}_${data.type}_${data.syncRunId}_${batchIndex}`,
+                "BullMQ job name",
+              ),
+              {
+                orgId: data.orgId,
+                linkId: data.linkId,
+                siteId: data.siteId,
+                provider: data.provider,
+                type: data.type,
+                syncRunId: data.syncRunId,
+                rawBatchId,
+              },
+              {
+                jobId: assertBullMqName(
+                  `project_${rawBatchId}`,
+                  "BullMQ job id",
+                ),
+                attempts: 3,
+                backoff: { type: "exponential", delay: 5_000 },
+                removeOnComplete: 100,
+                removeOnFail: 500,
+              },
+            );
+
             recordCount += records.length;
             batchIndex++;
           }
@@ -119,7 +166,7 @@ export function createIngestionWorker(redis: RedisConnection, queueName: string)
           mode: data.mode,
           cursor: nextCursor,
         });
-        await completeRun(db, data.syncRunId);
+        await markRunIngested(db, data.syncRunId);
 
         logger.info("Ingestion job completed", {
           orgId: data.orgId,
