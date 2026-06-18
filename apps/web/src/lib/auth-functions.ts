@@ -13,7 +13,14 @@ export const getSession = createServerFn({ method: "GET" }).handler(
 
 export const listOrganizations = createServerFn({ method: "GET" }).handler(
   async () => {
-    return auth.api.listOrganizations({ headers: getRequestHeaders() })
+    const organizations = await auth.api.listOrganizations({
+      headers: getRequestHeaders(),
+    })
+
+    return organizations.map((organization) => ({
+      id: organization.id,
+      name: organization.name,
+    }))
   },
 )
 

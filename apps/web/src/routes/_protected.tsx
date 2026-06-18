@@ -1,5 +1,5 @@
 import { requireAuthContext, signOut } from "@/lib/auth-functions"
-import { Button } from "@/components/ui/button"
+import { ProfileMenu } from "@/components/profile-menu"
 import { Link, Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 
 export const Route = createFileRoute("/_protected")({
@@ -33,14 +33,20 @@ function ProtectedLayout() {
         <Link to="/home" className="text-lg font-semibold tracking-tight">
           MSPByte
         </Link>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0">
           <div className="hidden text-right text-sm sm:block">
-            <p className="font-medium">{authContext.user.name}</p>
-            <p className="text-muted-foreground">{authContext.orgName}</p>
+            <p className="max-w-48 truncate font-medium">
+              {authContext.user.name}
+            </p>
+            <p className="max-w-48 truncate text-muted-foreground">
+              {authContext.orgName}
+            </p>
           </div>
-          <Button asChild variant="outline">
-            <a href="/auth/signout">Sign out</a>
-          </Button>
+          <ProfileMenu
+            userName={authContext.user.name}
+            orgId={authContext.orgId}
+            orgName={authContext.orgName}
+          />
         </div>
       </header>
       <Outlet />
