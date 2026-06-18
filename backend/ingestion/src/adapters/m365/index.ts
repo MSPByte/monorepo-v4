@@ -155,10 +155,36 @@ async function* fetchIdentities(
 async function* fetchGroups(
   connector: M365Connector,
 ): AsyncGenerator<FetchPage> {
-  const groups = await connector.groups.listAll(
+  const groups = (await connector.groups.listAll(
     "id,displayName,description,groupTypes,mailEnabled,securityEnabled",
+  )) as Array<Record<string, unknown>>;
+  const records = await Promise.all(
+    groups.map(async (group) => ({
+      ...group,
+      _member_ids: await groupMemberIds(connector, group),
+    })),
   );
-  yield page(ProviderFacet.M365Groups, groups);
+  yield page(ProviderFacet.M365Groups, records);
+}
+
+async function groupMemberIds(
+  connector: M365Connector,
+  group: Record<string, unknown>,
+): Promise<string[]> {
+  if (typeof group.id !== "string") return [];
+
+  try {
+    const members = await connector.groups.members(group.id);
+    return members
+      .map((member) => member.id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+  } catch (error) {
+    logger.warn("Failed to fetch M365 group members during ingestion", {
+      groupId: group.id,
+      error: serializeError(error),
+    });
+    return [];
+  }
 }
 
 async function* fetchLicenses(

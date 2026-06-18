@@ -22,6 +22,8 @@ export type ProjectionMetrics = {
   createdCt: number;
   updatedCt: number;
   failedCt: number;
+  runCompleted: boolean;
+  runStatus?: "completed" | "projection_failed";
 };
 
 export async function startProjectionStage(
@@ -117,7 +119,7 @@ export async function projectRawBatch(
   }
 
   await completeRawBatch(db, params.rawBatchId, failedCt);
-  await maybeCompleteRun(db, params.syncRunId);
+  const runStatus = await maybeCompleteRun(db, params.syncRunId);
 
   if (failedCt > 0) {
     logger.warn("Projection batch completed with raw record failures", {
@@ -138,6 +140,8 @@ export async function projectRawBatch(
     createdCt,
     updatedCt,
     failedCt,
+    runCompleted: runStatus != null,
+    runStatus,
   };
 }
 
@@ -163,6 +167,7 @@ export async function completeProjectionStage(
 export async function failProjectionStage(
   db: Db,
   stageId: string,
+  syncRunId: string,
   rawBatchId: string,
   error: unknown,
 ): Promise<void> {
@@ -179,6 +184,88 @@ export async function failProjectionStage(
     .update(rawBatches)
     .set({ status: "failed", projectionError: message })
     .where(eq(rawBatches.id, rawBatchId));
+  await db
+    .update(syncRuns)
+    .set({
+      status: "projection_failed",
+      finishedAt: new Date().toISOString(),
+    })
+    .where(eq(syncRuns.id, syncRunId));
+}
+
+export async function failProjectionRun(
+  db: Db,
+  syncRunId: string,
+  error: unknown,
+): Promise<void> {
+  await db
+    .update(syncRuns)
+    .set({
+      status: "projection_failed",
+      finishedAt: new Date().toISOString(),
+    })
+    .where(eq(syncRuns.id, syncRunId));
+
+  logger.warn("Projection run marked failed", {
+    syncRunId,
+    error: errorMessage(error),
+  });
+}
+
+export async function startProjectionStepStage(
+  db: Db,
+  params: {
+    syncRunId: string;
+    provider: string;
+    type: string;
+    bullmqJobId: string;
+    stage: "link" | "enrich";
+  },
+): Promise<string> {
+  const [row] = await db
+    .insert(syncRunStages)
+    .values({
+      syncRunId: params.syncRunId,
+      integrationId: params.provider,
+      bullmqJobId: params.bullmqJobId,
+      type: params.type,
+      stage: params.stage,
+      status: "running",
+      startedAt: new Date().toISOString(),
+    })
+    .returning({ id: syncRunStages.id });
+
+  return row.id;
+}
+
+export async function completeProjectionStepStage(
+  db: Db,
+  stageId: string,
+  metrics: Record<string, unknown>,
+): Promise<void> {
+  await db
+    .update(syncRunStages)
+    .set({
+      status: "completed",
+      finishedAt: new Date().toISOString(),
+      metrics,
+    })
+    .where(eq(syncRunStages.id, stageId));
+}
+
+export async function failProjectionStepStage(
+  db: Db,
+  stageId: string,
+  error: unknown,
+): Promise<void> {
+  await db
+    .update(syncRunStages)
+    .set({
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+      error: errorMessage(error),
+    })
+    .where(eq(syncRunStages.id, stageId));
 }
 
 async function projectUpsert(
@@ -364,7 +451,10 @@ async function completeRawBatch(
     .where(eq(rawBatches.id, rawBatchId));
 }
 
-async function maybeCompleteRun(db: Db, syncRunId: string): Promise<void> {
+async function maybeCompleteRun(
+  db: Db,
+  syncRunId: string,
+): Promise<"completed" | "projection_failed" | undefined> {
   const pending = await db
     .select({ id: rawBatches.id })
     .from(rawBatches)
@@ -376,7 +466,7 @@ async function maybeCompleteRun(db: Db, syncRunId: string): Promise<void> {
     )
     .limit(1);
 
-  if (pending.length > 0) return;
+  if (pending.length > 0) return undefined;
 
   const failed = await db
     .select({ id: rawBatches.id })
@@ -389,13 +479,16 @@ async function maybeCompleteRun(db: Db, syncRunId: string): Promise<void> {
     )
     .limit(1);
 
+  const status = failed.length > 0 ? "projection_failed" : "completed";
   await db
     .update(syncRuns)
     .set({
-      status: failed.length > 0 ? "projection_failed" : "completed",
+      status,
       finishedAt: new Date().toISOString(),
     })
     .where(eq(syncRuns.id, syncRunId));
+
+  return status;
 }
 
 function tableRegistryFor(type: string) {

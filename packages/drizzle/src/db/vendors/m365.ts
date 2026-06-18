@@ -67,6 +67,7 @@ export const m365Groups = vendorsSchema.table(
     description: text("description"),
     mailEnabled: boolean("mail_enabled").notNull(),
     securityEnabled: boolean("security_enabled").notNull(),
+    memberExternalIds: text("member_external_ids").array(),
     lastSeenAt: timestamp("last_seen_at", {
       withTimezone: true,
       mode: "string",

@@ -2,7 +2,8 @@
 
 `backend/projection` consumes raw ingestion batches and writes normalized vendor
 rows into `vendors.*` tables. It does not build canonical people/assets; that is
-owned by `backend/normalize`.
+owned by `backend/normalize`. Projection must not query live vendor APIs; link
+and enrichment steps operate only on `ingestor.*` and `vendors.*` data.
 
 ## Runtime
 
@@ -33,6 +34,8 @@ Useful settings:
 6. Projection marks raw records and raw batches completed or failed.
 7. Projection marks the sync run completed once all batches are no longer
    pending.
+8. Projection runs triggered linking steps, then triggered enrichment steps.
+   Enrichment is never run before linking for the same completed sync run.
 
 The first implementation supports Microsoft 365 Graph-backed facets:
 
@@ -44,3 +47,31 @@ The first implementation supports Microsoft 365 Graph-backed facets:
 - `m365_devices`
 - `m365_oauth_grants`
 - `m365_risky_users`
+
+## Linking And Enrichment
+
+Projection steps are explicit contracts. Each step declares:
+
+- `kind`: `link` or `enrich`.
+- `provider`: the provider it handles.
+- `triggerFacets`: facets that can cause the step to run.
+- `requiredFacets`: facets that must have completed successfully for the link.
+
+After the final successful batch of a relevant M365 sync run, projection checks
+dependencies and then runs matching `link` steps before matching `enrich` steps.
+
+Microsoft 365 currently defines these linking steps from projected vendor data:
+
+- Rebuilds `vendors.m365_identity_groups` from
+  `vendors.m365_groups.member_external_ids`. The linker skips without deleting
+  existing joins if groups were projected before that source field existed.
+- Rebuilds `vendors.m365_policy_identities`,
+  `vendors.m365_policy_groups`, and `vendors.m365_policy_roles` from CA policy
+  conditions.
+
+Microsoft 365 currently defines this enrichment step:
+
+- Updates `vendors.m365_identities.mfa_enforced` from enabled MFA CA policies.
+
+Role-based links depend on `vendors.m365_roles` being seeded with Microsoft
+directory role templates.

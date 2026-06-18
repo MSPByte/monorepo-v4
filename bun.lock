@@ -102,7 +102,7 @@
       },
     },
     "backend/projection": {
-      "name": "@mspbyte/backend-projection",
+      "name": "projection",
       "version": "0.0.0",
       "dependencies": {
         "@mspbyte/drizzle": "*",
@@ -358,8 +358,6 @@
     "@mspbyte/backend-normalize": ["@mspbyte/backend-normalize@workspace:backend/normalize"],
 
     "@mspbyte/backend-policies": ["@mspbyte/backend-policies@workspace:backend/policies"],
-
-    "@mspbyte/backend-projection": ["@mspbyte/backend-projection@workspace:backend/projection"],
 
     "@mspbyte/connectors": ["@mspbyte/connectors@workspace:packages/connectors"],
 
@@ -906,6 +904,8 @@
     "prettier": ["prettier@3.8.4", "", { "bin": { "prettier": "bin/prettier.cjs" } }, "sha512-N2MylSdi48+5N/6S5j+maeHbUSIzzZ5uOcX5Hm4QpV8Dkb1HFjfAKTKX6yNPJQD9AhcT3ifHNB66tWTTJDi11Q=="],
 
     "process-warning": ["process-warning@5.0.0", "", {}, "sha512-a39t9ApHNx2L4+HBnQKqxxHNs1r7KF+Intd8Q/g1bUh6q0WIp9voPXJ/x0j+ZL45KF1pJd9+q2jLIRMfvEshkA=="],
+
+    "projection": ["projection@workspace:backend/projection"],
 
     "prop-types": ["prop-types@15.8.1", "", { "dependencies": { "loose-envify": "^1.4.0", "object-assign": "^4.1.1", "react-is": "^16.13.1" } }, "sha512-oj87CgZICdulUohogVAR7AjlC0327U4el4L6eAvOqCeudMDVU0NThNaV+b9Df4dXgSP1gXMTnPdhfe/2qDH5cg=="],
 

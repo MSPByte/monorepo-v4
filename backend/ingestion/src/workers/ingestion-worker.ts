@@ -24,10 +24,18 @@ import {
 } from "../db/stages.js";
 import { serializeError } from "../errors.js";
 
-export function createIngestionWorker(redis: RedisConnection, queueName: string): Worker {
-  const projectionQueues = new Map<string, Queue<ProjectionJobData, unknown, string>>();
+export function createIngestionWorker(
+  redis: RedisConnection,
+  queueName: string,
+): Worker {
+  const projectionQueues = new Map<
+    string,
+    Queue<ProjectionJobData, unknown, string>
+  >();
 
-  function getProjectionQueue(orgId: string): Queue<ProjectionJobData, unknown, string> {
+  function getProjectionQueue(
+    orgId: string,
+  ): Queue<ProjectionJobData, unknown, string> {
     const name = orgQueueName(QUEUES.PROJECT, orgId);
     const existing = projectionQueues.get(name);
     if (existing) return existing;
@@ -92,7 +100,8 @@ export function createIngestionWorker(redis: RedisConnection, queueName: string)
         while (true) {
           const result = await pages.next();
           if (result.done) {
-            nextCursor = typeof result.value === "string" ? result.value : undefined;
+            nextCursor =
+              typeof result.value === "string" ? result.value : undefined;
             break;
           }
 

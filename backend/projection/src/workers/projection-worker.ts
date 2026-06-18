@@ -8,9 +8,12 @@ import type { RedisConnection } from "../redis.js";
 import {
   completeProjectionStage,
   failProjectionStage,
+  failProjectionRun,
   projectRawBatch,
   startProjectionStage,
 } from "../db/project.js";
+import { projectionSteps } from "../contracts/registry.js";
+import { runProjectionSteps } from "../contracts/runner.js";
 
 export function createProjectionWorker(
   redis: RedisConnection,
@@ -50,9 +53,19 @@ export function createProjectionWorker(
         jobId: bullmqJobId,
       });
 
+      let projectStageCompleted = false;
       try {
         const metrics = await projectRawBatch(db, data);
         await completeProjectionStage(db, stageId, metrics);
+        projectStageCompleted = true;
+
+        if (metrics.runStatus === "completed") {
+          await runProjectionSteps(
+            { db, ...data },
+            projectionSteps,
+            bullmqJobId,
+          );
+        }
 
         logger.info("Projection job completed", {
           orgId: data.orgId,
@@ -64,7 +77,17 @@ export function createProjectionWorker(
           ...metrics,
         });
       } catch (error) {
-        await failProjectionStage(db, stageId, data.rawBatchId, error);
+        if (projectStageCompleted) {
+          await failProjectionRun(db, data.syncRunId, error);
+        } else {
+          await failProjectionStage(
+            db,
+            stageId,
+            data.syncRunId,
+            data.rawBatchId,
+            error,
+          );
+        }
         logger.error("Projection job failed", {
           orgId: data.orgId,
           linkId: data.linkId,

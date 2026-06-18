@@ -74,6 +74,7 @@ function normalizeGroup(raw: M365Group): RecordValue {
     description: raw.description ?? null,
     mailEnabled: raw.mailEnabled,
     securityEnabled: raw.securityEnabled ?? false,
+    memberExternalIds: raw._member_ids,
   };
 }
 

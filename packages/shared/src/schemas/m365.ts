@@ -23,6 +23,7 @@ export const M365GroupSchema = z.looseObject({
   groupTypes: z.array(z.string()).optional(),
   mailEnabled: z.boolean(),
   securityEnabled: z.boolean().optional(),
+  _member_ids: z.array(z.string()).optional().default([]),
 });
 
 export const M365SubscribedSkuSchema = z.looseObject({
