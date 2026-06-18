@@ -1,6 +1,7 @@
-import { Worker } from "bullmq";
+import { Queue, Worker } from "bullmq";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
 import type { ProjectionJobData } from "@mspbyte/pipeline";
+import { orgQueueName, QUEUES } from "@mspbyte/pipeline";
 import { canProcessOrg, env, requireEncryptionKey } from "../env.js";
 import { serializeError } from "../errors.js";
 import { logger } from "../logger.js";
@@ -65,6 +66,7 @@ export function createProjectionWorker(
             projectionSteps,
             bullmqJobId,
           );
+          await enqueueNormalizeJob(redis, data, bullmqJobId);
         }
 
         logger.info("Projection job completed", {
@@ -105,4 +107,36 @@ export function createProjectionWorker(
       concurrency: env.WORKER_CONCURRENCY,
     },
   );
+}
+
+async function enqueueNormalizeJob(
+  redis: RedisConnection,
+  data: ProjectionJobData,
+  bullmqJobId: string,
+): Promise<void> {
+  const queueName = orgQueueName(QUEUES.NORMALIZE, data.orgId);
+  const queue = new Queue(queueName, { connection: redis as never });
+  const jobId = `normalize_${data.syncRunId}_${data.type}`;
+
+  try {
+    await queue.add("normalize", data, {
+      jobId,
+      attempts: 3,
+      backoff: { type: "exponential", delay: 5_000 },
+      removeOnComplete: 1_000,
+      removeOnFail: 5_000,
+    });
+    logger.info("Normalize job enqueued", {
+      orgId: data.orgId,
+      linkId: data.linkId,
+      provider: data.provider,
+      type: data.type,
+      syncRunId: data.syncRunId,
+      projectionJobId: bullmqJobId,
+      normalizeJobId: jobId,
+      queueName,
+    });
+  } finally {
+    await queue.close();
+  }
 }

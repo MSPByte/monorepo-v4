@@ -30,6 +30,15 @@ export type ProjectionJobData = {
   rawBatchId: string;
 };
 
+export type NormalizeJobData = {
+  orgId: string;
+  linkId: string;
+  siteId?: string;
+  provider: IngestionProviderId;
+  type: IngestionFacet;
+  syncRunId: string;
+};
+
 export type RawRecordEnvelope<TPayload = unknown> = {
   externalId: string;
   op?: RawRecordOp;
