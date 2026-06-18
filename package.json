@@ -5,8 +5,8 @@
     "build": "turbo run build",
     "dev": "turbo run dev",
     "dev:agent": "turbo run dev --filter=agent --filter=agents",
-    "dev:web": "turbo run dev --filter=frontend --filter=api --filter=@mspbyte/trpc --filter=@mspbyte/shared",
-    "dev:pipeline": "turbo run dev --filter=pipeline --filter=ingestion --filter=alerts --filter=compliance",
+    "dev:web": "turbo run dev --filter=web --filter=@mspbyte/shared",
+    "dev:pipeline": "turbo run dev --filter=ingestion --filter=projection --filter=normalize",
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "infra:clean": "docker compose -f infra/docker-compose.yml down -v",
@@ -15,6 +15,7 @@
     "check-types": "turbo run check-types"
   },
   "devDependencies": {
+    "nitro": "npm:nitro-nightly@latest",
     "prettier": "^3.7.4",
     "turbo": "^2.9.18",
     "typescript": "5.9.2"
