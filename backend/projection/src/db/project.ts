@@ -10,6 +10,11 @@ import {
 import { getFacetTableMap } from "@mspbyte/shared";
 import { logger } from "../logger.js";
 import { normalizeVendorRecord } from "../normalizers/index.js";
+import {
+  isSophosTamperProtectionFacet,
+  projectSophosTamperProtection,
+  softDeleteSophosTamperProtection,
+} from "./sophos-tamper-protection.js";
 
 type Db = any;
 
@@ -279,6 +284,9 @@ async function projectUpsert(
   payload: unknown,
   payloadHash: string,
 ): Promise<{ recordsOut: number; createdCt: number; updatedCt: number }> {
+  if (isSophosTamperProtectionFacet(params.type)) {
+    return projectSophosTamperProtection(db, params, payload);
+  }
   const registry = tableRegistryFor(params.type);
   const now = new Date().toISOString();
   const projected = normalizeVendorRecord(
@@ -384,6 +392,14 @@ async function projectDelete(
   externalId: string,
   payloadHash: string,
 ): Promise<{ recordsOut: number; createdCt: number; updatedCt: number }> {
+  if (isSophosTamperProtectionFacet(params.type)) {
+    const cleared = await softDeleteSophosTamperProtection(
+      db,
+      params,
+      externalId,
+    );
+    return { recordsOut: cleared, createdCt: 0, updatedCt: cleared };
+  }
   const registry = tableRegistryFor(params.type);
   const table = registry.table as any;
   const now = new Date().toISOString();

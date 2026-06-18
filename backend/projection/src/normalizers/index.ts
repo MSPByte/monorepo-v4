@@ -1,12 +1,26 @@
 import { PROVIDER_IDS } from "@mspbyte/shared";
+import { normalizeCove } from "./cove.js";
+import { normalizeDatto } from "./datto.js";
 import { normalizeM365 } from "./m365.js";
+import { normalizeSophos } from "./sophos.js";
 
 export function normalizeVendorRecord(
   provider: string,
   type: string,
   payload: unknown,
 ): Record<string, unknown> {
-  if (provider === PROVIDER_IDS.M365) return normalizeM365(type, payload);
-
-  throw new Error(`No projection normalizer registered for provider ${provider}`);
+  switch (provider) {
+    case PROVIDER_IDS.M365:
+      return normalizeM365(type, payload);
+    case PROVIDER_IDS.SOPHOS:
+      return normalizeSophos(type, payload);
+    case PROVIDER_IDS.COVE:
+      return normalizeCove(type, payload);
+    case PROVIDER_IDS.DATTO:
+      return normalizeDatto(type, payload);
+    default:
+      throw new Error(
+        `No projection normalizer registered for provider ${provider}`,
+      );
+  }
 }

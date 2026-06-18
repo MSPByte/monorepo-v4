@@ -1,15 +1,20 @@
 import { env } from "../env.js";
 import { logger } from "../logger.js";
+import { coveAdapter } from "./cove/index.js";
+import { dattoAdapter } from "./datto/index.js";
 import { devAdapter } from "./dev.js";
 import { m365Adapter } from "./m365/index.js";
 import { registerAdapter } from "./registry.js";
+import { sophosAdapter } from "./sophos/index.js";
 
 export function registerBuiltInAdapters(): void {
-  registerAdapter(m365Adapter);
-  logger.info("Registered M365 ingestion adapter", {
-    providerId: m365Adapter.providerId,
-    types: m365Adapter.types,
-  });
+  for (const adapter of [m365Adapter, sophosAdapter, coveAdapter, dattoAdapter]) {
+    registerAdapter(adapter);
+    logger.info("Registered ingestion adapter", {
+      providerId: adapter.providerId,
+      types: adapter.types,
+    });
+  }
 
   if (env.ENABLE_DEV_ADAPTER) {
     registerAdapter(devAdapter);

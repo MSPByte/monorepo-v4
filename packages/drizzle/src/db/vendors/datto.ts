@@ -14,6 +14,8 @@ export const dattoEndpoints = vendorsSchema.table(
       .references(() => integrationLinks.id, { onDelete: 'cascade' }),
     siteId: uuid('site_id').references(() => sites.id),
     externalId: text('external_id').notNull(),
+    sourceHash: text('source_hash'),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
     hostname: text('hostname').notNull(),
     category: text('category', { enum: ['workstation', 'server', 'other'] }).notNull(),
     os: text('os').notNull(),
