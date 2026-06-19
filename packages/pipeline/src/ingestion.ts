@@ -39,6 +39,15 @@ export type NormalizeJobData = {
   syncRunId: string;
 };
 
+export type PolicyJobData = {
+  orgId: string;
+  linkId: string;
+  siteId?: string;
+  provider: IngestionProviderId;
+  type: IngestionFacet;
+  syncRunId: string;
+};
+
 export type RawRecordEnvelope<TPayload = unknown> = {
   externalId: string;
   op?: RawRecordOp;

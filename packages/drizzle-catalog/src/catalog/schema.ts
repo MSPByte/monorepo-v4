@@ -2,6 +2,8 @@ import {
   boolean,
   index,
   pgTable,
+  integer,
+  jsonb,
   text,
   timestamp,
   unique,
@@ -174,6 +176,80 @@ export const invitation = pgTable(
   ],
 );
 
+export const policyTemplates = pgTable(
+  "policy_templates",
+  {
+    id: text("id").primaryKey(),
+    version: integer("version").notNull().default(1),
+    name: text("name").notNull(),
+    description: text("description"),
+    category: text("category"),
+    providerId: text("provider_id"),
+    targetType: text("target_type").notNull(),
+    severity: integer("severity").notNull(),
+    recommendation: text("recommendation"),
+    definition: jsonb("definition").notNull().default({}),
+    enabledByDefault: boolean("enabled_by_default").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("policy_templates_provider_idx").on(t.providerId),
+    index("policy_templates_category_idx").on(t.category),
+  ],
+);
+
+export const policySetTemplates = pgTable(
+  "policy_set_templates",
+  {
+    id: text("id").primaryKey(),
+    version: integer("version").notNull().default(1),
+    name: text("name").notNull(),
+    description: text("description"),
+    category: text("category"),
+    providerId: text("provider_id"),
+    enabledByDefault: boolean("enabled_by_default").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("policy_set_templates_provider_idx").on(t.providerId),
+    index("policy_set_templates_category_idx").on(t.category),
+  ],
+);
+
+export const policySetTemplateItems = pgTable(
+  "policy_set_template_items",
+  {
+    policySetTemplateId: text("policy_set_template_id")
+      .notNull()
+      .references(() => policySetTemplates.id, { onDelete: "cascade" }),
+    policyTemplateId: text("policy_template_id")
+      .notNull()
+      .references(() => policyTemplates.id, { onDelete: "cascade" }),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    unique("policy_set_template_items_unique").on(
+      t.policySetTemplateId,
+      t.policyTemplateId,
+    ),
+  ],
+);
+
 export type AuthUser = typeof user.$inferSelect;
 export type AuthOrganization = typeof organization.$inferSelect;
 export type AuthMember = typeof member.$inferSelect;
+export type PolicyTemplate = typeof policyTemplates.$inferSelect;
+export type PolicySetTemplate = typeof policySetTemplates.$inferSelect;

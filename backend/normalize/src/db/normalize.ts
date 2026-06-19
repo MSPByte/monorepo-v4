@@ -113,8 +113,7 @@ export async function completeNormalizeStage(
   await db
     .update(syncRuns)
     .set({
-      status: "completed",
-      finishedAt: new Date().toISOString(),
+      status: "policy_pending",
     })
     .where(eq(syncRuns.id, syncRunId));
 }
