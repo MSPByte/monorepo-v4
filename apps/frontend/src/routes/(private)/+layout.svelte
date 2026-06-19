@@ -3,17 +3,13 @@
   import { page } from '$app/state';
   import type { LayoutProps } from './$types';
   import { authStore } from '$lib/stores/auth.store.svelte';
-  import { scopeStore } from '$lib/stores/scope.store.svelte';
   import { buildRouteMap } from '$lib/config/routes';
   import { createTrpcClient } from '$lib/trpc';
-  import { createQuery } from '@tanstack/svelte-query';
   import { Aperture, ChevronDown } from '@lucide/svelte';
   import { cn } from '$lib/utils';
   import Separator from '$lib/components/ui/separator/separator.svelte';
 
   import UserAccount from './_layout/user-account.svelte';
-  import IntegrationSelect from './_layout/integration-select.svelte';
-  import ScopeSelect from './_layout/scope-select.svelte';
 
   const { data, children }: LayoutProps = $props();
 
@@ -26,22 +22,10 @@
 
   let openGroup = $state<string | null>(null);
 
-  const integrationsQuery = createQuery(() => ({
-    queryKey: ['integrations.list'],
-    queryFn: () => trpc.integrations.list.query(),
-    enabled: !!data.orgId,
-  }));
-
   $effect(() => {
     authStore.currentUser = data.user;
     authStore.currentRole = data.role;
     authStore.currentOrg = data.orgId;
-  });
-
-  $effect(() => {
-    if (!integrationsQuery.isLoading && integrationsQuery.data) {
-      scopeStore.activeIntegrations = integrationsQuery.data.filter((i) => !i.deletedAt);
-    }
   });
 </script>
 
@@ -60,7 +44,6 @@
       <a href="/home"><Aperture class="w-8 h-8" /></a>
       <Separator orientation="vertical" />
       <div class="flex rounded-full p-1 bg-background/320 border gap-1">
-        {@render navLink({ href: '/home', label: 'Home' })}
         {#each routeMap.entries() as [group, routes]}
           {#if group === 'top'}
             {#each routes as route}
@@ -103,9 +86,6 @@
           {/if}
         {/each}
       </div>
-      <Separator orientation="vertical" />
-      <IntegrationSelect />
-      <ScopeSelect />
     </div>
     <div class="flex h-full px-2 items-center gap-1">
       <UserAccount orgId={data.orgId} orgName={data.orgName} />

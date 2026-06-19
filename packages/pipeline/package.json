@@ -22,6 +22,7 @@
   },
   "devDependencies": {
     "@mspbyte/typescript-config": "*",
+    "@types/node": "^25.9.3",
     "typescript": "^5.4.0"
   }
 }

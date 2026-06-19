@@ -52,6 +52,7 @@ type AssetInput = {
   displayName: string;
   hostname?: string;
   serialNumber?: string;
+  os?: string;
   assetType: "workstation" | "server" | "network" | "mobile" | "unknown";
   status: "active" | "inactive" | "unknown";
   sourceConfidence: ConfidenceLabel;
@@ -156,7 +157,8 @@ export async function normalizeProjectedRun(
     case ProviderFacet.M365Identities:
       return normalizeM365Identities(db, params);
     case ProviderFacet.M365Devices:
-      return normalizeM365Devices(db, params);
+      //return normalizeM365Devices(db, params); // This is bloat, no usecase yet
+      return emptyMetrics();
     case ProviderFacet.SophosEndpoints:
       return normalizeSophosEndpoints(db, params);
     case ProviderFacet.SophosFirewalls:
@@ -314,6 +316,7 @@ async function normalizeM365Devices(
         siteId: row.siteId ?? params.siteId,
         displayName: row.displayName,
         hostname,
+        os: normalizeAssetOs(row.operatingSystem),
         assetType: assetTypeFromOperatingSystem(row.operatingSystem),
         status: row.isManaged === false ? "unknown" : "active",
         sourceConfidence: "medium",
@@ -323,6 +326,7 @@ async function normalizeM365Devices(
             externalId: row.externalId,
             hostname,
             displayName: row.displayName,
+            os: normalizeAssetOs(row.operatingSystem),
           },
         },
       });
@@ -332,6 +336,7 @@ async function normalizeM365Devices(
       await updateAsset(db, canonicalId, {
         displayName: row.displayName,
         hostname,
+        os: normalizeAssetOs(row.operatingSystem),
         assetType: assetTypeFromOperatingSystem(row.operatingSystem),
         status: row.isManaged === false ? "unknown" : "active",
         sourceConfidence: confidenceLabel(match.confidence),
@@ -341,6 +346,7 @@ async function normalizeM365Devices(
             externalId: row.externalId,
             hostname,
             displayName: row.displayName,
+            os: normalizeAssetOs(row.operatingSystem),
           },
         },
       });
@@ -388,6 +394,7 @@ async function normalizeSophosEndpoints(
       row,
       displayName: row.hostname,
       hostname: row.hostname,
+      os: normalizeAssetOs(row.osName),
       assetType: row.type === "server" ? "server" : "workstation",
       status: row.online ? "active" : "inactive",
       sourceConfidence: "high",
@@ -397,6 +404,7 @@ async function normalizeSophosEndpoints(
           externalId: row.externalId,
           hostname: normalizeHostname(row.hostname),
           displayName: row.hostname,
+          os: normalizeAssetOs(row.osName),
         },
       },
       createMatchMethod: "created_from_sophos_endpoint",
@@ -458,6 +466,7 @@ async function normalizeDattoEndpoints(
       row,
       displayName: row.hostname,
       hostname: row.hostname,
+      os: normalizeAssetOs(row.os),
       assetType: row.category === "other" ? "unknown" : row.category,
       status: row.online ? "active" : "inactive",
       sourceConfidence: "high",
@@ -467,6 +476,7 @@ async function normalizeDattoEndpoints(
           externalId: row.externalId,
           hostname: normalizeHostname(row.hostname),
           displayName: row.hostname,
+          os: normalizeAssetOs(row.os),
         },
       },
       createMatchMethod: "created_from_datto_endpoint",
@@ -491,6 +501,7 @@ async function normalizeCoveEndpoints(
       row,
       displayName: row.endpointName || row.hostname || row.externalId,
       hostname: row.hostname || row.endpointName,
+      os: undefined,
       assetType: row.type,
       status: row.status === "inactive" ? "inactive" : "active",
       sourceConfidence: "medium",
@@ -550,6 +561,7 @@ async function normalizeAsset(
       displayName: input.displayName,
       hostname,
       serialNumber,
+      os: input.os,
       assetType: input.assetType,
       status: input.status,
       sourceConfidence: input.sourceConfidence,
@@ -562,6 +574,7 @@ async function normalizeAsset(
       displayName: input.displayName,
       hostname,
       serialNumber,
+      os: input.os,
       assetType: input.assetType,
       status: input.status,
       sourceConfidence: confidenceLabel(match.confidence),
@@ -890,6 +903,45 @@ function normalizeHostname(
 function normalizeSerial(value: string | null | undefined): string | undefined {
   const serial = value?.trim().toLowerCase();
   return serial || undefined;
+}
+
+function normalizeAssetOs(
+  value: string | null | undefined,
+): string | undefined {
+  const raw = value?.trim();
+  if (!raw) return undefined;
+
+  const compact = raw.replace(/\s+/g, " ");
+  const lower = compact.toLowerCase();
+
+  if (lower.includes("windows")) {
+    const server = lower.includes("server") ? " Server" : "";
+    const version =
+      lower.match(
+        /\b(11|10|8\.1|8|7|2025|2022|2019|2016|2012 r2|2012)\b/,
+      )?.[1] ?? undefined;
+    return version ? `Windows${server} ${version}` : `Windows${server}`.trim();
+  }
+
+  if (
+    lower.includes("mac os") ||
+    lower.includes("macos") ||
+    lower.includes("os x")
+  ) {
+    return "macOS";
+  }
+
+  if (lower.includes("ubuntu")) return "Ubuntu Linux";
+  if (lower.includes("debian")) return "Debian Linux";
+  if (lower.includes("red hat") || lower.includes("rhel"))
+    return "Red Hat Enterprise Linux";
+  if (lower.includes("centos")) return "CentOS Linux";
+  if (lower.includes("linux")) return "Linux";
+  if (lower.includes("android")) return "Android";
+  if (lower === "ios" || lower.includes("iphone") || lower.includes("ipad"))
+    return "iOS";
+
+  return compact;
 }
 
 function confidenceLabel(confidence: number): ConfidenceLabel {

@@ -286,6 +286,7 @@
       },
       "devDependencies": {
         "@mspbyte/typescript-config": "*",
+        "@types/node": "^25.9.3",
         "typescript": "^5.4.0",
       },
     },
@@ -295,7 +296,6 @@
       "dependencies": {
         "@mspbyte/connectors": "*",
         "@mspbyte/encryption": "*",
-        "@mspbyte/pipeline": "*",
         "zod": "^4.4.3",
       },
       "devDependencies": {

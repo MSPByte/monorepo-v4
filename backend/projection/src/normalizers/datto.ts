@@ -17,7 +17,7 @@ function normalizeDevice(raw: DattoDevice): RecordValue {
   return {
     externalId: raw.uid,
     hostname: raw.hostname,
-    category: mapCategory(raw.deviceType.category),
+    category: mapCategory(raw.deviceType?.category || "Unknown"),
     os: raw.operatingSystem ?? "Unknown",
     ipAddress: raw.intIpAddress,
     extAddress: raw.extIpAddress ?? "",

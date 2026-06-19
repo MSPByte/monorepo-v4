@@ -8,6 +8,7 @@ import {
   unique,
   index,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { crudPolicy, authenticatedRole } from "drizzle-orm/neon";
 import { policySchema } from "../schemas.js";
 import {
@@ -228,7 +229,160 @@ export const findings = policySchema.table(
   ],
 );
 
+export const findingsWithContext = policySchema
+  .view("findings_with_context", {
+    id: uuid("id").notNull(),
+    policyId: text("policy_id").notNull(),
+    policyName: text("policy_name").notNull(),
+    providerId: text("provider_id"),
+    linkId: uuid("link_id"),
+    siteId: uuid("site_id"),
+    siteName: text("site_name").notNull(),
+    resourceType: text("resource_type").notNull(),
+    resourceTable: text("resource_table"),
+    resourceId: text("resource_id").notNull(),
+    resourceName: text("resource_name").notNull(),
+    resourceExternalId: text("resource_external_id"),
+    fingerprint: text("fingerprint").notNull(),
+    title: text("title").notNull(),
+    summary: text("summary"),
+    severity: integer("severity").notNull(),
+    status: text("status", {
+      enum: ["open", "acknowledged", "suppressed", "resolved", "regressed"],
+    }).notNull(),
+    evidenceSummary: text("evidence_summary").notNull(),
+    recommendation: text("recommendation"),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true, mode: "string" }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: "string" }).notNull(),
+  })
+  .with({ securityInvoker: true })
+  .as(sql`
+    select
+      f.id,
+      f.policy_id,
+      p.name as policy_name,
+      f.provider_id,
+      f.link_id,
+      f.site_id,
+      coalesce(s.name, 'Unassigned') as site_name,
+      f.resource_type,
+      f.resource_table,
+      f.resource_id,
+      coalesce(a.display_name, pe.display_name, f.resource_external_id, f.resource_id) as resource_name,
+      f.resource_external_id,
+      f.fingerprint,
+      f.title,
+      f.summary,
+      f.severity,
+      f.status,
+      coalesce(f.summary, f.evidence->>'summary', 'Structured evidence is available on the finding.') as evidence_summary,
+      f.recommendation,
+      f.first_seen_at,
+      f.last_seen_at
+    from policy.findings f
+    inner join policy.policies p on p.id = f.policy_id
+    left join public.sites s on s.id = f.site_id
+    left join canonical.assets a on f.resource_type = 'asset' and f.resource_id = a.id::text
+    left join canonical.people pe on f.resource_type = 'person' and f.resource_id = pe.id::text
+  `);
+
+export const policiesWithStats = policySchema
+  .view("policies_with_stats", {
+    id: text("id").notNull(),
+    source: text("source", { enum: ["catalog", "custom"] }).notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    category: text("category"),
+    providerId: text("provider_id"),
+    targetType: text("target_type").notNull(),
+    scope: text("scope").notNull(),
+    severity: integer("severity").notNull(),
+    enabled: boolean("enabled").notNull(),
+    recommendation: text("recommendation"),
+    frameworkList: text("framework_list").notNull(),
+    openFindingCount: integer("open_finding_count").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
+  })
+  .with({ securityInvoker: true })
+  .as(sql`
+    select
+      p.id,
+      p.source,
+      p.name,
+      p.description,
+      p.category,
+      p.provider_id,
+      p.target_type,
+      p.target_type as scope,
+      p.severity,
+      p.enabled,
+      p.recommendation,
+      coalesce(fr.framework_list, '') as framework_list,
+      coalesce(f.open_finding_count, 0)::int as open_finding_count,
+      p.updated_at
+    from policy.policies p
+    left join lateral (
+      select string_agg(distinct ps.name, ', ' order by ps.name) as framework_list
+      from policy.policy_set_items psi
+      inner join policy.policy_sets ps on ps.id = psi.policy_set_id
+      where psi.policy_id = p.id
+    ) fr on true
+    left join lateral (
+      select count(*)::int as open_finding_count
+      from policy.findings pf
+      where pf.policy_id = p.id
+        and pf.status in ('open', 'acknowledged', 'regressed')
+    ) f on true
+  `);
+
+export const policySetsWithStats = policySchema
+  .view("policy_sets_with_stats", {
+    id: uuid("id").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    category: text("category"),
+    providerId: text("provider_id"),
+    enabled: boolean("enabled").notNull(),
+    policyCount: integer("policy_count").notNull(),
+    openFindings: integer("open_findings").notNull(),
+    passRate: integer("pass_rate").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
+  })
+  .with({ securityInvoker: true })
+  .as(sql`
+    select
+      ps.id,
+      ps.name,
+      ps.description,
+      ps.category,
+      ps.provider_id,
+      ps.enabled,
+      coalesce(pc.policy_count, 0)::int as policy_count,
+      coalesce(of.open_findings, 0)::int as open_findings,
+      case
+        when coalesce(pc.policy_count, 0) = 0 then 100
+        else greatest(0, least(100, round(100 - (coalesce(of.open_findings, 0)::numeric / pc.policy_count::numeric * 10))::int))
+      end as pass_rate,
+      ps.updated_at
+    from policy.policy_sets ps
+    left join lateral (
+      select count(*)::int as policy_count
+      from policy.policy_set_items psi
+      where psi.policy_set_id = ps.id
+    ) pc on true
+    left join lateral (
+      select count(distinct f.id)::int as open_findings
+      from policy.policy_set_items psi
+      inner join policy.findings f on f.policy_id = psi.policy_id
+      where psi.policy_set_id = ps.id
+        and f.status in ('open', 'acknowledged', 'regressed')
+    ) of on true
+  `);
+
 export type Finding = typeof findings.$inferSelect;
+export type FindingWithContext = typeof findingsWithContext.$inferSelect;
 export type Policy = typeof policies.$inferSelect;
 export type PolicyAssignment = typeof policyAssignments.$inferSelect;
 export type PolicySet = typeof policySets.$inferSelect;
+export type PolicyWithStats = typeof policiesWithStats.$inferSelect;
+export type PolicySetWithStats = typeof policySetsWithStats.$inferSelect;

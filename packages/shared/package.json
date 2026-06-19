@@ -33,7 +33,6 @@
   "dependencies": {
     "@mspbyte/connectors": "*",
     "@mspbyte/encryption": "*",
-    "@mspbyte/pipeline": "*",
     "zod": "^4.4.3"
   }
 }

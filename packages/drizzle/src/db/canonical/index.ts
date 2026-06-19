@@ -7,6 +7,7 @@ import {
   index,
   integer,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { crudPolicy, authenticatedRole } from "drizzle-orm/neon";
 import { canonicalSchema } from "../schemas.js";
 import { integrationLinks, sites } from "../public/index.js";
@@ -55,6 +56,7 @@ export const assets = canonicalSchema.table(
     displayName: text("display_name").notNull(),
     hostname: text("hostname"),
     serialNumber: text("serial_number"),
+    os: text("os"),
     assetType: text("asset_type", {
       enum: ["workstation", "server", "network", "mobile", "unknown"],
     })
@@ -131,6 +133,116 @@ export const entitySources = canonicalSchema.table(
   ],
 );
 
+export const assetsWithSites = canonicalSchema
+  .view("assets_with_sites", {
+    id: uuid("id").notNull(),
+    siteId: uuid("site_id"),
+    siteName: text("site_name").notNull(),
+    displayName: text("display_name").notNull(),
+    hostname: text("hostname"),
+    serialNumber: text("serial_number"),
+    os: text("os"),
+    assetType: text("asset_type", {
+      enum: ["workstation", "server", "network", "mobile", "unknown"],
+    }).notNull(),
+    status: text("status", { enum: ["active", "inactive", "unknown"] }).notNull(),
+    sourceConfidence: text("source_confidence", {
+      enum: ["high", "medium", "low"],
+    }).notNull(),
+    sources: text("sources").array().notNull(),
+    sourceList: text("source_list").notNull(),
+    openFindingCount: integer("open_finding_count").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
+  })
+  .with({ securityInvoker: true })
+  .as(sql`
+    select
+      a.id,
+      a.site_id,
+      coalesce(s.name, 'Unassigned') as site_name,
+      a.display_name,
+      a.hostname,
+      a.serial_number,
+      a.os,
+      a.asset_type,
+      a.status,
+      a.source_confidence,
+      coalesce(src.sources, array[]::text[]) as sources,
+      coalesce(array_to_string(src.sources, ', '), '') as source_list,
+      coalesce(f.open_finding_count, 0)::int as open_finding_count,
+      a.created_at,
+      a.updated_at
+    from canonical.assets a
+    left join public.sites s on s.id = a.site_id
+    left join lateral (
+      select array_agg(distinct es.provider order by es.provider) as sources
+      from canonical.entity_sources es
+      where es.canonical_type = 'asset'
+        and es.canonical_id = a.id
+        and es.status = 'confirmed'
+    ) src on true
+    left join lateral (
+      select count(*)::int as open_finding_count
+      from policy.findings pf
+      where pf.resource_type = 'asset'
+        and pf.resource_id = a.id::text
+        and pf.status in ('open', 'acknowledged', 'regressed')
+    ) f on true
+  `);
+
+export const peopleWithSites = canonicalSchema
+  .view("people_with_sites", {
+    id: uuid("id").notNull(),
+    siteId: uuid("site_id"),
+    siteName: text("site_name").notNull(),
+    primaryEmail: text("primary_email").notNull(),
+    displayName: text("display_name").notNull(),
+    status: text("status", { enum: ["active", "inactive", "unknown"] }).notNull(),
+    sourceConfidence: text("source_confidence", {
+      enum: ["high", "medium", "low"],
+    }).notNull(),
+    sources: text("sources").array().notNull(),
+    sourceList: text("source_list").notNull(),
+    openFindingCount: integer("open_finding_count").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
+  })
+  .with({ securityInvoker: true })
+  .as(sql`
+    select
+      p.id,
+      p.site_id,
+      coalesce(s.name, 'Unassigned') as site_name,
+      p.primary_email,
+      p.display_name,
+      p.status,
+      p.source_confidence,
+      coalesce(src.sources, array[]::text[]) as sources,
+      coalesce(array_to_string(src.sources, ', '), '') as source_list,
+      coalesce(f.open_finding_count, 0)::int as open_finding_count,
+      p.created_at,
+      p.updated_at
+    from canonical.people p
+    left join public.sites s on s.id = p.site_id
+    left join lateral (
+      select array_agg(distinct es.provider order by es.provider) as sources
+      from canonical.entity_sources es
+      where es.canonical_type = 'person'
+        and es.canonical_id = p.id
+        and es.status = 'confirmed'
+    ) src on true
+    left join lateral (
+      select count(*)::int as open_finding_count
+      from policy.findings pf
+      where pf.resource_type = 'person'
+        and pf.resource_id = p.id::text
+        and pf.status in ('open', 'acknowledged', 'regressed')
+    ) f on true
+  `);
+
 export type EntitySource = typeof entitySources.$inferSelect;
 export type Person = typeof people.$inferSelect;
 export type Asset = typeof assets.$inferSelect;
+export type AssetWithSite = typeof assetsWithSites.$inferSelect;
+export type PersonWithSite = typeof peopleWithSites.$inferSelect;

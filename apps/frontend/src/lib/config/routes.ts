@@ -10,14 +10,43 @@ type Route = {
 
 const ROUTES: Route[] = [
   {
+    label: 'Overview',
+    href: '/home',
+    permission: 'Assets.Read',
+  },
+  {
+    label: 'Findings',
+    href: '/findings',
+    permission: 'Assets.Read',
+  },
+  {
     label: 'Sites',
     href: '/sites',
     permission: 'Sites.Read',
   },
   {
-    label: 'Wiki',
-    href: '/wiki',
-    devOnly: true,
+    label: 'Assets',
+    href: '/assets',
+    permission: 'Assets.Read',
+  },
+  {
+    label: 'People',
+    href: '/people',
+    permission: 'Assets.Read',
+  },
+  {
+    label: 'Policies',
+    href: '/policies',
+    permission: 'Assets.Read',
+  },
+  {
+    label: 'Frameworks',
+    href: '/frameworks',
+    permission: 'Assets.Read',
+  },
+  {
+    label: 'Reports',
+    href: '/reports',
     permission: 'Assets.Read',
   },
   {
@@ -42,6 +71,13 @@ const ROUTES: Route[] = [
     label: 'Audit',
     href: '/setup/audit',
     permission: 'Global.Admin',
+    group: 'Setup',
+  },
+  {
+    label: 'Wiki',
+    href: '/wiki',
+    devOnly: true,
+    permission: 'Assets.Read',
     group: 'Setup',
   },
   {

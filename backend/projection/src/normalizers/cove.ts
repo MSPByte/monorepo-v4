@@ -49,8 +49,10 @@ function normalizeAccount(raw: CoveAccountStatistics): RecordValue {
     status: mapStatus(settings["backupStatus"]),
     lsvStatus: settings["lsvStatus"] || null,
     errors: Number.parseInt(settings["errors"] ?? "0", 10) || 0,
-    selectedSize: Math.round(Number.parseFloat(settings["selectedSize"] ?? "0")) || 0,
-    usedStorage: Math.round(Number.parseFloat(settings["usedStorage"] ?? "0")) || 0,
+    selectedSize:
+      Math.round(Number.parseFloat(settings["selectedSize"] ?? "0")) || 0,
+    usedStorage:
+      Math.round(Number.parseFloat(settings["usedStorage"] ?? "0")) || 0,
     last28Days: settings["last28Days"] ?? "",
     lastSuccessAt,
   };

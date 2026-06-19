@@ -2,6 +2,8 @@ export * from "./config/actions/index.js";
 export * from "./config/integrations/index.js";
 export * from "./schemas/m365.js";
 export * from "./schemas/sophos.js";
+export * from "./schemas/cove.js";
+export * from "./schemas/datto.js";
 export * from "./lib/auth.js";
 export {
   CoveConnector,

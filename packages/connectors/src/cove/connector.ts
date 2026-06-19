@@ -1,28 +1,28 @@
-import { CoveHttpClient } from './http-client.js';
+import { CoveHttpClient } from "./http-client.js";
 
 // Human-readable column names for the Cove RPC column codes
 const CODE_TO_NAME: Record<string, string> = {
-  I78: 'activeDataSources',
-  T0: 'backupStatus',
-  MN: 'computerName',
-  AR: 'customer',
-  AN: 'deviceName',
-  OT: 'deviceType',
-  T7: 'errors',
-  TB: 'last28Days',
-  TL: 'lastSuccessfulSession',
-  YV: 'lsvStatus',
-  OP: 'profile',
-  PN: 'retentionPolicy',
-  T3: 'selectedSize',
-  YS: 'storageStatus',
-  US: 'usedStorage'
+  I78: "activeDataSources",
+  T0: "backupStatus",
+  MN: "computerName",
+  AR: "customer",
+  AN: "deviceName",
+  OT: "deviceType",
+  T7: "errors",
+  TB: "last28Days",
+  TL: "lastSuccessfulSession",
+  YV: "lsvStatus",
+  OP: "profile",
+  PN: "retentionPolicy",
+  T3: "selectedSize",
+  YS: "storageStatus",
+  US: "usedStorage",
 };
 
 export interface CoveAccountStatistics {
   AccountId: number;
   PartnerId: number;
-  Flags: string[] | null;
+  Flags?: string[] | null;
   Settings: Record<string, string>;
 }
 
@@ -72,13 +72,13 @@ export class CoveConnector {
     this.client = new CoveHttpClient(server, clientId, clientSecret);
 
     this.account = {
-      statistics: (partnerId) => this.fetchStatistics(partnerId)
+      statistics: (partnerId) => this.fetchStatistics(partnerId),
     };
 
     this.partner = {
       children: {
-        list: (partnerId) => this.fetchChildPartners(partnerId)
-      }
+        list: (partnerId) => this.fetchChildPartners(partnerId),
+      },
     };
   }
 
@@ -91,36 +91,43 @@ export class CoveConnector {
     }
   }
 
-  private async fetchChildPartners(partnerId: number): Promise<CoveChildPartner[]> {
-    const result = await this.client.rpc<EnumerateChildPartnersResult>('EnumerateChildPartners', {
-      partnerId,
-      childrenLimit: 10000,
-      range: { Offset: 0, Size: 10000 },
-      fields: [0, 1, 3, 4, 5],
-      partnerFilter: {
-        SortOrder: 'ByLevelAndName',
-        states: ['InProduction', 'InTrial', 'Expired']
-      }
-    });
+  private async fetchChildPartners(
+    partnerId: number,
+  ): Promise<CoveChildPartner[]> {
+    const result = await this.client.rpc<EnumerateChildPartnersResult>(
+      "EnumerateChildPartners",
+      {
+        partnerId,
+        childrenLimit: 10000,
+        range: { Offset: 0, Size: 10000 },
+        fields: [0, 1, 3, 4, 5],
+        partnerFilter: {
+          SortOrder: "ByLevelAndName",
+          states: ["InProduction", "InTrial", "Expired"],
+        },
+      },
+    );
     return result.result?.Children ?? [];
   }
 
-  private async fetchStatistics(partnerId: number): Promise<CoveAccountStatistics[]> {
+  private async fetchStatistics(
+    partnerId: number,
+  ): Promise<CoveAccountStatistics[]> {
     const result = await this.client.rpc<EnumerateAccountStatisticsResult>(
-      'EnumerateAccountStatistics',
+      "EnumerateAccountStatistics",
       {
         query: {
           PartnerId: partnerId,
-          Filter: '',
+          Filter: "",
           Labels: [],
-          OrderBy: 'AR',
+          OrderBy: "AR",
           RecordsCount: 200,
-          SelectionMode: 'Merged',
+          SelectionMode: "Merged",
           StartRecordNumber: 0,
           Totals: [],
-          Columns: Object.keys(CODE_TO_NAME)
-        }
-      }
+          Columns: Object.keys(CODE_TO_NAME),
+        },
+      },
     );
 
     return (result.result ?? [])
@@ -131,14 +138,14 @@ export class CoveConnector {
           const [code, value] = Object.entries(entry)[0] ?? [];
           if (code && value !== undefined) {
             const name = CODE_TO_NAME[code];
-            if (name) settings[name] = value == null ? '' : String(value);
+            if (name) settings[name] = value == null ? "" : String(value);
           }
         }
         return {
           AccountId: r.AccountId,
           PartnerId: r.PartnerId,
           Flags: r.Flags ?? null,
-          Settings: settings
+          Settings: settings,
         };
       });
   }
