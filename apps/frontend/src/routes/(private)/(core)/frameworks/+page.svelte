@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
+  import { Plus } from '@lucide/svelte';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import { DataTable, type DataTableColumn, type PaginationInput } from '$lib/components/data-table';
@@ -11,6 +12,7 @@
     textColumn,
   } from '$lib/components/data-table/column-defs';
   import { toServerTableInput } from '$lib/components/domain/server-table';
+  import Button from '$lib/components/ui/button/button.svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   type FrameworkRow = {
@@ -50,9 +52,15 @@
 {/snippet}
 
 <div class="flex size-full flex-col gap-4 overflow-hidden p-6">
-  <div>
-    <h1 class="text-2xl font-semibold tracking-normal">Frameworks</h1>
-    <p class="text-sm text-muted-foreground">Policy bundles that define baselines and standards.</p>
+  <div class="flex items-start justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-normal">Frameworks</h1>
+      <p class="text-sm text-muted-foreground">Policy bundles that define baselines and standards.</p>
+    </div>
+    <Button class="gap-2" onclick={() => goto('/frameworks/builder')}>
+      <Plus class="size-4" />
+      New Framework
+    </Button>
   </div>
 
   <DataTable

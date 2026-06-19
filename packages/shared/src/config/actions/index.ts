@@ -1,6 +1,7 @@
 export enum ActionLabels {
   SophosEndpointDelete = 'sophos.endpoint.delete',
-  SophosEndpointTamperEnable = 'sophos.endpoint.tamper_protection.enable'
+  SophosEndpointTamperEnable = 'sophos.endpoint.tamper_protection.enable',
+  PolicyDelete = 'policy.delete'
 }
 
 export type ActionLabel = `${ActionLabels}`;
@@ -18,6 +19,10 @@ export const ActionResources = {
   [ActionLabels.SophosEndpointTamperEnable]: {
     label: ActionLabels.SophosEndpointTamperEnable,
     name: 'Sophos endpoint enable tamper protection'
+  },
+  [ActionLabels.PolicyDelete]: {
+    label: ActionLabels.PolicyDelete,
+    name: 'Policy delete'
   }
 } satisfies Record<ActionLabel, ActionResource>;
 

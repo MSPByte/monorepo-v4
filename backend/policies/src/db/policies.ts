@@ -1,9 +1,12 @@
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, notInArray, sql } from "drizzle-orm";
 import {
   assets,
+  assetsWithSites,
   coveEndpoints,
   dattoEndpoints,
+  entitySources,
   findings,
+  integrationLinks,
   m365AuthMethods,
   m365Devices,
   m365DomainConfig,
@@ -17,6 +20,7 @@ import {
   m365RiskyUsers,
   m365TeamsConfig,
   people,
+  peopleWithSites,
   policies,
   policyAssignments,
   policySetItems,
@@ -28,6 +32,7 @@ import {
   syncRuns,
   syncRunStages,
 } from "@mspbyte/drizzle";
+import { FACET_TABLE_MAP, ProviderFacet } from "@mspbyte/shared";
 
 type Db = any;
 type JsonObject = Record<string, unknown>;
@@ -51,6 +56,7 @@ type PolicyContext = {
   siteId?: string;
   provider: string;
   syncRunId: string;
+  scope: JsonObject;
 };
 
 type ProducedFinding = {
@@ -78,20 +84,31 @@ type TableEntry = {
   table: unknown;
   resourceType: string;
   resourceTable: string;
+  sourceTable?: string;
 };
 
 const tableRegistry: Record<string, TableEntry> = {
-  people: { table: people, resourceType: "person", resourceTable: "canonical.people" },
-  assets: { table: assets, resourceType: "asset", resourceTable: "canonical.assets" },
+  people: {
+    table: peopleWithSites,
+    resourceType: "person",
+    resourceTable: "canonical.people",
+  },
+  assets: {
+    table: assetsWithSites,
+    resourceType: "asset",
+    resourceTable: "canonical.assets",
+  },
   m365Identities: {
     table: m365Identities,
     resourceType: "m365_identity",
     resourceTable: "vendors.m365_identities",
+    sourceTable: "m365_identities",
   },
   m365Policies: {
     table: m365Policies,
     resourceType: "m365_policy",
     resourceTable: "vendors.m365_policies",
+    sourceTable: "m365_policies",
   },
   m365Licenses: {
     table: m365Licenses,
@@ -112,6 +129,7 @@ const tableRegistry: Record<string, TableEntry> = {
     table: m365Devices,
     resourceType: "m365_device",
     resourceTable: "vendors.m365_devices",
+    sourceTable: "m365_devices",
   },
   m365OAuthGrants: {
     table: m365OAuthGrants,
@@ -274,6 +292,8 @@ export async function evaluatePolicies(
     policyRows.map((policy: PolicyRow) => [policy.id, policy]),
   );
   const setPolicyIds = groupSetItems(setItems);
+  const scope = await loadScopeContext(db, params.linkId, params.siteId);
+  const triggerTable = FACET_TABLE_MAP[params.type as ProviderFacet];
 
   for (const assignment of activeAssignments) {
     metrics.assignmentsEvaluated++;
@@ -288,6 +308,7 @@ export async function evaluatePolicies(
       const policy = policyById.get(policyId);
       if (!policy) continue;
       if (policy.providerId && policy.providerId !== params.provider) continue;
+      if (!policyTargetsFacet(policy, triggerTable)) continue;
 
       metrics.policiesEvaluated++;
       const context: PolicyContext = {
@@ -298,6 +319,7 @@ export async function evaluatePolicies(
         siteId: params.siteId,
         provider: params.provider,
         syncRunId: params.syncRunId,
+        scope,
       };
       const produced = await evaluatePolicy(db, context);
       await upsertProducedFindings(db, produced);
@@ -307,6 +329,36 @@ export async function evaluatePolicies(
   }
 
   return metrics;
+}
+
+async function loadScopeContext(
+  db: Db,
+  linkId: string | undefined,
+  siteId: string | undefined,
+): Promise<JsonObject> {
+  const scope: JsonObject = {};
+  if (linkId) {
+    const [link] = await db
+      .select({
+        id: integrationLinks.id,
+        name: integrationLinks.name,
+        externalId: integrationLinks.externalId,
+        integrationId: integrationLinks.integrationId,
+      })
+      .from(integrationLinks)
+      .where(eq(integrationLinks.id, linkId))
+      .limit(1);
+    if (link) scope.integrationLink = link;
+  }
+  if (siteId) {
+    const [site] = await db
+      .select({ id: sites.id, name: sites.name, description: sites.description })
+      .from(sites)
+      .where(eq(sites.id, siteId))
+      .limit(1);
+    if (site) scope.site = site;
+  }
+  return scope;
 }
 
 async function loadAssignmentsForRun(
@@ -361,6 +413,18 @@ async function siteGroupIdsForSite(db: Db, siteId: string): Promise<Set<string>>
   return new Set(rows.map((row: { siteGroupId: string }) => row.siteGroupId));
 }
 
+function policyTargetsFacet(
+  policy: PolicyRow,
+  triggerTable: string | undefined,
+): boolean {
+  if (!triggerTable) return true;
+  const definition = policy.definition;
+  if (!isObject(definition)) return true;
+  const target = definition.table;
+  if (typeof target !== "string") return true;
+  return target === triggerTable;
+}
+
 function groupSetItems(rows: PolicySetItemRow[]): Map<string, string[]> {
   const grouped = new Map<string, string[]>();
   for (const row of rows) {
@@ -398,7 +462,20 @@ async function evaluateTableThreshold(
   if (!entry) return [];
 
   const rows = await scopedRows(db, entry, context, definition);
-  const matching = rows.filter((row) => matchesFilter(row, definition.filter));
+  const scoped = rows.filter((row) => matchesFilter(row, definition.filter));
+  const expectations = Array.isArray(definition.expectations)
+    ? definition.expectations
+    : definition.expectation
+      ? [definition.expectation]
+      : [];
+  const matching =
+    expectations.length === 0
+      ? scoped
+      : scoped.filter((row) =>
+          expectations.every((expectation) =>
+            matchesCondition(row, expectation),
+          ),
+        );
   const threshold = numberValue(definition.threshold, 1);
   if (matching.length >= threshold) return [];
 
@@ -408,14 +485,19 @@ async function evaluateTableThreshold(
       resourceTable: entry.resourceTable,
       resourceId: context.linkId ?? context.siteId ?? context.assignment.id,
       resourceExternalId: null,
-      title: stringValue(definition.title, context.policy.name),
-      summary: stringValue(definition.summary, null),
+      title:
+        renderTemplate(stringValue(definition.title, context.policy.name), context.scope) ??
+        context.policy.name,
+      summary: renderTemplate(stringValue(definition.summary, null), context.scope),
+      recommendation: renderTemplate(context.policy.recommendation, context.scope),
       evidence: {
         kind: "tableThreshold",
         table: tableName,
         threshold,
+        scoped: scoped.length,
         matched: matching.length,
         filter: definition.filter ?? null,
+        expectations: expectations.length ? expectations : null,
         sample: matching.slice(0, 10).map(compactRow),
       },
     }),
@@ -439,19 +521,22 @@ async function evaluateRowExpectation(
       ? [definition.expectation]
       : [];
 
-  return candidates
-    .map((row) => {
+  const findingsForRows = await Promise.all(
+    candidates.map(async (row) => {
       const failed = expectations.filter((expectation) => !matchesCondition(row, expectation));
       if (!failed.length) return null;
+      const resource = await findingResourceForRow(db, entry, row, definition);
+      const renderCtx = { ...row, ...context.scope };
       return buildFinding(context, {
-        resourceType: String(definition.resourceType ?? entry.resourceType),
-        resourceTable: entry.resourceTable,
-        resourceId: String(readPath(row, "id") ?? readPath(row, "externalId") ?? "unknown"),
-        resourceExternalId: stringValue(readPath(row, "externalId"), null),
+        resourceType: resource.resourceType,
+        resourceTable: resource.resourceTable,
+        resourceId: resource.resourceId,
+        resourceExternalId: resource.resourceExternalId,
         title:
-          renderTemplate(stringValue(definition.title, context.policy.name), row) ??
+          renderTemplate(stringValue(definition.title, context.policy.name), renderCtx) ??
           context.policy.name,
-        summary: renderTemplate(stringValue(definition.summary, null), row),
+        summary: renderTemplate(stringValue(definition.summary, null), renderCtx),
+        recommendation: renderTemplate(context.policy.recommendation, renderCtx),
         evidence: {
           kind: "rowExpectation",
           table: tableName,
@@ -459,8 +544,63 @@ async function evaluateRowExpectation(
           row: compactRow(row),
         },
       });
-    })
-    .filter((finding): finding is ProducedFinding => finding !== null);
+    }),
+  );
+
+  return findingsForRows.filter((finding): finding is ProducedFinding => finding !== null);
+}
+
+async function findingResourceForRow(
+  db: Db,
+  entry: TableEntry,
+  row: JsonObject,
+  definition: JsonObject,
+): Promise<{
+  resourceType: string;
+  resourceTable: string | null;
+  resourceId: string;
+  resourceExternalId: string | null;
+}> {
+  const canonicalResource = isObject(definition.canonicalResource)
+    ? definition.canonicalResource
+    : null;
+  const canonicalType = String(canonicalResource?.type ?? "");
+  const rowId = String(readPath(row, "id") ?? "");
+
+  if (entry.sourceTable && rowId && (canonicalType === "person" || canonicalType === "asset")) {
+    const [source] = await db
+      .select({
+        canonicalId: entitySources.canonicalId,
+        externalId: entitySources.externalId,
+      })
+      .from(entitySources)
+      .where(
+        and(
+          eq(entitySources.vendorTable, entry.sourceTable),
+          eq(entitySources.vendorRecordId, rowId),
+          eq(entitySources.canonicalType, canonicalType),
+          eq(entitySources.status, "confirmed"),
+        ),
+      )
+      .limit(1)
+      .catch(() => []);
+
+    if (source?.canonicalId) {
+      return {
+        resourceType: canonicalType,
+        resourceTable: canonicalType === "person" ? "canonical.people" : "canonical.assets",
+        resourceId: String(source.canonicalId),
+        resourceExternalId: source.externalId ?? stringValue(readPath(row, "externalId"), null),
+      };
+    }
+  }
+
+  return {
+    resourceType: String(definition.resourceType ?? entry.resourceType),
+    resourceTable: entry.resourceTable,
+    resourceId: String(readPath(row, "id") ?? readPath(row, "externalId") ?? "unknown"),
+    resourceExternalId: stringValue(readPath(row, "externalId"), null),
+  };
 }
 
 async function scopedRows(
@@ -469,17 +609,78 @@ async function scopedRows(
   context: PolicyContext,
   definition: JsonObject,
 ): Promise<JsonObject[]> {
-  const rows = (await db.select().from(entry.table)) as JsonObject[];
+  const table = entry.table as Record<string, unknown>;
+  const conditions: unknown[] = [];
+  const linkColumn = table.linkId;
+  const deletedAtColumn = table.deletedAt;
+  const siteColumn = table.siteId;
+
+  if (linkColumn && context.linkId) {
+    conditions.push(eq(linkColumn as never, context.linkId));
+  }
+  if (deletedAtColumn) {
+    conditions.push(isNull(deletedAtColumn as never));
+  }
   const scope = isObject(definition.scope) ? definition.scope : {};
+  if (scope.siteId && siteColumn) {
+    conditions.push(eq(siteColumn as never, scope.siteId));
+  }
+
+  const filterSql = buildSqlFilter(table, definition.filter);
+  if (filterSql) conditions.push(filterSql);
+
+  const query = db.select().from(entry.table);
+  const rows = (
+    conditions.length > 0
+      ? await query.where(and(...(conditions as never[])))
+      : await query
+  ) as JsonObject[];
 
   return rows.filter((row) => {
-    if (readPath(row, "deletedAt")) return false;
-    if (readPath(row, "linkId") && context.linkId && readPath(row, "linkId") !== context.linkId) {
+    if (!linkColumn && readPath(row, "linkId") && context.linkId && readPath(row, "linkId") !== context.linkId) {
       return false;
     }
-    if (scope.siteId && readPath(row, "siteId") !== scope.siteId) return false;
+    if (!deletedAtColumn && readPath(row, "deletedAt")) return false;
+    if (!siteColumn && scope.siteId && readPath(row, "siteId") !== scope.siteId) return false;
     return true;
   });
+}
+
+function buildSqlFilter(
+  table: Record<string, unknown>,
+  filter: unknown,
+): unknown | null {
+  if (!isObject(filter)) return null;
+  const logic = String(filter.logic ?? "AND").toUpperCase();
+  if (logic !== "AND") return null;
+  const conditions = Array.isArray(filter.conditions) ? filter.conditions : [];
+  const pushed: unknown[] = [];
+  for (const condition of conditions) {
+    if (!isObject(condition)) continue;
+    const field = String(condition.field ?? "");
+    if (!field || field.includes(".")) continue;
+    const column = table[field];
+    if (!column) continue;
+    const op = String(condition.op ?? "eq");
+    switch (op) {
+      case "eq":
+        pushed.push(eq(column as never, condition.value as never));
+        break;
+      case "ne":
+        pushed.push(ne(column as never, condition.value as never));
+        break;
+      case "exists":
+        pushed.push(sql`${column} is not null`);
+        break;
+      case "missing":
+        pushed.push(sql`${column} is null`);
+        break;
+      default:
+        continue;
+    }
+  }
+  if (pushed.length === 0) return null;
+  return and(...(pushed as never[]));
 }
 
 async function upsertProducedFindings(
@@ -533,9 +734,17 @@ async function resolveStaleFindings(
 ): Promise<number> {
   const now = new Date().toISOString();
   const fingerprints = produced.map((finding) => finding.fingerprint);
+  const scopeFilters = [] as ReturnType<typeof eq>[];
+  if (context.linkId) {
+    scopeFilters.push(eq(findings.linkId, context.linkId));
+  }
+  if (context.siteId) {
+    scopeFilters.push(eq(findings.siteId, context.siteId));
+  }
   const base = and(
     eq(findings.policyId, context.policy.id),
     eq(findings.policyAssignmentId, context.assignment.id),
+    ...scopeFilters,
     fingerprints.length > 0
       ? notInArray(findings.fingerprint, fingerprints)
       : sql`true`,
@@ -560,6 +769,7 @@ function buildFinding(
     resourceExternalId: string | null;
     title: string;
     summary: string | null;
+    recommendation: string | null;
     evidence: JsonObject;
   },
 ): ProducedFinding {
@@ -591,7 +801,7 @@ function buildFinding(
     evidence: input.evidence,
     impact: {},
     remediation: {},
-    recommendation: context.policy.recommendation,
+    recommendation: input.recommendation,
   };
 }
 

@@ -15,6 +15,7 @@ export default defineConfig({
     "audit",
     "canonical",
     "ingestor",
+    "compliance",
     "policy",
     "vendors",
     "wiki",

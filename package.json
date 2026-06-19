@@ -6,7 +6,7 @@
     "dev": "turbo run dev",
     "dev:agent": "turbo run dev --filter=agent --filter=agents",
     "dev:web": "turbo run dev --filter=frontend --filter=@mspbyte/shared --filter=@mspbyte/trpc",
-    "dev:pipeline": "turbo run dev --filter=ingestion --filter=projection --filter=normalize",
+    "dev:pipeline": "turbo run dev --filter=ingestion --filter=projection --filter=normalize --filter=policies",
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "infra:clean": "docker compose -f infra/docker-compose.yml down -v",

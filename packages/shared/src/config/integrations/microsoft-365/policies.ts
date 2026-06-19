@@ -182,8 +182,8 @@ export const M365PoliciesShape: SchemaFields = {
         fields: {
           includeUsers: {
             label: "Include Users",
-            type: "enum",
-            modality: "single",
+            type: "string",
+            modality: "array",
             trackable: true,
             ingestPath: "conditions.users.includeUsers",
             required: true,
@@ -267,8 +267,8 @@ export const M365PoliciesShape: SchemaFields = {
         fields: {
           includeApplications: {
             label: "Include Applications",
-            type: "enum",
-            modality: "single",
+            type: "string",
+            modality: "array",
             trackable: true,
             ingestPath: "conditions.applications.includeApplications",
             required: true,
@@ -338,8 +338,8 @@ export const M365PoliciesShape: SchemaFields = {
         fields: {
           includeLocations: {
             label: "Include Locations",
-            type: "enum",
-            modality: "single",
+            type: "string",
+            modality: "array",
             trackable: true,
             ingestPath: "conditions.locations.includeLocations",
             required: true,
