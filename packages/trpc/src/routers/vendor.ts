@@ -1,22 +1,15 @@
+// TODO: Findings Implementation
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   eq,
   and,
-  ne,
-  gt,
-  lt,
-  isNull,
-  isNotNull,
-  asc,
-  desc,
   count,
   sql,
   inArray
 } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import {
-  alerts,
   customerLogs,
   integrations,
   integrationLinks,
@@ -43,12 +36,9 @@ import {
   sophosFirewalls,
   sophosLicenses,
   sophosTamperProtection,
-  sophosSiteOverview,
-  m365TenantOverview,
   sophosEndpointsWithSite,
   sophosFirewallsWithSite,
   sophosLicensesWithSite,
-  coveSiteOverview,
   coveEndpointsWithSite,
   dattoEndpoints,
   coveEndpoints
@@ -155,27 +145,6 @@ function errorMessage(error: unknown): string {
 }
 
 export const vendorRouter = t.router({
-  sophosSiteOverview: authProcedure.query(async ({ ctx }) => {
-    return ctx.db
-      .select()
-      .from(sophosSiteOverview)
-      .orderBy(asc(sophosSiteOverview.dispositioned), asc(sophosSiteOverview.siteName));
-  }),
-
-  coveSiteOverview: authProcedure.query(async ({ ctx }) => {
-    return ctx.db
-      .select()
-      .from(coveSiteOverview)
-      .orderBy(asc(coveSiteOverview.dispositioned), asc(coveSiteOverview.siteName));
-  }),
-
-  m365TenantOverview: authProcedure.query(async ({ ctx }) => {
-    return ctx.db
-      .select()
-      .from(m365TenantOverview)
-      .orderBy(asc(m365TenantOverview.dispositioned), asc(m365TenantOverview.siteName));
-  }),
-
   tableData: authProcedure
     .input(
       z.object({
@@ -400,7 +369,6 @@ export const vendorRouter = t.router({
 
       const successfulIds = results.filter((r) => r.success).map((r) => r.id);
       if (successfulIds.length > 0) {
-        await ctx.db.delete(alerts).where(inArray(alerts.entityId, successfulIds));
         await ctx.db.delete(sophosEndpoints).where(inArray(sophosEndpoints.id, successfulIds));
       }
 
@@ -552,7 +520,6 @@ export const vendorRouter = t.router({
           .update(sophosEndpoints)
           .set({ tamperProtectionEnabled: true, updatedAt: new Date().toISOString() })
           .where(inArray(sophosEndpoints.id, updatedIds));
-        await ctx.db.delete(alerts).where(inArray(alerts.entityId, updatedIds));
       }
 
       const updated = updatedIds.length;

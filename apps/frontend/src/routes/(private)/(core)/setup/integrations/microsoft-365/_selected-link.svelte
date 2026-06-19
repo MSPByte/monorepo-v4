@@ -22,11 +22,11 @@
   import { authStore } from '$lib/stores/auth.store.svelte';
   import { toast } from 'svelte-sonner';
   import { enhance } from '$app/forms';
-  import type { Site } from '@mspbyte/drizzle';
   import type { inferRouterOutputs } from '@trpc/server';
   import type { AppRouter } from '@mspbyte/trpc';
 
   type Link = inferRouterOutputs<AppRouter>['integrationLinks']['list'][number];
+  type Site = inferRouterOutputs<AppRouter>['sites']['list'][number];
 
   // MS_CAPABILITIES is not exported from v2 shared — define locally
   const MS_CAPABILITIES: Record<string, { label: string; description: string }> = {

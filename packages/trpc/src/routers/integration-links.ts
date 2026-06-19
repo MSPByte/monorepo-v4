@@ -1,17 +1,9 @@
+// TODO: Findings Implementation
 import { z } from 'zod';
-import { integrationLinks, integrations, syncRuns } from '@mspbyte/drizzle';
+import { integrationLinks } from '@mspbyte/drizzle';
 import { eq, and, inArray } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
-import { FlowProducer } from 'bullmq';
-import {
-  buildLinkFlow,
-  getProviderFacets,
-  ingestionRootJobId,
-  resolveFacetPlan
-} from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
-import type { Redis } from 'ioredis';
-import type { TenantServiceDb } from '@mspbyte/drizzle-catalog';
 
 type IntegrationLinkRow = typeof integrationLinks.$inferSelect;
 
@@ -74,20 +66,6 @@ export const integrationLinksRouter = t.router({
         })
         .returning();
       if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
-
-      // Event-driven scheduling: immediately enqueue a full sync for new active links
-      if (row.status === 'active' && ctx.redis) {
-        const redis = ctx.redis;
-        void triggerLinkSync(
-          { db: ctx.db, orgId: ctx.orgId, redis },
-          row.id,
-          row.integrationId,
-          row.siteId ?? undefined,
-          row.externalId ?? undefined,
-          row.meta as Record<string, unknown> | null
-        );
-      }
-
       return row;
     }),
 
@@ -226,20 +204,7 @@ export const integrationLinksRouter = t.router({
         }
 
         if (toCreate.length > 0) {
-          const createdRows = await ctx.db.insert(integrationLinks).values(toCreate).returning();
-          if (ctx.redis) {
-            const redis = ctx.redis;
-            for (const row of createdRows) {
-              void triggerLinkSync(
-                { db: ctx.db, orgId: ctx.orgId, redis },
-                row.id,
-                row.integrationId,
-                row.siteId ?? undefined,
-                row.externalId ?? undefined,
-                row.meta as Record<string, unknown> | null
-              );
-            }
-          }
+          await ctx.db.insert(integrationLinks).values(toCreate).returning();
         }
 
         return {
@@ -257,81 +222,3 @@ export const integrationLinksRouter = t.router({
       await ctx.db.delete(integrationLinks).where(inArray(integrationLinks.id, input.ids));
     })
 });
-
-async function triggerLinkSync(
-  ctx: { db: TenantServiceDb; orgId: string; redis: Redis },
-  linkId: string,
-  integrationId: string,
-  siteId: string | undefined,
-  externalId: string | undefined,
-  meta: Record<string, unknown> | null
-): Promise<void> {
-  let syncRunId: string | undefined;
-  try {
-    const providerFacets = getProviderFacets(integrationId);
-    if (providerFacets.length === 0) return;
-
-    const [integrationRow] = await ctx.db
-      .select({ config: integrations.config })
-      .from(integrations)
-      .where(eq(integrations.id, integrationId))
-      .limit(1);
-
-    const integrationConfig = (integrationRow?.config as Record<string, unknown> | null) ?? {};
-    const { facets } = resolveFacetPlan({
-      providerId: integrationId,
-      integrationConfig,
-      linkMeta: meta ?? {},
-      force: true
-    });
-    if (facets.length === 0) return;
-
-    const ingestRunId = crypto.randomUUID();
-
-    const bullmqJobId = ingestionRootJobId(linkId, ingestRunId);
-    const [syncRunRow] = await ctx.db
-      .insert(syncRuns)
-      .values({
-        linkId,
-        integrationId,
-        bullmqJobId,
-        type: 'manual',
-        status: 'pending',
-        mode: 'full',
-        startedAt: new Date().toISOString()
-      })
-      .returning();
-
-    if (!syncRunRow) return;
-    syncRunId = syncRunRow.id;
-
-    const flowJob = buildLinkFlow({
-      orgId: ctx.orgId,
-      linkId,
-      siteId,
-      provider: integrationId,
-      externalId,
-      linkMeta: { ...(meta ?? {}), externalId },
-      integrationConfig,
-      facets,
-      ingestRunId,
-      syncRunId: syncRunRow.id,
-      mode: 'full'
-    });
-
-    const flow = new FlowProducer({ connection: ctx.redis as never });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await flow.add(flowJob as any);
-    await ctx.db.update(syncRuns).set({ status: 'queued' }).where(eq(syncRuns.id, syncRunRow.id));
-  } catch (err) {
-    if (syncRunId) {
-      await ctx.db
-        .update(syncRuns)
-        .set({ status: 'enqueue_failed', finishedAt: new Date().toISOString() })
-        .where(eq(syncRuns.id, syncRunId))
-        .catch(() => null);
-    }
-    // Fire-and-forget — the cron scheduler will catch it on next run
-    void err;
-  }
-}

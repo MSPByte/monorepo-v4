@@ -1,8 +1,7 @@
+// TODO: Findings Implementation
 import { t } from './trpc.js';
 import { authRouter } from './routers/auth.js';
 import { sitesRouter } from './routers/sites.js';
-import { alertsRouter } from './routers/alerts.js';
-import { complianceRouter } from './routers/compliance.js';
 import { usersRouter } from './routers/users.js';
 import { rolesRouter } from './routers/roles.js';
 import { integrationsRouter } from './routers/integrations.js';
@@ -16,8 +15,6 @@ import { auditRouter } from './routers/audit.js';
 export const appRouter = t.router({
   auth: authRouter,
   sites: sitesRouter,
-  alerts: alertsRouter,
-  compliance: complianceRouter,
   users: usersRouter,
   roles: rolesRouter,
   integrations: integrationsRouter,

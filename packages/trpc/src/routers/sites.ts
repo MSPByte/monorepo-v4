@@ -1,6 +1,7 @@
+// TODO: Findings Implementation
 import { z } from 'zod';
-import { eq, asc } from 'drizzle-orm';
-import { sites, sitesOverview } from '@mspbyte/drizzle';
+import { eq } from 'drizzle-orm';
+import { sites } from '@mspbyte/drizzle';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
 
@@ -9,10 +10,6 @@ type SiteRow = typeof sites.$inferSelect;
 export const sitesRouter = t.router({
   list: authProcedure.query(async ({ ctx }): Promise<SiteRow[]> => {
     return ctx.db.select().from(sites).orderBy(sites.name);
-  }),
-
-  overview: authProcedure.query(async ({ ctx }) => {
-    return ctx.db.select().from(sitesOverview).orderBy(asc(sitesOverview.name));
   }),
 
   get: authProcedure

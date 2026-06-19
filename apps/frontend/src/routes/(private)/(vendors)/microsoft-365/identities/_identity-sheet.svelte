@@ -1,12 +1,10 @@
+<!-- TODO: Findings Implementation -->
 <script lang="ts">
   import { getContext } from 'svelte';
   import { createQuery } from '@tanstack/svelte-query';
   import type { createTrpcClient } from '$lib/trpc';
   import { cn } from '$lib/utils';
   import * as Sheet from '$lib/components/ui/sheet/index.js';
-  import { ALERT_DEFINITIONS } from '@mspbyte/shared';
-  import AlertCard from '$lib/components/alerts/alert-card.svelte';
-  import type { UiAlert } from '$lib/components/alerts/types';
   import type { m365Identities } from '@mspbyte/drizzle';
 
   const trpc = getContext<ReturnType<typeof createTrpcClient>>('trpc');
@@ -16,20 +14,19 @@
   interface Props {
     identity: IdentityRow | null;
     linkId: string;
-    alerts: UiAlert[];
     onclose: () => void;
   }
 
-  let { identity, linkId, alerts, onclose }: Props = $props();
+  let { identity, linkId, onclose }: Props = $props();
 
   const NOW = Date.now();
 
-  type Tab = 'Roles' | 'Groups' | 'Policies' | 'Alerts';
+  type Tab = 'Roles' | 'Groups' | 'Policies';
   let drawerTab = $state<Tab>('Roles');
 
   $effect(() => {
     if (identity) {
-      drawerTab = alerts.length > 0 ? 'Alerts' : 'Roles';
+      drawerTab = 'Roles';
     }
   });
 
@@ -65,21 +62,6 @@
         <Sheet.Description>{identity.email}</Sheet.Description>
       </Sheet.Header>
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-        <!-- Alert badges summary -->
-        <div class="flex flex-wrap gap-1.5">
-          {#each alerts as alert}
-            {@const def = alert.definitionId ? ALERT_DEFINITIONS[alert.definitionId] : undefined}
-            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-warning/20 text-warning">
-              {def?.name ?? alert.definitionId ?? 'Alert'}
-            </span>
-          {/each}
-          {#if alerts.length === 0}
-            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-success/15 text-success">
-              No open alerts
-            </span>
-          {/if}
-        </div>
-
         <!-- Identity meta -->
         <div class="grid grid-cols-2 gap-2 text-xs">
           <div>
@@ -107,7 +89,7 @@
         <!-- Tabs -->
         <div class="border-t pt-3">
           <div class="flex gap-1 border-b mb-3">
-            {#each (['Roles', 'Groups', 'Policies', 'Alerts'] as const) as tab}
+            {#each (['Roles', 'Groups', 'Policies'] as const) as tab}
               <button
                 onclick={() => (drawerTab = tab)}
                 class={cn(
@@ -118,11 +100,6 @@
                 )}
               >
                 {tab}
-                {#if tab === 'Alerts' && alerts.length > 0}
-                  <span class="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full bg-destructive/15 text-destructive text-xs leading-none">
-                    {alerts.length}
-                  </span>
-                {/if}
               </button>
             {/each}
           </div>
@@ -174,16 +151,6 @@
                       </span>
                     </div>
                   </div>
-                {/each}
-              {/if}
-            </div>
-          {:else if drawerTab === 'Alerts'}
-            <div class="flex flex-col gap-2">
-              {#if alerts.length === 0}
-                <div class="text-sm text-muted-foreground p-2">No open alerts</div>
-              {:else}
-                {#each alerts as alert}
-                  <AlertCard alert={alert} />
                 {/each}
               {/if}
             </div>

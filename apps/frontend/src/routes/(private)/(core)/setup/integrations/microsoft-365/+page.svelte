@@ -27,7 +27,6 @@
   import { goto } from '$app/navigation';
   import { authStore } from '$lib/stores/auth.store.svelte';
   import SelectedLink from './_selected-link.svelte';
-  import ComplianceTab from './_compliance-tab.svelte';
   import Loader from '$lib/components/transition/loader.svelte';
   import FadeIn from '$lib/components/transition/fade-in.svelte';
   import type { inferRouterOutputs } from '@trpc/server';
@@ -378,7 +377,7 @@
         </Badge>
       </div>
       <p class="text-xs text-muted-foreground">
-        Manage Microsoft 365 tenant connections and compliance.
+        Manage Microsoft 365 tenant connections.
       </p>
     </div>
     <div class="flex gap-2">
@@ -439,7 +438,6 @@
     <Tabs.Root value="connections" class="flex flex-1 flex-col gap-3 overflow-hidden">
       <Tabs.List class="w-fit shrink-0">
         <Tabs.Trigger value="connections">Connections</Tabs.Trigger>
-        <Tabs.Trigger value="compliance">Compliance</Tabs.Trigger>
       </Tabs.List>
 
       <Tabs.Content value="connections" class="mt-0 flex flex-1 flex-col gap-4 overflow-hidden">
@@ -618,10 +616,6 @@
             />
           {/if}
         </FadeIn>
-      </Tabs.Content>
-
-      <Tabs.Content value="compliance" class="mt-0 flex-1 overflow-hidden">
-        <ComplianceTab links={(linksQuery.data ?? []) as Link[]} />
       </Tabs.Content>
     </Tabs.Root>
   {:else if loading}
