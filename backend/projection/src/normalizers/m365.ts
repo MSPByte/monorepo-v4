@@ -15,8 +15,8 @@ import {
   type M365OAuthGrant,
   type M365RiskyUser,
   type M365SubscribedSku,
-  type M365User,
-} from "@mspbyte/shared";
+  type M365User
+} from '@mspbyte/shared';
 
 type RecordValue = Record<string, unknown>;
 
@@ -44,26 +44,18 @@ export function normalizeM365(facet: string, raw: unknown): RecordValue {
 }
 
 function normalizeIdentity(raw: M365User): RecordValue {
-  const userType = raw.userType?.toLowerCase() ?? "service";
+  const userType = raw.userType ?? 'service';
 
   return {
     externalId: raw.id,
     name: raw.displayName ?? raw.userPrincipalName,
     email: raw.userPrincipalName,
-    type:
-      userType === "guest"
-        ? "guest"
-        : userType === "member"
-          ? "member"
-          : "service",
+    type: userType,
     enabled: raw.accountEnabled ?? true,
     mfaEnforced: false,
-    assignedLicenses:
-      raw.assignedLicenses?.map((license) => license.skuId) ?? [],
+    assignedLicenses: raw.assignedLicenses?.map((license) => license.skuId) ?? [],
     lastSignInAt: dateString(raw.signInActivity?.lastSignInDateTime),
-    lastNonInteractiveSignInAt: dateString(
-      raw.signInActivity?.lastNonInteractiveSignInDateTime,
-    ),
+    lastNonInteractiveSignInAt: dateString(raw.signInActivity?.lastNonInteractiveSignInDateTime)
   };
 }
 
@@ -74,7 +66,7 @@ function normalizeGroup(raw: M365Group): RecordValue {
     description: raw.description ?? null,
     mailEnabled: raw.mailEnabled,
     securityEnabled: raw.securityEnabled ?? false,
-    memberExternalIds: raw._member_ids,
+    memberExternalIds: raw._member_ids
   };
 }
 
@@ -84,13 +76,13 @@ function normalizeLicense(raw: M365SubscribedSku): RecordValue {
     skuId: raw.skuId,
     skuPartNumber: raw.skuPartNumber,
     friendlyName: raw._friendlyName ?? raw.skuPartNumber,
-    enabled: raw.capabilityStatus === "Enabled",
+    enabled: raw.capabilityStatus === 'Enabled',
     totalUnits: raw.prepaidUnits?.enabled ?? 0,
     consumedUnits: raw.consumedUnits ?? 0,
     suspendedUnits: raw.prepaidUnits?.suspended ?? 0,
     warningUnits: raw.prepaidUnits?.warning ?? 0,
     lockedOutUnits: raw.prepaidUnits?.lockedOut ?? 0,
-    servicePlanNames: raw.servicePlans.map((plan) => plan.servicePlanName),
+    servicePlanNames: raw.servicePlans.map((plan) => plan.servicePlanName)
   };
 }
 
@@ -102,7 +94,7 @@ function normalizePolicy(raw: M365CAPolicy): RecordValue {
     policyState: raw.state,
     conditions: raw.conditions ?? null,
     grantControls: raw.grantControls ?? null,
-    sessionControls: raw.sessionControls ?? null,
+    sessionControls: raw.sessionControls ?? null
   };
 }
 
@@ -112,7 +104,7 @@ function normalizeAuthMethod(raw: M365AuthMethod): RecordValue {
     identityExternalId: raw._identity_external_id,
     type: raw._method_type,
     creationDateAt: dateString(raw.createdDateTime),
-    meta: raw,
+    meta: raw
   };
 }
 
@@ -126,7 +118,7 @@ function normalizeDevice(raw: M365Device): RecordValue {
     isManaged: raw.isManaged ?? null,
     deviceOwnership: raw.deviceOwnership ?? null,
     approximateLastSignInAt: dateString(raw.approximateLastSignInDateTime),
-    registeredAt: dateString(raw.registrationDateTime),
+    registeredAt: dateString(raw.registrationDateTime)
   };
 }
 
@@ -139,7 +131,7 @@ function normalizeOAuthGrant(raw: M365OAuthGrant): RecordValue {
     principalId: raw.principalId ?? null,
     resourceId: raw.resourceId,
     resourceDisplayName: raw.resourceDisplayName ?? null,
-    scope: raw.scope ?? null,
+    scope: raw.scope ?? null
   };
 }
 
@@ -151,7 +143,7 @@ function normalizeRiskyUser(raw: M365RiskyUser): RecordValue {
     riskLevel: raw.riskLevel,
     riskState: raw.riskState,
     riskDetail: raw.riskDetail ?? null,
-    riskLastUpdatedAt: dateString(raw.riskLastUpdatedDateTime),
+    riskLastUpdatedAt: dateString(raw.riskLastUpdatedDateTime)
   };
 }
 

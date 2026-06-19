@@ -4,7 +4,11 @@
   import { Plus } from '@lucide/svelte';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
-  import { DataTable, type DataTableColumn, type PaginationInput } from '$lib/components/data-table';
+  import {
+    DataTable,
+    type DataTableColumn,
+    type PaginationInput,
+  } from '$lib/components/data-table';
   import {
     boolBadgeColumn,
     numberColumn,
@@ -36,7 +40,6 @@
     numberColumn<FrameworkRow>('policyCount', 'Policy Count'),
     numberColumn<FrameworkRow>('passRate', 'Pass %', undefined, { cell: percentCell }),
     numberColumn<FrameworkRow>('openFindings', 'Open Findings'),
-    relativeDateColumn<FrameworkRow>('updatedAt', 'Last Evaluation'),
   ];
 
   async function fetchData(input: PaginationInput) {
@@ -55,7 +58,9 @@
   <div class="flex items-start justify-between gap-3">
     <div>
       <h1 class="text-2xl font-semibold tracking-normal">Frameworks</h1>
-      <p class="text-sm text-muted-foreground">Policy bundles that define baselines and standards.</p>
+      <p class="text-sm text-muted-foreground">
+        Policy bundles that define baselines and standards.
+      </p>
     </div>
     <Button class="gap-2" onclick={() => goto('/frameworks/builder')}>
       <Plus class="size-4" />

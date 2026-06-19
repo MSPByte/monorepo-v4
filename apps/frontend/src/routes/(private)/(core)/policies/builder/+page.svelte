@@ -613,7 +613,7 @@
       </Card.Footer>
     </Card.Root>
 
-    <Card.Root>
+    <Card.Root class="w-1/3">
       <Card.Header>
         <Card.Title>Definition Preview</Card.Title>
         <Card.Description
