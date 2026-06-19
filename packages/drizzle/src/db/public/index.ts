@@ -115,66 +115,6 @@ export const integrationLinks = pgTable(
   ],
 );
 
-export const alerts = pgTable(
-  "alerts",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    definitionId: text("definition_id"),
-    linkId: uuid("link_id").references(() => integrationLinks.id, {
-      onDelete: "cascade",
-    }),
-    siteId: uuid("site_id").references(() => sites.id),
-    entityType: text("entity_type"),
-    entityRef: text("entity_ref"),
-    entityId: text("entity_id"),
-    status: text("status", { enum: ["active", "resolved", "suppressed"] })
-      .notNull()
-      .default("active"),
-    severity: integer("severity").notNull(),
-    message: text("message").notNull(),
-    metadata: jsonb("metadata"),
-    firstSeen: timestamp("first_seen", { withTimezone: true, mode: "string" })
-      .notNull()
-      .defaultNow(),
-    lastSeenAt: timestamp("last_seen_at", {
-      withTimezone: true,
-      mode: "string",
-    })
-      .notNull()
-      .defaultNow(),
-    resolvedAt: timestamp("resolved_at", {
-      withTimezone: true,
-      mode: "string",
-    }),
-    suppressedAt: timestamp("suppressed_at", {
-      withTimezone: true,
-      mode: "string",
-    }),
-    suppressedUntil: timestamp("suppressed_until", {
-      withTimezone: true,
-      mode: "string",
-    }),
-    suppressionNote: text("suppression_note"),
-    suppressedBy: text("suppressed_by"),
-    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
-      .notNull()
-      .defaultNow(),
-  },
-  (t) => [
-    index("alerts_upsert_idx").on(
-      t.linkId,
-      t.definitionId,
-      t.entityRef,
-      t.status,
-    ),
-    index("alerts_dashboard_idx").on(t.siteId, t.status),
-    index("alerts_link_status_seen_idx").on(t.linkId, t.status, t.lastSeenAt),
-    crudPolicy({ role: authenticatedRole, read: true, modify: true }),
-  ],
-);
-
-export * from "./views/sites.js";
-
 export type Role = typeof roles.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type Site = typeof sites.$inferSelect;

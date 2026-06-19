@@ -2,53 +2,6 @@ import { sql } from 'drizzle-orm';
 import { uuid, text, integer, bigint, timestamp, boolean } from 'drizzle-orm/pg-core';
 import { vendorsSchema } from '../../schemas.js';
 
-export const coveSiteOverview = vendorsSchema
-  .view('cove_site_overview', {
-    linkId: uuid('link_id').notNull(),
-    siteId: uuid('site_id'),
-    siteName: text('site_name').notNull(),
-    linkName: text('link_name'),
-    externalId: text('external_id'),
-    disposition: text('disposition', { enum: ['managed', 'third_party', 'not_managed'] }),
-    dispositioned: boolean('dispositioned').notNull(),
-    note: text('note'),
-    alertCount: integer('alert_count').notNull(),
-    highestSeverity: integer('highest_severity'),
-    criticalCount: integer('critical_count').notNull(),
-    highCount: integer('high_count').notNull()
-  })
-  .with({ securityInvoker: true }).as(sql`
-    with alert_summary as (
-      select
-        link_id,
-        count(*)::int as alert_count,
-        max(severity)::int as highest_severity,
-        count(*) filter (where severity >= 3)::int as critical_count,
-        count(*) filter (where severity = 2)::int as high_count
-      from public.alerts
-      where status = 'active'
-      group by link_id
-    )
-    select
-      l.id as link_id,
-      l.site_id,
-      coalesce(s.name, l.name, l.external_id, l.id::text) as site_name,
-      l.name as link_name,
-      l.external_id,
-      l.disposition,
-      (l.disposition is not null) as dispositioned,
-      l.note,
-      coalesce(a.alert_count, 0) as alert_count,
-      a.highest_severity,
-      coalesce(a.critical_count, 0) as critical_count,
-      coalesce(a.high_count, 0) as high_count
-    from public.integration_links l
-    left join public.sites s on s.id = l.site_id
-    left join alert_summary a on a.link_id = l.id
-    where l.integration_id = 'cove'
-      and l.status = 'active'
-  `);
-
 export const coveEndpointsWithSite = vendorsSchema
   .view('cove_endpoints_with_site', {
     id: uuid('id').notNull(),

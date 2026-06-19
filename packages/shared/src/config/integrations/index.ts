@@ -4,16 +4,18 @@ import { DATTO_RMM_CONFIG } from "./dattormm/index.js";
 import { COVE_CONFIG } from "./cove/index.js";
 import { MSPAGENT_CONFIG } from "./mspagent/index.js";
 import { HALOPSA_CONFIG } from "./halopsa/index.js";
-import {
+import type {
   Integration,
   DbRoute,
   IngestTypeConfig,
 } from "../../types/integration.js";
-import { ProviderId, ProviderFacet } from "../../types/provider.js";
+import { ProviderFacet } from "../../types/provider.js";
+import type { ProviderId } from "../../types/provider.js";
 
 export { M365_INTEGRATION_CONFIG } from "./microsoft-365/index.js";
 export { M365PoliciesShape } from "./microsoft-365/policies.js";
 export {
+  CAPABILITY_PLANS,
   CONSENT_VERSION,
   REQUIRED_DIRECTORY_ROLES,
 } from "./microsoft-365/index.js";

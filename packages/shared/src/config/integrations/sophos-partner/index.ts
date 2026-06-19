@@ -1,4 +1,4 @@
-import { Integration } from "../../../types/integration.js";
+import type { Integration } from "../../../types/integration.js";
 import { ProviderFacet } from "../../../types/provider.js";
 import { SyncIntervals } from "../intervals.js";
 

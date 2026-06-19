@@ -1,0 +1,188 @@
+@reference "../../../../../layout.css";
+
+/* ---- Tipex layout shell ---- */
+
+.tipex-editor {
+  @apply size-full;
+}
+
+.tipex-editor-wrap {
+  @apply flex flex-col size-full overflow-hidden;
+}
+
+.tipex-editor-section {
+  @apply flex flex-1 size-full overflow-hidden;
+}
+
+.tiptap {
+  @apply size-full focus:outline-none overflow-auto px-4 py-1;
+  color: var(--foreground);
+  line-height: 1.75;
+}
+
+.tipex-controller {
+  @apply flex h-fit;
+}
+
+/* ---- Prose content overrides ---- */
+
+.tiptap.ProseMirror {
+  @apply leading-7;
+}
+
+.tiptap h1 {
+  @apply text-3xl font-bold mt-6 mb-3;
+  color: var(--foreground);
+}
+
+.tiptap h2 {
+  @apply text-2xl font-semibold mt-5 mb-2;
+  color: var(--foreground);
+}
+
+.tiptap h3 {
+  @apply text-xl font-semibold mt-4 mb-1.5;
+  color: var(--foreground);
+}
+
+.tiptap h4 {
+  @apply text-lg font-medium mt-3 mb-1;
+  color: var(--foreground);
+}
+
+.tiptap p {
+  @apply my-1.5 leading-7;
+}
+
+.tiptap ul {
+  @apply list-disc pl-6 my-2 space-y-1;
+}
+
+.tiptap ol {
+  @apply list-decimal pl-6 my-2 space-y-1;
+}
+
+.tiptap blockquote {
+  @apply border-l-4 border-muted-foreground/30 pl-4 my-3 text-muted-foreground;
+  font-style: normal;
+}
+
+.tiptap code {
+  @apply font-mono text-sm bg-muted px-1.5 py-0.5 rounded text-foreground;
+}
+
+.tiptap pre {
+  @apply bg-muted rounded-lg p-4 my-3 overflow-x-auto;
+}
+
+.tiptap pre code {
+  @apply bg-transparent p-0 text-sm;
+}
+
+.tiptap hr {
+  @apply border-border my-6;
+}
+
+.tiptap a {
+  @apply text-primary underline underline-offset-2;
+}
+
+/* ---- Table styles ---- */
+
+.tiptap table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+  font-size: 0.875rem;
+}
+
+.tiptap th,
+.tiptap td {
+  @apply border border-border px-3 py-2 text-left;
+}
+
+.tiptap th {
+  @apply bg-muted font-semibold;
+}
+
+.tiptap tr:nth-child(even) td {
+  @apply bg-muted/30;
+}
+
+.tiptap .selectedCell::after {
+  background: oklch(0.62 0.188 259.8 / 0.1);
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* ---- KB reference highlights ---- */
+
+.kb-ref {
+  color: var(--primary);
+  border-bottom: 1.5px dashed color-mix(in oklch, var(--primary) 60%, transparent);
+  cursor: pointer;
+  border-radius: 2px;
+  padding: 0 1px;
+  transition: background-color 0.1s;
+}
+
+.kb-ref:hover {
+  background-color: color-mix(in oklch, var(--primary) 10%, transparent);
+}
+
+/* ---- Callout blocks ---- */
+
+[data-callout] {
+  @apply rounded my-4 px-4 py-2 border-l-4;
+}
+
+[data-callout] p {
+  @apply my-0.5 leading-6;
+  color: inherit;
+}
+
+[data-callout] li,
+[data-callout] h1,
+[data-callout] h2,
+[data-callout] h3,
+[data-callout] h4 {
+  color: inherit;
+}
+
+[data-callout-variant='blue'] {
+  border-left-color: oklch(0.62 0.188 259.8);
+  background-color: oklch(0.62 0.188 259.8 / 0.12);
+  color: oklch(0.62 0.188 259.8);
+}
+
+[data-callout-variant='green'] {
+  border-left-color: oklch(0.72 0.18 148.9);
+  background-color: oklch(0.72 0.18 148.9 / 0.12);
+  color: oklch(0.72 0.18 148.9);
+}
+
+[data-callout-variant='yellow'] {
+  border-left-color: oklch(0.737 0.153 74.2);
+  background-color: oklch(0.737 0.153 74.2 / 0.12);
+  color: oklch(0.737 0.153 74.2);
+}
+
+[data-callout-variant='red'] {
+  border-left-color: oklch(0.637 0.208 25.33);
+  background-color: oklch(0.637 0.208 25.33 / 0.12);
+  color: oklch(0.637 0.208 25.33);
+}
+
+[data-callout-variant='purple'] {
+  border-left-color: oklch(0.58 0.18 290);
+  background-color: oklch(0.58 0.18 290 / 0.12);
+  color: oklch(0.58 0.18 290);
+}
+
+[data-callout-variant='orange'] {
+  border-left-color: oklch(0.75 0.18 65);
+  background-color: oklch(0.75 0.18 65 / 0.12);
+  color: oklch(0.75 0.18 65);
+}

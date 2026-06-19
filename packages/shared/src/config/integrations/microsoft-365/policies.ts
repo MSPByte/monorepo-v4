@@ -1,4 +1,4 @@
-import { SchemaFields } from "../../../types/schema-registry.js";
+import type { SchemaFields } from "../../../types/schema-registry.js";
 
 export const M365PoliciesShape: SchemaFields = {
   name: {

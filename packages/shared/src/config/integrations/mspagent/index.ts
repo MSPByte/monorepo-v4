@@ -1,4 +1,4 @@
-import { Integration } from "../../../types/integration.js";
+import type { Integration } from "../../../types/integration.js";
 
 export const MSPAGENT_CONFIG: Integration = {
   id: "mspagent",

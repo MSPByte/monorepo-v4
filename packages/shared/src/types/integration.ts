@@ -1,5 +1,5 @@
-import { ProviderFacet, ProviderId } from "./provider.js";
-import { SchemaFields } from "./schema-registry.js";
+import type { ProviderFacet, ProviderId } from "./provider.js";
+import type { SchemaFields } from "./schema-registry.js";
 
 export type IntegrationCategory =
   | "psa"
