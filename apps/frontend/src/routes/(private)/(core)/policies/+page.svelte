@@ -6,8 +6,18 @@
   import { toast } from 'svelte-sonner';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
-  import { DataTable, type DataTableColumn, type PaginationInput, type RowAction } from '$lib/components/data-table';
-  import { boolBadgeColumn, numberColumn, textColumn } from '$lib/components/data-table/column-defs';
+  import {
+    DataTable,
+    type DataTableColumn,
+    type PaginationInput,
+    type RowAction,
+  } from '$lib/components/data-table';
+  import {
+    boolBadgeColumn,
+    numberColumn,
+    stateColumn,
+    textColumn,
+  } from '$lib/components/data-table/column-defs';
   import FindingSeverityBadge from '$lib/components/domain/finding-severity-badge.svelte';
   import SourceBadge from '$lib/components/domain/source-badge.svelte';
   import { toServerTableInput } from '$lib/components/domain/server-table';
@@ -24,6 +34,8 @@
     category: string | null;
     scope: string;
     source: string;
+    dataSource: string;
+    origin: string;
     frameworkList: string;
     openFindingCount: number;
   };
@@ -34,17 +46,71 @@
       trueLabel: 'Enabled',
       falseLabel: 'Off',
     }),
-    { key: 'severity', title: 'Severity', sortable: true, cell: severityCell, filter: { type: 'select', operators: ['eq'], options: [{ label: 'Critical', value: 4 }, { label: 'High', value: 3 }, { label: 'Medium', value: 2 }, { label: 'Low', value: 1 }] } },
+    stateColumn<PolicyRow>(
+      'severity',
+      'Severity',
+      {
+        transform: (v) => {
+          switch (v) {
+            case 4:
+              return 'Critical';
+            case 3:
+              return 'High';
+            case 2:
+              return 'Medium';
+            case 1:
+              return 'Low';
+            default:
+              return 'Unknown';
+          }
+        },
+        evaluate: (v) => {
+          if (v === 4) {
+            return 'critical';
+          } else if (v === 3) {
+            return 'destructive';
+          } else if (v === 2) {
+            return 'warn';
+          } else if (v === 1) {
+            return 'info';
+          } else return 'success';
+        },
+      },
+      {
+        sortable: true,
+        filter: {
+          type: 'select',
+          operators: ['eq'],
+          options: [
+            { label: 'Critical', value: 4 },
+            { label: 'High', value: 3 },
+            { label: 'Medium', value: 2 },
+            { label: 'Low', value: 1 },
+          ],
+        },
+      }
+    ),
     textColumn<PolicyRow>('category', 'Category'),
     textColumn<PolicyRow>('scope', 'Scope'),
-    { key: 'source', title: 'Source', sortable: true, cell: sourceCell, filter: { type: 'select', operators: ['eq'], options: [{ label: 'Catalog', value: 'catalog' }, { label: 'Custom', value: 'custom' }] } },
-    textColumn<PolicyRow>('frameworkList', 'Framework Membership', undefined, { width: '240px' }),
+    {
+      key: 'dataSource',
+      title: 'Data Source',
+      sortable: false,
+      cell: sourceCell,
+    },
     numberColumn<PolicyRow>('openFindingCount', 'Open Findings'),
   ];
 
   async function fetchData(input: PaginationInput) {
     const result = await trpc.policies.tableData.query(
-      toServerTableInput(input, ['name', 'description', 'category', 'scope', 'source', 'frameworkList'])
+      toServerTableInput(input, [
+        'name',
+        'description',
+        'category',
+        'scope',
+        'source',
+        'frameworkList',
+      ])
     );
     return { rows: result.rows as PolicyRow[], total: result.total };
   }

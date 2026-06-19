@@ -17,6 +17,7 @@
   "devDependencies": {
     "nitro": "npm:nitro-nightly@latest",
     "prettier": "^3.7.4",
+    "prettier-plugin-svelte": "^4.1.1",
     "turbo": "^2.9.18",
     "typescript": "5.9.2"
   },

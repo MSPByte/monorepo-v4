@@ -1,11 +1,18 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
+  import { page } from '$app/state';
+  import { createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { Plus, Save, Trash2 } from '@lucide/svelte';
   import { toast } from 'svelte-sonner';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
-  import { PolicyScopeTags, PolicyTableShapes, type FieldDefinition, type PolicyTableShape } from '@mspbyte/shared';
+  import {
+    PolicyScopeTags,
+    PolicyTableShapes,
+    type FieldDefinition,
+    type PolicyTableShape,
+  } from '@mspbyte/shared';
   import Button from '$lib/components/ui/button/button.svelte';
   import * as Card from '$lib/components/ui/card/index.js';
   import { Input } from '$lib/components/ui/input/index.js';
@@ -13,6 +20,7 @@
   import { Switch } from '$lib/components/ui/switch/index.js';
   import SingleSelect from '$lib/components/single-select.svelte';
   import TagInserter from '$lib/components/tag-inserter.svelte';
+  import Separator from '$lib/components/ui/separator/separator.svelte';
 
   type FlatField = {
     label: string;
@@ -28,10 +36,19 @@
   };
 
   type ConditionKind = 'candidates' | 'expectations';
+  type PolicyDefinition = Record<string, unknown>;
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
+  const queryClient = useQueryClient();
+  const policyId = $derived(page.url.searchParams.get('id') ?? '');
+  const editing = $derived(Boolean(policyId));
+  const policyQuery = createQuery(() => ({
+    queryKey: ['policies.byId', policyId],
+    queryFn: () => (policyId ? trpc.policies.byId.query({ id: policyId }) : Promise.resolve(null)),
+  }));
 
   let nextId = 1;
+  let loadedPolicyId = $state('');
   let saving = $state(false);
   let name = $state('');
   let description = $state('');
@@ -56,11 +73,13 @@
   });
 
   const fields = $derived.by<FlatField[]>(() => flattenFields(selectedTable.shape));
-  const fieldOptions = $derived(fields.map((field) => ({ value: field.ingestPath, label: field.label })));
+  const fieldOptions = $derived(
+    fields.map((field) => ({ value: field.ingestPath, label: field.label }))
+  );
   const tagGroups = $derived.by(() => {
     const rowGroup = {
       heading: `${selectedTable.label} fields`,
-      tags: fields.map((field) => ({ label: field.label, ingestPath: field.ingestPath }))
+      tags: fields.map((field) => ({ label: field.label, ingestPath: field.ingestPath })),
     };
     const scopeByGroup = new Map<string, { label: string; ingestPath: string }[]>();
     for (const tag of PolicyScopeTags) {
@@ -72,30 +91,70 @@
     return [rowGroup, ...scopeGroups];
   });
   const outputOptions = $derived.by(() => [
-    { value: 'source', label: selectedTable.label },
+    { value: 'source', label: `Failing ${selectedTable.label} row` },
     ...(selectedTable.canonicalResourceTypes ?? []).map((type) => ({
       value: type,
-      label: type === 'person' ? 'Linked canonical Person' : 'Linked canonical Asset'
-    }))
+      label: type === 'person' ? 'Linked Person record' : 'Linked Asset record',
+    })),
   ]);
   const severityOptions = [
     { value: '4', label: 'Critical' },
     { value: '3', label: 'High' },
     { value: '2', label: 'Medium' },
-    { value: '1', label: 'Low' }
+    { value: '1', label: 'Low' },
   ];
-  const tableOptions = PolicyTableShapes.map((shape) => ({ value: shape.table, label: shape.label }));
+  const tableOptions = PolicyTableShapes.map((shape) => ({
+    value: shape.table,
+    label: shape.label,
+  }));
   const modeOptions = [
     { value: 'rowExpectation', label: 'Every matching row must pass' },
-    { value: 'tableThreshold', label: 'Matching row count threshold' }
+    { value: 'tableThreshold', label: 'Matching row count threshold' },
   ];
   const booleanOptions = [
     { value: 'true', label: 'True' },
-    { value: 'false', label: 'False' }
+    { value: 'false', label: 'False' },
   ];
 
   function newCondition(): ConditionDraft {
     return { id: `condition-${nextId++}`, field: '', op: 'eq', value: '' };
+  }
+
+  function isRecord(value: unknown): value is PolicyDefinition {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function stringValue(value: unknown) {
+    if (value === undefined || value === null) return '';
+    return String(value);
+  }
+
+  function conditionFromDefinition(condition: unknown): ConditionDraft | null {
+    if (!isRecord(condition) || typeof condition.field !== 'string') return null;
+    return {
+      id: newCondition().id,
+      field: condition.field,
+      op: typeof condition.op === 'string' ? condition.op : 'eq',
+      value: stringValue(condition.value),
+    };
+  }
+
+  function conditionsFromDefinition(value: unknown) {
+    if (!Array.isArray(value)) return [];
+    return value.map(conditionFromDefinition).filter((condition) => condition !== null);
+  }
+
+  function filterConditionsFromDefinition(value: unknown) {
+    if (!isRecord(value) || !Array.isArray(value.conditions)) return [];
+    return conditionsFromDefinition(value.conditions);
+  }
+
+  function validMode(value: unknown): value is 'rowExpectation' | 'tableThreshold' {
+    return value === 'rowExpectation' || value === 'tableThreshold';
+  }
+
+  function validTable(value: unknown): value is string {
+    return typeof value === 'string' && PolicyTableShapes.some((shape) => shape.table === value);
   }
 
   function flattenFields(shape: Record<string, FieldDefinition>, parentLabel = ''): FlatField[] {
@@ -122,7 +181,7 @@
         { value: 'contains', label: 'Contains' },
         { value: 'notContains', label: 'Does not contain' },
         { value: 'exists', label: 'Exists' },
-        { value: 'missing', label: 'Is missing' }
+        { value: 'missing', label: 'Is missing' },
       ];
     }
     if (field.field.type === 'number') {
@@ -134,13 +193,13 @@
         { value: 'lt', label: 'Less than' },
         { value: 'lte', label: 'Less than or equal' },
         { value: 'exists', label: 'Exists' },
-        { value: 'missing', label: 'Is missing' }
+        { value: 'missing', label: 'Is missing' },
       ];
     }
     if (field.field.type === 'boolean' || field.field.type === 'enum') {
       return [
         { value: 'eq', label: 'Equals' },
-        { value: 'ne', label: 'Does not equal' }
+        { value: 'ne', label: 'Does not equal' },
       ];
     }
     return [
@@ -151,7 +210,7 @@
       { value: 'olderThanDays', label: 'Older than days' },
       { value: 'withinDays', label: 'Within days' },
       { value: 'exists', label: 'Exists' },
-      { value: 'missing', label: 'Is missing' }
+      { value: 'missing', label: 'Is missing' },
     ];
   }
 
@@ -199,7 +258,7 @@
     return {
       field: field.ingestPath,
       op: condition.op,
-      value: coerceValue(condition.value, field)
+      value: coerceValue(condition.value, field),
     };
   }
 
@@ -222,13 +281,52 @@
       scope: { trigger: selectedTable.table },
       filter: filterFrom(candidateConditions),
       expectations: serializeConditions(expectationConditions),
-      ...(outputResource !== 'source' ? { canonicalResource: { type: outputResource } } : {})
+      ...(outputResource !== 'source' ? { canonicalResource: { type: outputResource } } : {}),
     };
     if (mode === 'tableThreshold') {
       return { ...base, threshold: Number(threshold) };
     }
     return base;
   }
+
+  $effect(() => {
+    const policy = policyQuery.data;
+    if (!policy || loadedPolicyId === policy.id) return;
+
+    const definition = isRecord(policy.definition) ? policy.definition : {};
+    name = policy.name;
+    description = policy.description ?? '';
+    category = policy.category ?? 'Operational';
+    enabled = policy.enabled;
+    severity = String(policy.severity);
+    table = validTable(definition.table) ? definition.table : table;
+    mode = validMode(definition.kind) ? definition.kind : 'rowExpectation';
+    candidateConditions = filterConditionsFromDefinition(definition.filter);
+    expectationConditions = conditionsFromDefinition(definition.expectations);
+    if (mode === 'rowExpectation' && expectationConditions.length === 0) {
+      expectationConditions = [newCondition()];
+    }
+    threshold = stringValue(definition.threshold ?? 1);
+    if (
+      isRecord(definition.canonicalResource) &&
+      typeof definition.canonicalResource.type === 'string'
+    ) {
+      outputResource = (selectedTable.canonicalResourceTypes ?? []).includes(
+        definition.canonicalResource.type as 'person' | 'asset'
+      )
+        ? definition.canonicalResource.type
+        : 'source';
+    } else {
+      outputResource = 'source';
+    }
+    titleTemplate =
+      typeof definition.title === 'string'
+        ? definition.title
+        : '{{hostname}}{{displayName}}{{name}} failed policy expectation';
+    summary = typeof definition.summary === 'string' ? definition.summary : '';
+    recommendation = policy.recommendation ?? '';
+    loadedPolicyId = policy.id;
+  });
 
   async function savePolicy() {
     if (!name.trim()) {
@@ -245,21 +343,38 @@
     }
     saving = true;
     try {
-      const created = await trpc.policies.create.mutate({
+      const payload = {
         name,
         description: description || null,
         category: category || null,
         providerId: selectedTable.providerId ?? null,
-        targetType: outputResource === 'source' ? selectedTable.targetType : outputResource === 'person' ? 'person' : 'asset',
+        targetType:
+          outputResource === 'source'
+            ? selectedTable.targetType
+            : outputResource === 'person'
+              ? 'person'
+              : 'asset',
         severity: Number(severity),
         enabled,
         recommendation: recommendation || null,
-        definition: buildDefinition()
-      });
-      toast.success('Policy created');
-      await goto(`/policies/${created.id}`);
+        definition: buildDefinition(),
+      };
+      if (editing) {
+        await trpc.policies.update.mutate({ id: policyId, ...payload });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['policies.byId', policyId] }),
+          queryClient.invalidateQueries({ queryKey: ['policies.list'] }),
+          queryClient.invalidateQueries({ queryKey: ['policies.tableData'] }),
+        ]);
+        toast.success('Policy saved');
+        await goto(`/policies/${policyId}`);
+      } else {
+        const created = await trpc.policies.create.mutate(payload);
+        toast.success('Policy created');
+        await goto(`/policies/${created.id}`);
+      }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to create policy');
+      toast.error(error instanceof Error ? error.message : 'Failed to save policy');
     } finally {
       saving = false;
     }
@@ -269,7 +384,9 @@
 {#snippet conditionEditor(kind: ConditionKind, condition: ConditionDraft)}
   {@const selectedField = fieldFor(condition.field)}
   {@const ops = operatorOptions(selectedField)}
-  <div class="grid gap-2 rounded-md border p-2 md:grid-cols-[minmax(0,1fr)_190px_minmax(0,1fr)_36px]">
+  <div
+    class="grid gap-2 rounded-md border p-2 md:grid-cols-[minmax(0,1fr)_190px_minmax(0,1fr)_36px]"
+  >
     <SingleSelect
       options={fieldOptions}
       selected={condition.field}
@@ -279,7 +396,7 @@
         updateCondition(kind, condition.id, {
           field,
           op: operatorOptions(selected)[0]?.value ?? 'eq',
-          value: ''
+          value: '',
         });
       }}
     />
@@ -309,7 +426,8 @@
           value={condition.value}
           type={selectedField.field.type === 'number' ? 'number' : 'text'}
           placeholder="Value"
-          oninput={(event) => updateCondition(kind, condition.id, { value: event.currentTarget.value })}
+          oninput={(event) =>
+            updateCondition(kind, condition.id, { value: event.currentTarget.value })}
         />
       {/if}
     {:else}
@@ -322,45 +440,79 @@
 {/snippet}
 
 <div class="size-full overflow-auto p-6">
-  <div class="mx-auto grid max-w-7xl gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
-    <Card.Root>
+  <div class="flex size-full gap-2">
+    <Card.Root class="w-2/3">
       <Card.Header>
-        <Card.Title>New Policy</Card.Title>
-        <Card.Description>Build a typed policy definition from canonical and vendor table shapes.</Card.Description>
+        <Card.Title>{editing ? 'Edit Policy' : 'New Policy'}</Card.Title>
+        <Card.Description
+          >Build a typed policy definition from canonical and vendor table shapes.</Card.Description
+        >
       </Card.Header>
-      <Card.Content class="grid gap-4">
+      <Separator />
+      <Card.Content class="grid gap-4 overflow-auto">
         <div class="grid gap-3 md:grid-cols-2">
-          <label class="grid gap-1 text-sm font-medium">Name<Input bind:value={name} placeholder="Server assets must have Sophos" /></label>
-          <label class="grid gap-1 text-sm font-medium">Category<Input bind:value={category} /></label>
-          <label class="grid gap-1 text-sm font-medium md:col-span-2">Description<Input bind:value={description} /></label>
-          <label class="grid gap-1 text-sm font-medium">Severity
-            <SingleSelect options={severityOptions} bind:selected={severity} />
-          </label>
-          <div class="flex items-end gap-3 rounded-md border px-3 py-2">
-            <Switch bind:checked={enabled} />
-            <span class="text-sm font-medium">Enabled</span>
+          <label class="grid gap-1 text-sm font-medium"
+            >Name<Input bind:value={name} placeholder="Server assets must have Sophos" /></label
+          >
+          <div class="flex w-full gap-2">
+            <label class="flex flex-col gap-1 w-full">
+              Category
+              <Input bind:value={category} /></label
+            >
+            <div class="flex flex-col w-fit h-fit gap-3">
+              <span class="text-sm font-medium">Enabled</span>
+              <Switch bind:checked={enabled} />
+            </div>
+          </div>
+          <div class="flex col-span-2 gap-4">
+            <label class="flex flex-col gap-1 w-full text-sm font-medium"
+              >Description<Input bind:value={description} /></label
+            >
+            <label class="flex flex-col gap-1 w-48 text-sm font-medium"
+              >Severity
+              <SingleSelect options={severityOptions} bind:selected={severity} />
+            </label>
           </div>
         </div>
 
         <div class="grid gap-3 md:grid-cols-3">
-          <label class="grid gap-1 text-sm font-medium">Initial scope
+          <label class="grid gap-1 text-sm font-medium"
+            >Data source
             <SingleSelect options={tableOptions} bind:selected={table} onchange={resetForTable} />
           </label>
-          <label class="grid gap-1 text-sm font-medium">Evaluation
+          <label class="grid gap-1 text-sm font-medium"
+            >Evaluation
             <SingleSelect options={modeOptions} bind:selected={mode} />
           </label>
-          <label class="grid gap-1 text-sm font-medium">Finding resource
-            <SingleSelect options={outputOptions} bind:selected={outputResource} />
-          </label>
+          {#if outputOptions.length > 1}
+            <label class="grid gap-1 text-sm font-medium"
+              >Finding resource
+              <SingleSelect options={outputOptions} bind:selected={outputResource} />
+            </label>
+          {:else}
+            <div class="grid gap-1 text-sm">
+              <div class="font-medium">Finding resource</div>
+              <div class="rounded-md border bg-muted/30 px-3 py-2 text-muted-foreground">
+                Findings attach to the failing {selectedTable.label} row.
+              </div>
+            </div>
+          {/if}
         </div>
 
         <div class="grid gap-3 rounded-md border p-3">
           <div class="flex items-center justify-between gap-2">
             <div>
               <div class="text-sm font-medium">Rows to evaluate</div>
-              <div class="text-xs text-muted-foreground">Filter that narrows which rows are loaded. Pushed to SQL when possible.</div>
+              <div class="text-xs text-muted-foreground">
+                Filter that narrows which rows are loaded. Pushed to SQL when possible.
+              </div>
             </div>
-            <Button variant="outline" size="sm" class="gap-2" onclick={() => addCondition('candidates')}>
+            <Button
+              variant="outline"
+              size="sm"
+              class="gap-2"
+              onclick={() => addCondition('candidates')}
+            >
               <Plus class="size-4" />
               Add Filter
             </Button>
@@ -368,17 +520,34 @@
           {#each candidateConditions as condition (condition.id)}
             {@render conditionEditor('candidates', condition)}
           {:else}
-            <div class="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">All rows in this scope are included.</div>
+            <div
+              class="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground"
+            >
+              All rows in this scope are included.
+            </div>
           {/each}
         </div>
 
         <div class="grid gap-3 rounded-md border p-3">
           <div class="flex items-center justify-between gap-2">
             <div>
-              <div class="text-sm font-medium">{mode === 'tableThreshold' ? 'Rules a row must satisfy to count' : 'Rules each row must satisfy'}</div>
-              <div class="text-xs text-muted-foreground">{mode === 'tableThreshold' ? 'Rows matching all rules count toward the threshold.' : 'A finding is created when any rule fails.'}</div>
+              <div class="text-sm font-medium">
+                {mode === 'tableThreshold'
+                  ? 'Rules a row must satisfy to count'
+                  : 'Rules each row must satisfy'}
+              </div>
+              <div class="text-xs text-muted-foreground">
+                {mode === 'tableThreshold'
+                  ? 'Rows matching all rules count toward the threshold.'
+                  : 'A finding is created when any rule fails.'}
+              </div>
             </div>
-            <Button variant="outline" size="sm" class="gap-2" onclick={() => addCondition('expectations')}>
+            <Button
+              variant="outline"
+              size="sm"
+              class="gap-2"
+              onclick={() => addCondition('expectations')}
+            >
               <Plus class="size-4" />
               Add Rule
             </Button>
@@ -386,12 +555,19 @@
           {#each expectationConditions as condition (condition.id)}
             {@render conditionEditor('expectations', condition)}
           {:else}
-            <div class="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">{mode === 'tableThreshold' ? 'Every scoped row counts toward the threshold.' : 'Add at least one rule.'}</div>
+            <div
+              class="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground"
+            >
+              {mode === 'tableThreshold'
+                ? 'Every scoped row counts toward the threshold.'
+                : 'Add at least one rule.'}
+            </div>
           {/each}
         </div>
 
         {#if mode === 'tableThreshold'}
-          <label class="grid gap-1 text-sm font-medium">Minimum matching rows
+          <label class="grid gap-1 text-sm font-medium"
+            >Minimum matching rows
             <Input bind:value={threshold} type="number" min="0" />
           </label>
         {/if}
@@ -414,25 +590,42 @@
           <div class="grid gap-1 text-sm">
             <div class="flex items-center justify-between">
               <span class="font-medium">Recommendation</span>
-              <TagInserter groups={tagGroups} target={recommendationRef} bind:value={recommendation} />
+              <TagInserter
+                groups={tagGroups}
+                target={recommendationRef}
+                bind:value={recommendation}
+              />
             </div>
             <Textarea bind:ref={recommendationRef} bind:value={recommendation} />
           </div>
         </div>
       </Card.Content>
-      <Card.Footer class="gap-2">
-        <Button variant="outline" onclick={() => goto('/policies')}>Cancel</Button>
-        <Button onclick={savePolicy} disabled={saving} class="gap-2"><Save class="size-4" />Create Policy</Button>
+      <Card.Footer class="mt-auto gap-2">
+        <Button
+          variant="outline"
+          onclick={() => goto(editing ? `/policies/${policyId}` : '/policies')}>Cancel</Button
+        >
+        <Button
+          onclick={savePolicy}
+          disabled={saving || (editing && policyQuery.isLoading)}
+          class="gap-2"><Save class="size-4" />{editing ? 'Save Policy' : 'Create Policy'}</Button
+        >
       </Card.Footer>
     </Card.Root>
 
     <Card.Root>
       <Card.Header>
         <Card.Title>Definition Preview</Card.Title>
-        <Card.Description>The JSON stored on the policy and consumed by the policy worker.</Card.Description>
+        <Card.Description
+          >The JSON stored on the policy and consumed by the policy worker.</Card.Description
+        >
       </Card.Header>
       <Card.Content>
-        <pre class="max-h-[620px] overflow-auto rounded-md bg-muted p-3 text-xs">{JSON.stringify(buildDefinition(), null, 2)}</pre>
+        <pre class="max-h-[620px] overflow-auto rounded-md bg-muted p-3 text-xs">{JSON.stringify(
+            buildDefinition(),
+            null,
+            2
+          )}</pre>
       </Card.Content>
     </Card.Root>
   </div>

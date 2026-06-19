@@ -14,7 +14,7 @@ import {
   sites,
 } from "@mspbyte/drizzle";
 import { TRPCError } from "@trpc/server";
-import { ActionLabels, hasPermission } from "@mspbyte/shared";
+import { ActionLabels, PolicyTableShapes, hasPermission } from "@mspbyte/shared";
 import { t, authProcedure } from "../trpc.js";
 import { mockPolicies, mockFindings } from "./domain-fixtures.js";
 import { queryTableData, tableDataInputSchema } from "./table-data.js";
@@ -105,7 +105,23 @@ const mockPolicyRows = () =>
     ...policy,
     targetType: policy.scope,
     frameworkList: policy.frameworkMembership.join(", "),
+    dataSource: policy.source,
   }));
+
+function policyDataSource(
+  definition: unknown,
+  fallback: string | null | undefined,
+) {
+  if (definition && typeof definition === "object" && "table" in definition) {
+    const table = String((definition as { table?: unknown }).table ?? "");
+    const shape = PolicyTableShapes.find(
+      (candidate) => candidate.table === table,
+    );
+    if (shape) return shape.label;
+    if (table) return table;
+  }
+  return fallback ?? "Unknown";
+}
 
 export const policiesRouter = t.router({
   tableData: authProcedure
@@ -123,14 +139,27 @@ export const policiesRouter = t.router({
       );
       return {
         ...result,
-        rows: result.rows.map((row) => ({
-          ...row,
-          scope: row.targetType,
-          frameworkMembership:
-            typeof row.frameworkList === "string" && row.frameworkList.length
-              ? row.frameworkList.split(", ")
-              : [],
-        })),
+        rows: await Promise.all(
+          result.rows.map(async (row) => {
+            const [policyRow] = await ctx.db
+              .select({ definition: policies.definition })
+              .from(policies)
+              .where(eq(policies.id, String(row.id)))
+              .limit(1)
+              .catch(() => []);
+            return {
+              ...row,
+              scope: row.targetType,
+              dataSource: policyDataSource(policyRow?.definition, row.source),
+              origin: row.source,
+              frameworkMembership:
+                typeof row.frameworkList === "string" &&
+                row.frameworkList.length
+                  ? row.frameworkList.split(", ")
+                  : [],
+            };
+          }),
+        ),
       };
     }),
 
@@ -143,22 +172,34 @@ export const policiesRouter = t.router({
       .catch(() => []);
     if (!rows.length) return mockPolicies;
 
-    return rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      description: row.description ?? "",
-      expectation: row.recommendation ?? "Structured policy expectation",
-      enabled: row.enabled,
-      severity: row.severity,
-      category: row.category ?? "Operational",
-      scope: row.targetType,
-      source: row.source,
-      frameworkMembership: row.frameworkList
-        ? row.frameworkList.split(", ")
-        : [],
-      openFindingCount: row.openFindingCount,
-      lastEvaluation: row.updatedAt,
-    }));
+    return Promise.all(
+      rows.map(async (row) => {
+        const [policyRow] = await ctx.db
+          .select({ definition: policies.definition })
+          .from(policies)
+          .where(eq(policies.id, row.id))
+          .limit(1)
+          .catch(() => []);
+        return {
+          id: row.id,
+          name: row.name,
+          description: row.description ?? "",
+          expectation: row.recommendation ?? "Structured policy expectation",
+          enabled: row.enabled,
+          severity: row.severity,
+          category: row.category ?? "Operational",
+          scope: row.targetType,
+          source: row.source,
+          dataSource: policyDataSource(policyRow?.definition, row.source),
+          origin: row.source,
+          frameworkMembership: row.frameworkList
+            ? row.frameworkList.split(", ")
+            : [],
+          openFindingCount: row.openFindingCount,
+          lastEvaluation: row.updatedAt,
+        };
+      }),
+    );
   }),
 
   create: authProcedure
@@ -364,6 +405,31 @@ export const policiesRouter = t.router({
       return { id: input.id };
     }),
 
+  setFrameworkMembership: authProcedure
+    .input(
+      z.object({
+        policyId: z.string(),
+        policySetIds: z.array(z.string().uuid()),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
+        .delete(policySetItems)
+        .where(eq(policySetItems.policyId, input.policyId));
+      if (input.policySetIds.length > 0) {
+        await ctx.db
+          .insert(policySetItems)
+          .values(
+            input.policySetIds.map((policySetId) => ({
+              policySetId,
+              policyId: input.policyId,
+            })),
+          )
+          .onConflictDoNothing();
+      }
+      return { policyId: input.policyId, policySetIds: input.policySetIds };
+    }),
+
   assignmentOptions: authProcedure.query(async ({ ctx }) => {
     const [siteRows, groupRows, linkRows] = await Promise.all([
       ctx.db
@@ -400,6 +466,19 @@ export const policiesRouter = t.router({
         .limit(1)
         .catch(() => []);
       if (row) {
+        const frameworkRows = await ctx.db
+          .select({
+            id: policySets.id,
+            name: policySets.name,
+            description: policySets.description,
+            enabled: policySets.enabled,
+          })
+          .from(policySetItems)
+          .innerJoin(policySets, eq(policySetItems.policySetId, policySets.id))
+          .where(eq(policySetItems.policyId, input.id))
+          .orderBy(policySets.name)
+          .catch(() => []);
+
         return {
           id: row.id,
           name: row.name,
@@ -410,12 +489,18 @@ export const policiesRouter = t.router({
             "kind" in row.definition
               ? String(row.definition.kind)
               : "Structured policy expectation",
+          recommendation: row.recommendation ?? "",
+          definition: row.definition,
+          providerId: row.providerId,
           enabled: row.enabled,
           severity: row.severity,
           category: row.category ?? "Operational",
           scope: row.targetType,
           source: row.source,
-          frameworkMembership: [],
+          dataSource: policyDataSource(row.definition, row.source),
+          origin: row.source,
+          frameworkMembership: frameworkRows.map((framework) => framework.name),
+          frameworks: frameworkRows,
           openFindingCount: 0,
           lastEvaluation: row.updatedAt,
           exampleFindings: [],
@@ -426,6 +511,17 @@ export const policiesRouter = t.router({
       if (!mock) throw new TRPCError({ code: "NOT_FOUND" });
       return {
         ...mock,
+        recommendation: mock.expectation,
+        definition: {},
+        providerId: null,
+        dataSource: mock.source,
+        origin: mock.source,
+        frameworks: mock.frameworkMembership.map((name) => ({
+          id: name,
+          name,
+          description: "",
+          enabled: true,
+        })),
         exampleFindings: mockFindings
           .filter((finding) => finding.policyId === mock.id)
           .slice(0, 5),

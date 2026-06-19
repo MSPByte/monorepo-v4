@@ -1,10 +1,10 @@
 import type { DataTableColumn } from './types';
-import StateCell from './cells/state-cell.svelte';
 import TagsCell from './cells/tags-cell.svelte';
 import BoolBadgeCell from './cells/bool-badge-cell.svelte';
 import NullableTextCell from './cells/nullable-text-cell.svelte';
 import RelativeDateCell from './cells/relative-date-cell.svelte';
 import DateCell from '$lib/components/data-table/cells/date-cell.svelte';
+import StateBadegeCell from '$lib/components/data-table/cells/state-badege-cell.svelte';
 
 export interface BoolBadgeCellProps {
   trueLabel?: string;
@@ -13,21 +13,21 @@ export interface BoolBadgeCellProps {
   evaluate?: (value: unknown) => boolean;
 }
 
-export function stateColumn<T>(overrides?: Partial<DataTableColumn<T>>): DataTableColumn<T> {
+export function stateColumn<T>(
+  key: string,
+  title: string,
+  cellProps?: {
+    transform?: (value: unknown) => string;
+    evaluate?: (value: unknown) => 'info' | 'warn' | 'destructive' | 'critical' | 'success';
+  },
+  overrides?: Partial<DataTableColumn<T>>
+): DataTableColumn<T> {
   return {
-    key: 'state',
-    title: 'State',
+    key,
+    title,
     sortable: true,
-    cellComponent: StateCell,
-    filter: {
-      type: 'select',
-      operators: ['eq', 'neq'],
-      options: [
-        { label: 'Normal', value: 'normal' },
-        { label: 'Warn', value: 'warn' },
-        { label: 'Critical', value: 'critical' },
-      ],
-    },
+    cellComponent: StateBadegeCell,
+    cellProps,
     ...overrides,
   };
 }
