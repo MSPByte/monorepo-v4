@@ -51,7 +51,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       <head>
         <HeadContent />
       </head>
-      <body>
+      <body className="flex h-screen w-screen overflow-clip">
         <ThemeProvider>{children}</ThemeProvider>
         <TanStackDevtools
           config={{

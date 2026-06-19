@@ -14,8 +14,15 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthSignoutRouteImport } from './routes/auth/signout'
 import { Route as AuthOrganizationRouteImport } from './routes/auth/organization'
 import { Route as AuthLoginRouteImport } from './routes/auth/login'
+import { Route as ProtectedSitesRouteImport } from './routes/_protected/sites'
+import { Route as ProtectedSetupRouteImport } from './routes/_protected/setup'
 import { Route as ProtectedHomeRouteImport } from './routes/_protected/home'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ProtectedSitesSiteIdRouteImport } from './routes/_protected/sites.$siteId'
+import { Route as ProtectedSetupUsersRouteImport } from './routes/_protected/setup.users'
+import { Route as ProtectedSetupPipelineRouteImport } from './routes/_protected/setup.pipeline'
+import { Route as ProtectedSetupIntegrationsRouteImport } from './routes/_protected/setup.integrations'
+import { Route as ProtectedSetupAuditRouteImport } from './routes/_protected/setup.audit'
 
 const ProtectedRoute = ProtectedRouteImport.update({
   id: '/_protected',
@@ -41,6 +48,16 @@ const AuthLoginRoute = AuthLoginRouteImport.update({
   path: '/auth/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProtectedSitesRoute = ProtectedSitesRouteImport.update({
+  id: '/sites',
+  path: '/sites',
+  getParentRoute: () => ProtectedRoute,
+} as any)
+const ProtectedSetupRoute = ProtectedSetupRouteImport.update({
+  id: '/setup',
+  path: '/setup',
+  getParentRoute: () => ProtectedRoute,
+} as any)
 const ProtectedHomeRoute = ProtectedHomeRouteImport.update({
   id: '/home',
   path: '/home',
@@ -51,21 +68,61 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProtectedSitesSiteIdRoute = ProtectedSitesSiteIdRouteImport.update({
+  id: '/$siteId',
+  path: '/$siteId',
+  getParentRoute: () => ProtectedSitesRoute,
+} as any)
+const ProtectedSetupUsersRoute = ProtectedSetupUsersRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => ProtectedSetupRoute,
+} as any)
+const ProtectedSetupPipelineRoute = ProtectedSetupPipelineRouteImport.update({
+  id: '/pipeline',
+  path: '/pipeline',
+  getParentRoute: () => ProtectedSetupRoute,
+} as any)
+const ProtectedSetupIntegrationsRoute =
+  ProtectedSetupIntegrationsRouteImport.update({
+    id: '/integrations',
+    path: '/integrations',
+    getParentRoute: () => ProtectedSetupRoute,
+  } as any)
+const ProtectedSetupAuditRoute = ProtectedSetupAuditRouteImport.update({
+  id: '/audit',
+  path: '/audit',
+  getParentRoute: () => ProtectedSetupRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/home': typeof ProtectedHomeRoute
+  '/setup': typeof ProtectedSetupRouteWithChildren
+  '/sites': typeof ProtectedSitesRouteWithChildren
   '/auth/login': typeof AuthLoginRoute
   '/auth/organization': typeof AuthOrganizationRoute
   '/auth/signout': typeof AuthSignoutRoute
+  '/setup/audit': typeof ProtectedSetupAuditRoute
+  '/setup/integrations': typeof ProtectedSetupIntegrationsRoute
+  '/setup/pipeline': typeof ProtectedSetupPipelineRoute
+  '/setup/users': typeof ProtectedSetupUsersRoute
+  '/sites/$siteId': typeof ProtectedSitesSiteIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/home': typeof ProtectedHomeRoute
+  '/setup': typeof ProtectedSetupRouteWithChildren
+  '/sites': typeof ProtectedSitesRouteWithChildren
   '/auth/login': typeof AuthLoginRoute
   '/auth/organization': typeof AuthOrganizationRoute
   '/auth/signout': typeof AuthSignoutRoute
+  '/setup/audit': typeof ProtectedSetupAuditRoute
+  '/setup/integrations': typeof ProtectedSetupIntegrationsRoute
+  '/setup/pipeline': typeof ProtectedSetupPipelineRoute
+  '/setup/users': typeof ProtectedSetupUsersRoute
+  '/sites/$siteId': typeof ProtectedSitesSiteIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesById {
@@ -73,9 +130,16 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_protected': typeof ProtectedRouteWithChildren
   '/_protected/home': typeof ProtectedHomeRoute
+  '/_protected/setup': typeof ProtectedSetupRouteWithChildren
+  '/_protected/sites': typeof ProtectedSitesRouteWithChildren
   '/auth/login': typeof AuthLoginRoute
   '/auth/organization': typeof AuthOrganizationRoute
   '/auth/signout': typeof AuthSignoutRoute
+  '/_protected/setup/audit': typeof ProtectedSetupAuditRoute
+  '/_protected/setup/integrations': typeof ProtectedSetupIntegrationsRoute
+  '/_protected/setup/pipeline': typeof ProtectedSetupPipelineRoute
+  '/_protected/setup/users': typeof ProtectedSetupUsersRoute
+  '/_protected/sites/$siteId': typeof ProtectedSitesSiteIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRouteTypes {
@@ -83,26 +147,47 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/home'
+    | '/setup'
+    | '/sites'
     | '/auth/login'
     | '/auth/organization'
     | '/auth/signout'
+    | '/setup/audit'
+    | '/setup/integrations'
+    | '/setup/pipeline'
+    | '/setup/users'
+    | '/sites/$siteId'
     | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/home'
+    | '/setup'
+    | '/sites'
     | '/auth/login'
     | '/auth/organization'
     | '/auth/signout'
+    | '/setup/audit'
+    | '/setup/integrations'
+    | '/setup/pipeline'
+    | '/setup/users'
+    | '/sites/$siteId'
     | '/api/auth/$'
   id:
     | '__root__'
     | '/'
     | '/_protected'
     | '/_protected/home'
+    | '/_protected/setup'
+    | '/_protected/sites'
     | '/auth/login'
     | '/auth/organization'
     | '/auth/signout'
+    | '/_protected/setup/audit'
+    | '/_protected/setup/integrations'
+    | '/_protected/setup/pipeline'
+    | '/_protected/setup/users'
+    | '/_protected/sites/$siteId'
     | '/api/auth/$'
   fileRoutesById: FileRoutesById
 }
@@ -152,6 +237,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthLoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_protected/sites': {
+      id: '/_protected/sites'
+      path: '/sites'
+      fullPath: '/sites'
+      preLoaderRoute: typeof ProtectedSitesRouteImport
+      parentRoute: typeof ProtectedRoute
+    }
+    '/_protected/setup': {
+      id: '/_protected/setup'
+      path: '/setup'
+      fullPath: '/setup'
+      preLoaderRoute: typeof ProtectedSetupRouteImport
+      parentRoute: typeof ProtectedRoute
+    }
     '/_protected/home': {
       id: '/_protected/home'
       path: '/home'
@@ -166,15 +265,84 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_protected/sites/$siteId': {
+      id: '/_protected/sites/$siteId'
+      path: '/$siteId'
+      fullPath: '/sites/$siteId'
+      preLoaderRoute: typeof ProtectedSitesSiteIdRouteImport
+      parentRoute: typeof ProtectedSitesRoute
+    }
+    '/_protected/setup/users': {
+      id: '/_protected/setup/users'
+      path: '/users'
+      fullPath: '/setup/users'
+      preLoaderRoute: typeof ProtectedSetupUsersRouteImport
+      parentRoute: typeof ProtectedSetupRoute
+    }
+    '/_protected/setup/pipeline': {
+      id: '/_protected/setup/pipeline'
+      path: '/pipeline'
+      fullPath: '/setup/pipeline'
+      preLoaderRoute: typeof ProtectedSetupPipelineRouteImport
+      parentRoute: typeof ProtectedSetupRoute
+    }
+    '/_protected/setup/integrations': {
+      id: '/_protected/setup/integrations'
+      path: '/integrations'
+      fullPath: '/setup/integrations'
+      preLoaderRoute: typeof ProtectedSetupIntegrationsRouteImport
+      parentRoute: typeof ProtectedSetupRoute
+    }
+    '/_protected/setup/audit': {
+      id: '/_protected/setup/audit'
+      path: '/audit'
+      fullPath: '/setup/audit'
+      preLoaderRoute: typeof ProtectedSetupAuditRouteImport
+      parentRoute: typeof ProtectedSetupRoute
+    }
   }
 }
 
+interface ProtectedSetupRouteChildren {
+  ProtectedSetupAuditRoute: typeof ProtectedSetupAuditRoute
+  ProtectedSetupIntegrationsRoute: typeof ProtectedSetupIntegrationsRoute
+  ProtectedSetupPipelineRoute: typeof ProtectedSetupPipelineRoute
+  ProtectedSetupUsersRoute: typeof ProtectedSetupUsersRoute
+}
+
+const ProtectedSetupRouteChildren: ProtectedSetupRouteChildren = {
+  ProtectedSetupAuditRoute: ProtectedSetupAuditRoute,
+  ProtectedSetupIntegrationsRoute: ProtectedSetupIntegrationsRoute,
+  ProtectedSetupPipelineRoute: ProtectedSetupPipelineRoute,
+  ProtectedSetupUsersRoute: ProtectedSetupUsersRoute,
+}
+
+const ProtectedSetupRouteWithChildren = ProtectedSetupRoute._addFileChildren(
+  ProtectedSetupRouteChildren,
+)
+
+interface ProtectedSitesRouteChildren {
+  ProtectedSitesSiteIdRoute: typeof ProtectedSitesSiteIdRoute
+}
+
+const ProtectedSitesRouteChildren: ProtectedSitesRouteChildren = {
+  ProtectedSitesSiteIdRoute: ProtectedSitesSiteIdRoute,
+}
+
+const ProtectedSitesRouteWithChildren = ProtectedSitesRoute._addFileChildren(
+  ProtectedSitesRouteChildren,
+)
+
 interface ProtectedRouteChildren {
   ProtectedHomeRoute: typeof ProtectedHomeRoute
+  ProtectedSetupRoute: typeof ProtectedSetupRouteWithChildren
+  ProtectedSitesRoute: typeof ProtectedSitesRouteWithChildren
 }
 
 const ProtectedRouteChildren: ProtectedRouteChildren = {
   ProtectedHomeRoute: ProtectedHomeRoute,
+  ProtectedSetupRoute: ProtectedSetupRouteWithChildren,
+  ProtectedSitesRoute: ProtectedSitesRouteWithChildren,
 }
 
 const ProtectedRouteWithChildren = ProtectedRoute._addFileChildren(
