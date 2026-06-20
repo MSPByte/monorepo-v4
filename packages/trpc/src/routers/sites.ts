@@ -4,20 +4,13 @@ import { eq } from 'drizzle-orm';
 import { sites, sitesWithCounts } from '@mspbyte/drizzle';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
-import { mockSites } from './domain-fixtures.js';
 import { queryTableData, tableDataInputSchema } from './table-data.js';
 
 type SiteRow = typeof sites.$inferSelect;
 
-const mockSiteRows = () =>
-  mockSites.map((site) => ({
-    ...site,
-    sourceList: site.sources.join(', ')
-  }));
-
 export const sitesRouter = t.router({
   tableData: authProcedure.input(tableDataInputSchema).query(async ({ ctx, input }) => {
-    const result = await queryTableData(ctx.db, sitesWithCounts, input, mockSiteRows(), {
+    const result = await queryTableData<typeof sitesWithCounts.$inferSelect>(ctx.db, sitesWithCounts, input, [], {
       column: 'openFindingCount',
       direction: 'desc'
     });
@@ -34,8 +27,6 @@ export const sitesRouter = t.router({
 
   list: authProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db.select().from(sitesWithCounts).orderBy(sitesWithCounts.name).catch(() => []);
-    if (!rows.length) return mockSites;
-
     return rows.map((site) => ({
       ...site,
       openFindingCount: site.openFindingCount,
@@ -68,22 +59,17 @@ export const sitesRouter = t.router({
       .where(eq(sitesWithCounts.id, input.id))
       .limit(1)
       .catch(() => []);
-    if (site) {
-      return {
-        ...site,
-        openFindingCount: site.openFindingCount,
-        assetCount: site.assetCount,
-        peopleCount: site.peopleCount,
-        frameworkScore: 100,
-        policyHealth: 100,
-        sources: site.sources,
-        recentActivity: []
-      };
-    }
-
-    const mock = mockSites.find((item) => item.id === input.id);
-    if (!mock) throw new TRPCError({ code: 'NOT_FOUND' });
-    return mock;
+    if (!site) throw new TRPCError({ code: 'NOT_FOUND' });
+    return {
+      ...site,
+      openFindingCount: site.openFindingCount,
+      assetCount: site.assetCount,
+      peopleCount: site.peopleCount,
+      frameworkScore: 100,
+      policyHealth: 100,
+      sources: site.sources,
+      recentActivity: []
+    };
   }),
 
   create: authProcedure

@@ -3,7 +3,6 @@ import { and, eq } from 'drizzle-orm';
 import { policies, policySetItems, policySets, policySetsWithStats } from '@mspbyte/drizzle';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
-import { mockFrameworks, mockPolicies, mockFindings } from './domain-fixtures.js';
 import { queryTableData, tableDataInputSchema } from './table-data.js';
 
 const frameworkInputSchema = z.object({
@@ -16,7 +15,7 @@ const frameworkInputSchema = z.object({
 
 export const frameworksRouter = t.router({
   tableData: authProcedure.input(tableDataInputSchema).query(async ({ ctx, input }) => {
-    const result = await queryTableData(ctx.db, policySetsWithStats, input, mockFrameworks, {
+    const result = await queryTableData<typeof policySetsWithStats.$inferSelect>(ctx.db, policySetsWithStats, input, [], {
       column: 'openFindings',
       direction: 'desc'
     });
@@ -41,8 +40,6 @@ export const frameworksRouter = t.router({
       .orderBy(policySetsWithStats.name)
       .limit(500)
       .catch(() => []);
-    if (!rows.length) return mockFrameworks;
-
     return rows.map((row) => ({
       id: row.id,
       name: row.name,
@@ -126,48 +123,46 @@ export const frameworksRouter = t.router({
       .where(eq(policySets.id, input.id))
       .limit(1)
       .catch(() => []);
-    if (row) {
-      const containedPolicies = await ctx.db
-        .select({
-          id: policies.id,
-          name: policies.name,
-          description: policies.description,
-          expectation: policies.recommendation,
-          enabled: policies.enabled,
-          severity: policies.severity,
-          category: policies.category,
-          scope: policies.targetType,
-          source: policies.source
-        })
-        .from(policySetItems)
-        .innerJoin(policies, eq(policySetItems.policyId, policies.id))
-        .where(and(eq(policySetItems.policySetId, input.id), eq(policies.enabled, true)))
-        .orderBy(policies.name)
-        .catch(() => []);
-      return {
-        id: row.id,
-        name: row.name,
-        description: row.description ?? '',
-        enabled: row.enabled,
-        policyCount: containedPolicies.length,
-        passRate: 100,
-        openFindings: 0,
-        lastEvaluation: row.updatedAt,
-        policies: containedPolicies.map((policy) => policy.id),
-        sitesAffected: [],
-        containedPolicies,
-        recentFailures: []
-      };
-    }
-
-    const mock = mockFrameworks.find((framework) => framework.id === input.id);
-    if (!mock) throw new TRPCError({ code: 'NOT_FOUND' });
+    if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
+    const containedPolicies = await ctx.db
+      .select({
+        id: policies.id,
+        name: policies.name,
+        description: policies.description,
+        expectation: policies.recommendation,
+        enabled: policies.enabled,
+        severity: policies.severity,
+        category: policies.category,
+        scope: policies.targetType,
+        source: policies.source
+      })
+      .from(policySetItems)
+      .innerJoin(policies, eq(policySetItems.policyId, policies.id))
+      .where(and(eq(policySetItems.policySetId, input.id), eq(policies.enabled, true)))
+      .orderBy(policies.name)
+      .catch(() => []);
     return {
-      ...mock,
-      containedPolicies: mockPolicies.filter((policy) => mock.policies.includes(policy.id)),
-      recentFailures: mockFindings.filter((finding) =>
-        mock.policies.includes(finding.policyId)
-      )
+      id: row.id,
+      name: row.name,
+      description: row.description ?? '',
+      enabled: row.enabled,
+      policyCount: containedPolicies.length,
+      passRate: 100,
+      openFindings: 0,
+      lastEvaluation: row.updatedAt,
+      policies: containedPolicies.map((policy) => policy.id),
+      sitesAffected: [],
+      containedPolicies,
+      recentFailures: [] as Array<{
+        id: string;
+        title: string;
+        severity: number;
+        status: string;
+        evidenceSummary: string;
+        recommendation: string;
+        lastSeenAt: string;
+        policyId: string;
+      }>
     };
   })
 });

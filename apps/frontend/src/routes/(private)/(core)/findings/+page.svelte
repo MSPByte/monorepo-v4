@@ -23,6 +23,7 @@
     severity: number;
     status: string;
     siteName: string;
+    linkName: string;
     resourceName: string;
     policyName: string;
     evidenceSummary: string;
@@ -106,6 +107,7 @@
       toServerTableInput(input, [
         'title',
         'siteName',
+        'linkName',
         'resourceName',
         'policyName',
         'evidenceSummary',

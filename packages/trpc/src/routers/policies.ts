@@ -16,7 +16,6 @@ import {
 import { TRPCError } from "@trpc/server";
 import { ActionLabels, PolicyTableShapes, hasPermission } from "@mspbyte/shared";
 import { t, authProcedure } from "../trpc.js";
-import { mockPolicies, mockFindings } from "./domain-fixtures.js";
 import { queryTableData, tableDataInputSchema } from "./table-data.js";
 import { shortId } from "../short-id.js";
 
@@ -100,14 +99,6 @@ const assignmentInputSchema = z
     }
   });
 
-const mockPolicyRows = () =>
-  mockPolicies.map((policy) => ({
-    ...policy,
-    targetType: policy.scope,
-    frameworkList: policy.frameworkMembership.join(", "),
-    dataSource: policy.source,
-  }));
-
 function policyDataSource(
   definition: unknown,
   fallback: string | null | undefined,
@@ -127,11 +118,11 @@ export const policiesRouter = t.router({
   tableData: authProcedure
     .input(tableDataInputSchema)
     .query(async ({ ctx, input }) => {
-      const result = await queryTableData(
+      const result = await queryTableData<typeof policiesWithStats.$inferSelect>(
         ctx.db,
         policiesWithStats,
         input,
-        mockPolicyRows(),
+        [],
         {
           column: "openFindingCount",
           direction: "desc",
@@ -170,8 +161,6 @@ export const policiesRouter = t.router({
       .orderBy(policiesWithStats.name)
       .limit(500)
       .catch(() => []);
-    if (!rows.length) return mockPolicies;
-
     return Promise.all(
       rows.map(async (row) => {
         const [policyRow] = await ctx.db
@@ -465,8 +454,8 @@ export const policiesRouter = t.router({
         .where(eq(policies.id, input.id))
         .limit(1)
         .catch(() => []);
-      if (row) {
-        const frameworkRows = await ctx.db
+      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+      const frameworkRows = await ctx.db
           .select({
             id: policySets.id,
             name: policySets.name,
@@ -479,52 +468,31 @@ export const policiesRouter = t.router({
           .orderBy(policySets.name)
           .catch(() => []);
 
-        return {
-          id: row.id,
-          name: row.name,
-          description: row.description ?? "",
-          expectation:
-            typeof row.definition === "object" &&
-            row.definition &&
-            "kind" in row.definition
-              ? String(row.definition.kind)
-              : "Structured policy expectation",
-          recommendation: row.recommendation ?? "",
-          definition: row.definition,
-          providerId: row.providerId,
-          enabled: row.enabled,
-          severity: row.severity,
-          category: row.category ?? "Operational",
-          scope: row.targetType,
-          source: row.source,
-          dataSource: policyDataSource(row.definition, row.source),
-          origin: row.source,
-          frameworkMembership: frameworkRows.map((framework) => framework.name),
-          frameworks: frameworkRows,
-          openFindingCount: 0,
-          lastEvaluation: row.updatedAt,
-          exampleFindings: [],
-        };
-      }
-
-      const mock = mockPolicies.find((policy) => policy.id === input.id);
-      if (!mock) throw new TRPCError({ code: "NOT_FOUND" });
       return {
-        ...mock,
-        recommendation: mock.expectation,
-        definition: {},
-        providerId: null,
-        dataSource: mock.source,
-        origin: mock.source,
-        frameworks: mock.frameworkMembership.map((name) => ({
-          id: name,
-          name,
-          description: "",
-          enabled: true,
-        })),
-        exampleFindings: mockFindings
-          .filter((finding) => finding.policyId === mock.id)
-          .slice(0, 5),
+        id: row.id,
+        name: row.name,
+        description: row.description ?? "",
+        expectation:
+          typeof row.definition === "object" &&
+          row.definition &&
+          "kind" in row.definition
+            ? String(row.definition.kind)
+            : "Structured policy expectation",
+        recommendation: row.recommendation ?? "",
+        definition: row.definition,
+        providerId: row.providerId,
+        enabled: row.enabled,
+        severity: row.severity,
+        category: row.category ?? "Operational",
+        scope: row.targetType,
+        source: row.source,
+        dataSource: policyDataSource(row.definition, row.source),
+        origin: row.source,
+        frameworkMembership: frameworkRows.map((framework) => framework.name),
+        frameworks: frameworkRows,
+        openFindingCount: 0,
+        lastEvaluation: row.updatedAt,
+        exampleFindings: [],
       };
     }),
 });

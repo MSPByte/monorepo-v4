@@ -32,3 +32,36 @@ export function formatStringProper(value: string): string {
     .replace(/[_-]/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+const PRETTY_ACRONYMS: Record<string, string> = {
+  m365: 'M365',
+  mfa: 'MFA',
+  id: 'ID',
+  ip: 'IP',
+  url: 'URL',
+  api: 'API',
+  dns: 'DNS',
+  sso: 'SSO',
+  os: 'OS',
+  mdm: 'MDM',
+  json: 'JSON',
+};
+
+/**
+ * Humanize an identifier (camelCase / snake_case / kebab-case) into Title Case
+ * words, e.g. "rowExpectation" -> "Row Expectation", "m365Identities" -> "M365
+ * Identities". Known acronyms are upper-cased.
+ */
+export function prettyText(value: string): string {
+  if (!value) return value;
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .map((word) => {
+      const lower = word.toLowerCase();
+      return PRETTY_ACRONYMS[lower] ?? lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(' ');
+}

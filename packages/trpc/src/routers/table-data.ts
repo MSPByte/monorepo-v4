@@ -42,14 +42,14 @@ export async function queryTableData<T extends Record<string, unknown>>(
   db: Db,
   table: unknown,
   input: TableDataInput,
-  fallbackRows: T[],
+  fallbackRows?: T[],
   defaultSort?: { column: string; direction: "asc" | "desc" },
 ): Promise<TableDataResult<T>> {
   try {
     return await querySqlTableData(db, table, input, defaultSort);
   } catch (err) {
     console.error(err);
-    return queryMemoryTableData(fallbackRows, input, defaultSort);
+    return queryMemoryTableData(fallbackRows ?? [], input, defaultSort);
   }
 }
 
