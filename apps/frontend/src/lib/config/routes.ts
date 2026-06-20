@@ -45,11 +45,6 @@ const ROUTES: Route[] = [
     permission: 'Assets.Read',
   },
   {
-    label: 'Reports',
-    href: '/reports',
-    permission: 'Assets.Read',
-  },
-  {
     label: 'Users',
     href: '/setup/users',
     permission: 'Users.Read',
