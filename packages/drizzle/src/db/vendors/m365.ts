@@ -30,6 +30,7 @@ export const m365Identities = vendorsSchema.table(
     enabled: boolean("enabled").notNull(),
     mfaEnforced: boolean("mfa_enforced").notNull().default(false),
     assignedLicenses: text("assigned_licenses").array(),
+    assignedRoleTemplateIds: text("assigned_role_template_ids").array(),
     lastSignInAt: timestamp("last_sign_in_at", {
       withTimezone: true,
       mode: "string",

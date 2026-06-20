@@ -46,7 +46,7 @@ export function normalizeM365(facet: string, raw: unknown): RecordValue {
 function normalizeIdentity(raw: M365User): RecordValue {
   const userType = raw.userType ?? 'service';
 
-  return {
+  const normalized: RecordValue = {
     externalId: raw.id,
     name: raw.displayName ?? raw.userPrincipalName,
     email: raw.userPrincipalName,
@@ -57,6 +57,12 @@ function normalizeIdentity(raw: M365User): RecordValue {
     lastSignInAt: dateString(raw.signInActivity?.lastSignInDateTime),
     lastNonInteractiveSignInAt: dateString(raw.signInActivity?.lastNonInteractiveSignInDateTime)
   };
+
+  if (Array.isArray(raw._role_template_ids)) {
+    normalized.assignedRoleTemplateIds = raw._role_template_ids;
+  }
+
+  return normalized;
 }
 
 function normalizeGroup(raw: M365Group): RecordValue {

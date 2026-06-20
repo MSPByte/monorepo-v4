@@ -3,6 +3,7 @@ import {
   SkuCatalogService,
   TenantCapabilityService,
 } from "@mspbyte/connectors";
+import { m365Roles } from "@mspbyte/drizzle";
 import {
   CAPABILITY_PLANS,
   M365_BLOAT_LICENSES,
@@ -62,7 +63,13 @@ export const m365Adapter: IngestionAdapter = {
 
     switch (facet) {
       case ProviderFacet.M365Identities:
-        return yield* fetchIdentities(connector, mode, cursor, capabilities);
+        return yield* fetchIdentities(
+          connector,
+          mode,
+          cursor,
+          capabilities,
+          context,
+        );
       case ProviderFacet.M365Groups:
         return yield* fetchGroups(connector);
       case ProviderFacet.M365Licenses:
@@ -130,13 +137,28 @@ async function* fetchIdentities(
   mode: SyncMode,
   cursor: string | undefined,
   capabilities: Record<MSGraphCapabilities, boolean>,
+  context: IngestionAdapterContext,
 ): AsyncGenerator<FetchPage, FetchResultCursor> {
   const fields = [...M365_IDENTITY_BASE_FIELDS];
   if (capabilities.signInActivity) fields.push("signInActivity");
 
   if (mode === "full" || !cursor) {
-    const users = await connector.users.listAll(fields.join(","));
-    yield page(ProviderFacet.M365Identities, users);
+    const users = (await connector.users.listAll(fields.join(","))) as Array<
+      Record<string, unknown>
+    >;
+    const roleTemplateIdsByUserId = await fetchRoleTemplateIdsByUserId(
+      connector,
+      context,
+    );
+    const records = users.map((user) => {
+      const userId = typeof user.id === "string" ? user.id : "";
+      const roleTemplateIds = roleTemplateIdsByUserId.get(userId) ?? [];
+      return {
+        ...user,
+        _role_template_ids: roleTemplateIds,
+      };
+    });
+    yield page(ProviderFacet.M365Identities, records);
 
     const cursorResult = await connector.users.delta(
       M365_IDENTITY_DELTA_FIELDS,
@@ -150,6 +172,51 @@ async function* fetchIdentities(
   );
   yield page(ProviderFacet.M365Identities, result.items);
   return result.cursor;
+}
+
+type M365RoleTemplateRow = {
+  templateId: string;
+};
+
+async function fetchRoleTemplateIdsByUserId(
+  connector: M365Connector,
+  context: IngestionAdapterContext,
+): Promise<Map<string, string[]>> {
+  const roleRows = await m365RoleTemplates(context);
+  const roleTemplateIdsByUserId = new Map<string, string[]>();
+
+  for (const role of roleRows) {
+    let members: Array<{ id?: string }>;
+    try {
+      members = await connector.directoryRoles.members(role.templateId);
+    } catch (error) {
+      logger.warn(
+        "Failed to fetch M365 directory role members during ingestion",
+        {
+          roleTemplateId: role.templateId,
+          error: serializeError(error),
+        },
+      );
+      continue;
+    }
+
+    for (const member of members) {
+      if (!member.id) continue;
+      const roleTemplateIds = roleTemplateIdsByUserId.get(member.id) ?? [];
+      roleTemplateIds.push(role.templateId);
+      roleTemplateIdsByUserId.set(member.id, roleTemplateIds);
+    }
+  }
+
+  return roleTemplateIdsByUserId;
+}
+
+async function m365RoleTemplates(
+  context: IngestionAdapterContext,
+): Promise<M365RoleTemplateRow[]> {
+  if (!context.tenantDb) return [];
+  const db = context.tenantDb as any;
+  return db.select({ templateId: m365Roles.templateId }).from(m365Roles);
 }
 
 async function* fetchGroups(

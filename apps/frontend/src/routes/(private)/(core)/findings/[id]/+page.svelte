@@ -11,9 +11,27 @@
   import { formatRelativeDate, prettyText } from '$lib/utils/format';
   import FadeIn from '$lib/components/transition/fade-in.svelte';
   import Loader from '$lib/components/transition/loader.svelte';
+  import { getPolicyTableShape } from '@mspbyte/shared';
+  import { serializeFilters } from '$lib/components/data-table';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const id = $derived(page.params.id ?? '');
+
+  type DataSource = NonNullable<typeof findingQuery.data>['dataSources'][number];
+
+  // Deep-link a vendor data source to its UI table route, pre-filtered to the
+  // single underlying record. Route + search field live in the shared shape config.
+  function dataSourceHref(source: DataSource): string | null {
+    if (source.href) return source.href;
+    if (!source.table || !source.externalId) return null;
+    const route = getPolicyTableShape(source.table)?.route;
+    if (!route) return null;
+    const filters = serializeFilters([
+      { id: 'finding', field: route.searchField, operator: 'eq', value: source.externalId },
+    ]);
+    const params = new URLSearchParams({ filters });
+    return `${route.path}?${params.toString()}`;
+  }
 
   const findingQuery = createQuery(() => ({
     queryKey: ['findings.byId', id],
@@ -166,9 +184,10 @@
           </Card.Header>
           <Card.Content class="space-y-2 text-sm">
             {#each finding.dataSources as source}
-              {#if source.href}
+              {@const href = dataSourceHref(source)}
+              {#if href}
                 <a
-                  href={source.href}
+                  {href}
                   class="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2 transition-colors hover:bg-accent"
                 >
                   <div class="min-w-0">

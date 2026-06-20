@@ -8,6 +8,7 @@ export const M365UserSchema = z.looseObject({
   userPrincipalName: z.string(),
   accountEnabled: z.boolean().optional(),
   assignedLicenses: z.array(z.object({ skuId: z.string() })).optional(),
+  _role_template_ids: z.array(z.string()).optional(),
   signInActivity: z
     .object({
       lastSignInDateTime: z.string().nullable().optional(),

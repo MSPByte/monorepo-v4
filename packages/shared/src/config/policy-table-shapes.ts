@@ -9,6 +9,15 @@ export type PolicyTableShape = {
   targetType: 'tenant' | 'site' | 'integration_link' | 'person' | 'asset' | 'vendor';
   providerId?: string;
   canonicalResourceTypes?: ('person' | 'asset')[];
+  /**
+   * Where this table is browsable in the UI. `path` is the data-table route and
+   * `searchField` is the column to filter on (operator `eq`) to isolate a single
+   * record, e.g. when deep-linking to the row behind a finding.
+   */
+  route?: {
+    path: string;
+    searchField: string;
+  };
   shape: SchemaFields;
 };
 
@@ -257,6 +266,7 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     targetType: 'vendor',
     providerId: 'microsoft-365',
     canonicalResourceTypes: ['person'],
+    route: { path: '/microsoft-365/identities', searchField: 'externalId' },
     shape: M365IdentitiesShape
   },
   {
@@ -277,3 +287,16 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     shape: M365DevicesShape
   }
 ];
+
+/**
+ * Resolve a PolicyTableShape from a table identifier in any common form:
+ * camelCase ("m365Identities"), snake_case ("m365_identities"), or
+ * schema-qualified ("vendors.m365_identities").
+ */
+export function getPolicyTableShape(table: string): PolicyTableShape | undefined {
+  const base = (table.includes('.') ? table.split('.').pop()! : table).toLowerCase();
+  return PolicyTableShapes.find((shape) => {
+    const snake = shape.table.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+    return shape.table.toLowerCase() === base || snake.toLowerCase() === base;
+  });
+}

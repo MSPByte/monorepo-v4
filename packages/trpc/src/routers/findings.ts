@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { and, desc, eq, inArray, ne } from 'drizzle-orm';
 import { findings, findingsWithContext, entitySources } from '@mspbyte/drizzle';
-import { PolicyTableShapes } from '@mspbyte/shared';
+import { getPolicyTableShape } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
 import { queryTableData, tableDataInputSchema } from './table-data.js';
@@ -18,15 +18,6 @@ const listInput = z
   })
   .optional();
 
-// Friendly labels for vendor / canonical tables, keyed by both camelCase and
-// snake_case so we can resolve whatever shape the finding/entity-source stores.
-const TABLE_LABELS: Record<string, string> = {};
-for (const shape of PolicyTableShapes) {
-  const snake = shape.table.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
-  TABLE_LABELS[shape.table.toLowerCase()] = shape.label;
-  TABLE_LABELS[snake] = shape.label;
-}
-
 function toProper(value: string): string {
   return value
     .replace(/[._]/g, ' ')
@@ -36,9 +27,7 @@ function toProper(value: string): string {
 
 function tableLabel(table?: string | null): string | null {
   if (!table) return null;
-  // tables can arrive schema-qualified ("canonical.people") or snake/camel cased.
-  const base = (table.includes('.') ? table.split('.').pop()! : table).toLowerCase();
-  return TABLE_LABELS[base] ?? TABLE_LABELS[base.replace(/_/g, '')] ?? toProper(base);
+  return getPolicyTableShape(table)?.label ?? toProper(table.split('.').pop() ?? table);
 }
 
 function canonicalHref(resourceType: string, resourceId: string): string | null {
@@ -115,6 +104,7 @@ export const findingsRouter = t.router({
     const dataSources: {
       kind: 'canonical' | 'vendor';
       label: string;
+      table: string | null;
       name: string;
       href: string | null;
       externalId: string | null;
@@ -125,6 +115,7 @@ export const findingsRouter = t.router({
     dataSources.push({
       kind: 'canonical',
       label: canonicalLabel,
+      table: null,
       name: row.resourceName,
       href: canonicalHref(row.resourceType, row.resourceId),
       externalId: row.resourceExternalId ?? null,
@@ -151,6 +142,7 @@ export const findingsRouter = t.router({
         dataSources.push({
           kind: 'vendor',
           label: tableLabel(source.vendorTable) ?? toProper(source.vendorTable),
+          table: source.vendorTable,
           name: source.externalId,
           href: null,
           externalId: source.externalId,

@@ -2,35 +2,33 @@ import {
   m365Groups,
   m365Identities,
   m365IdentityGroups,
+  m365IdentityRoles,
   m365Policies,
   m365PolicyGroups,
   m365PolicyIdentities,
   m365PolicyRoles,
-  m365Roles,
-} from "@mspbyte/drizzle";
-import { PROVIDER_IDS, ProviderFacet } from "@mspbyte/shared";
-import { and, eq, isNull } from "drizzle-orm";
-import { z } from "zod";
-import type {
-  Db,
-  ProjectionStep,
-  ProjectionStepContext,
-} from "../contracts/steps.js";
+  m365Roles
+} from '@mspbyte/drizzle';
+import { PROVIDER_IDS, ProviderFacet } from '@mspbyte/shared';
+import { and, eq, isNull } from 'drizzle-orm';
+import { z } from 'zod';
+import type { Db, ProjectionStep, ProjectionStepContext } from '../contracts/steps.js';
 
 type ExternalIdRow = { id: string; externalId: string };
+type IdentityRow = ExternalIdRow & { assignedRoleTemplateIds: string[] | null };
 type GroupRow = ExternalIdRow & { memberExternalIds: string[] | null };
 type RoleRow = { id: string; templateId: string };
 type PolicyConditionsRow = { id: string; conditions: unknown };
 
 const MEMBERSHIP_TRIGGER_FACETS = new Set<string>([
   ProviderFacet.M365Identities,
-  ProviderFacet.M365Groups,
+  ProviderFacet.M365Groups
 ]);
 
 const POLICY_LINK_TRIGGER_FACETS = new Set<string>([
   ProviderFacet.M365Identities,
   ProviderFacet.M365Groups,
-  ProviderFacet.M365CAPolicies,
+  ProviderFacet.M365CAPolicies
 ]);
 
 const CAPolicyUsersSchema = z.looseObject({
@@ -39,59 +37,66 @@ const CAPolicyUsersSchema = z.looseObject({
   includeGroups: z.array(z.string()).optional().default([]),
   excludeGroups: z.array(z.string()).optional().default([]),
   includeRoles: z.array(z.string()).optional().default([]),
-  excludeRoles: z.array(z.string()).optional().default([]),
+  excludeRoles: z.array(z.string()).optional().default([])
 });
 
 const CAPolicyConditionsSchema = z.looseObject({
-  users: CAPolicyUsersSchema.optional().nullable(),
+  users: CAPolicyUsersSchema.optional().nullable()
 });
 
 export const m365Linkers: readonly ProjectionStep[] = [
   {
-    id: "m365.membership-links",
-    kind: "link",
+    id: 'm365.membership-links',
+    kind: 'link',
     provider: PROVIDER_IDS.M365,
     triggerFacets: MEMBERSHIP_TRIGGER_FACETS,
     requiredFacets: [ProviderFacet.M365Identities, ProviderFacet.M365Groups],
-    run: linkM365Membership,
+    run: linkM365Membership
   },
   {
-    id: "m365.policy-target-links",
-    kind: "link",
+    id: 'm365.policy-target-links',
+    kind: 'link',
     provider: PROVIDER_IDS.M365,
     triggerFacets: POLICY_LINK_TRIGGER_FACETS,
     requiredFacets: [
       ProviderFacet.M365Identities,
       ProviderFacet.M365Groups,
-      ProviderFacet.M365CAPolicies,
+      ProviderFacet.M365CAPolicies
     ],
-    run: linkM365Policies,
-  },
+    run: linkM365Policies
+  }
 ];
 
 async function linkM365Membership(
-  context: ProjectionStepContext,
+  context: ProjectionStepContext
 ): Promise<Record<string, unknown>> {
   const now = new Date().toISOString();
-  const [identityDocs, groupDocs] = (await Promise.all([
+  const [identityDocs, groupDocs, roleRocs] = (await Promise.all([
     activeIdentities(context.db, context.linkId),
     activeGroups(context.db, context.linkId),
-  ])) as [ExternalIdRow[], GroupRow[]];
+    roles(context.db)
+  ])) as [IdentityRow[], GroupRow[], RoleRow[]];
 
   const identityByExternalId = new Map(
-    identityDocs.map((identity) => [identity.externalId, identity.id]),
+    identityDocs.map((identity) => [identity.externalId, identity.id])
   );
+  const roleByTemplateId = new Map(roleRocs.map((role) => [role.templateId, role.id]));
   const identityGroupRows: Array<typeof m365IdentityGroups.$inferInsert> = [];
+  const identityRoleRows: Array<typeof m365IdentityRoles.$inferInsert> = [];
   const identityGroupKeys = new Set<string>();
+  const identityRoleKeys = new Set<string>();
   const groupsMissingMembershipSource = groupDocs.filter(
-    (group) => !Array.isArray(group.memberExternalIds),
+    (group) => !Array.isArray(group.memberExternalIds)
+  );
+  const identitiesMissingRoleSource = identityDocs.filter(
+    (identity) => !Array.isArray(identity.assignedRoleTemplateIds)
   );
   if (groupsMissingMembershipSource.length > 0) {
     return {
       skipped: true,
-      reason: "missing_group_membership_source",
+      reason: 'missing_group_membership_source',
       groups: groupDocs.length,
-      groupsMissingMembershipSource: groupsMissingMembershipSource.length,
+      groupsMissingMembershipSource: groupsMissingMembershipSource.length
     };
   }
 
@@ -109,45 +114,73 @@ async function linkM365Membership(
         groupId: group.id,
         linkId: context.linkId,
         lastSeenAt: now,
-        createdAt: now,
+        createdAt: now
       });
     }
   }
 
-  await context.db
-    .delete(m365IdentityGroups)
-    .where(eq(m365IdentityGroups.linkId, context.linkId));
-  await insertInChunks(context.db, m365IdentityGroups, identityGroupRows);
+  for (const identity of identityDocs) {
+    const roleTemplateIds = identity.assignedRoleTemplateIds;
+    if (!Array.isArray(roleTemplateIds)) continue;
+    for (const roleTemplateId of roleTemplateIds) {
+      const roleId = roleByTemplateId.get(roleTemplateId);
+      if (!roleId) continue;
+      const key = `${identity.id}:${roleId}`;
+      if (identityRoleKeys.has(key)) continue;
+      identityRoleKeys.add(key);
+      identityRoleRows.push({
+        identityId: identity.id,
+        roleId,
+        linkId: context.linkId,
+        lastSeenAt: now,
+        createdAt: now
+      });
+    }
+  }
+
+  const deleteOperations = [
+    context.db.delete(m365IdentityGroups).where(eq(m365IdentityGroups.linkId, context.linkId))
+  ];
+  if (identitiesMissingRoleSource.length === 0) {
+    deleteOperations.push(
+      context.db.delete(m365IdentityRoles).where(eq(m365IdentityRoles.linkId, context.linkId))
+    );
+  }
+
+  await Promise.all(deleteOperations);
+  await Promise.all([
+    insertInChunks(context.db, m365IdentityGroups, identityGroupRows),
+    identitiesMissingRoleSource.length === 0
+      ? insertInChunks(context.db, m365IdentityRoles, identityRoleRows)
+      : Promise.resolve()
+  ]);
 
   return {
     identities: identityDocs.length,
     groups: groupDocs.length,
+    roles: roleRocs.length,
     identityGroups: identityGroupRows.length,
+    identityRoles: identitiesMissingRoleSource.length === 0 ? identityRoleRows.length : 0,
+    identityRolesSkipped: identitiesMissingRoleSource.length > 0,
+    identitiesMissingRoleSource: identitiesMissingRoleSource.length
   };
 }
 
-async function linkM365Policies(
-  context: ProjectionStepContext,
-): Promise<Record<string, unknown>> {
+async function linkM365Policies(context: ProjectionStepContext): Promise<Record<string, unknown>> {
   const now = new Date().toISOString();
   const [identityDocs, groupDocs, roleDocs, policyDocs] = (await Promise.all([
     activeIdentities(context.db, context.linkId),
     activeGroups(context.db, context.linkId),
     roles(context.db),
-    activePolicies(context.db, context.linkId),
+    activePolicies(context.db, context.linkId)
   ])) as [ExternalIdRow[], GroupRow[], RoleRow[], PolicyConditionsRow[]];
 
   const identityByExternalId = new Map(
-    identityDocs.map((identity) => [identity.externalId, identity.id]),
+    identityDocs.map((identity) => [identity.externalId, identity.id])
   );
-  const groupByExternalId = new Map(
-    groupDocs.map((group) => [group.externalId, group.id]),
-  );
-  const roleByTemplateId = new Map(
-    roleDocs.map((role) => [role.templateId, role.id]),
-  );
-  const policyIdentityRows: Array<typeof m365PolicyIdentities.$inferInsert> =
-    [];
+  const groupByExternalId = new Map(groupDocs.map((group) => [group.externalId, group.id]));
+  const roleByTemplateId = new Map(roleDocs.map((role) => [role.templateId, role.id]));
+  const policyIdentityRows: Array<typeof m365PolicyIdentities.$inferInsert> = [];
   const policyGroupRows: Array<typeof m365PolicyGroups.$inferInsert> = [];
   const policyRoleRows: Array<typeof m365PolicyRoles.$inferInsert> = [];
   const policyIdentityKeys = new Set<string>();
@@ -160,7 +193,7 @@ async function linkM365Policies(
     if (!users) continue;
 
     for (const userExternalId of users.includeUsers) {
-      if (userExternalId === "All") continue;
+      if (userExternalId === 'All') continue;
       const identityId = identityByExternalId.get(userExternalId);
       if (!identityId) continue;
       const key = `${policy.id}:${identityId}:true`;
@@ -172,7 +205,7 @@ async function linkM365Policies(
         linkId: context.linkId,
         included: true,
         lastSeenAt: now,
-        createdAt: now,
+        createdAt: now
       });
     }
 
@@ -188,7 +221,7 @@ async function linkM365Policies(
         linkId: context.linkId,
         included: false,
         lastSeenAt: now,
-        createdAt: now,
+        createdAt: now
       });
     }
 
@@ -204,7 +237,7 @@ async function linkM365Policies(
         linkId: context.linkId,
         included: true,
         lastSeenAt: now,
-        createdAt: now,
+        createdAt: now
       });
     }
 
@@ -220,7 +253,7 @@ async function linkM365Policies(
         linkId: context.linkId,
         included: false,
         lastSeenAt: now,
-        createdAt: now,
+        createdAt: now
       });
     }
 
@@ -236,7 +269,7 @@ async function linkM365Policies(
         linkId: context.linkId,
         included: true,
         lastSeenAt: now,
-        createdAt: now,
+        createdAt: now
       });
     }
 
@@ -252,46 +285,39 @@ async function linkM365Policies(
         linkId: context.linkId,
         included: false,
         lastSeenAt: now,
-        createdAt: now,
+        createdAt: now
       });
     }
   }
 
   await Promise.all([
-    context.db
-      .delete(m365PolicyIdentities)
-      .where(eq(m365PolicyIdentities.linkId, context.linkId)),
-    context.db
-      .delete(m365PolicyGroups)
-      .where(eq(m365PolicyGroups.linkId, context.linkId)),
-    context.db
-      .delete(m365PolicyRoles)
-      .where(eq(m365PolicyRoles.linkId, context.linkId)),
+    context.db.delete(m365PolicyIdentities).where(eq(m365PolicyIdentities.linkId, context.linkId)),
+    context.db.delete(m365PolicyGroups).where(eq(m365PolicyGroups.linkId, context.linkId)),
+    context.db.delete(m365PolicyRoles).where(eq(m365PolicyRoles.linkId, context.linkId))
   ]);
   await Promise.all([
     insertInChunks(context.db, m365PolicyIdentities, policyIdentityRows),
     insertInChunks(context.db, m365PolicyGroups, policyGroupRows),
-    insertInChunks(context.db, m365PolicyRoles, policyRoleRows),
+    insertInChunks(context.db, m365PolicyRoles, policyRoleRows)
   ]);
 
   return {
     policies: policyDocs.length,
     policyIdentities: policyIdentityRows.length,
     policyGroups: policyGroupRows.length,
-    policyRoles: policyRoleRows.length,
+    policyRoles: policyRoleRows.length
   };
 }
 
-async function activeIdentities(
-  db: Db,
-  linkId: string,
-): Promise<ExternalIdRow[]> {
+async function activeIdentities(db: Db, linkId: string): Promise<IdentityRow[]> {
   return db
-    .select({ id: m365Identities.id, externalId: m365Identities.externalId })
+    .select({
+      id: m365Identities.id,
+      externalId: m365Identities.externalId,
+      assignedRoleTemplateIds: m365Identities.assignedRoleTemplateIds
+    })
     .from(m365Identities)
-    .where(
-      and(eq(m365Identities.linkId, linkId), isNull(m365Identities.deletedAt)),
-    );
+    .where(and(eq(m365Identities.linkId, linkId), isNull(m365Identities.deletedAt)));
 }
 
 async function activeGroups(db: Db, linkId: string): Promise<GroupRow[]> {
@@ -299,34 +325,27 @@ async function activeGroups(db: Db, linkId: string): Promise<GroupRow[]> {
     .select({
       id: m365Groups.id,
       externalId: m365Groups.externalId,
-      memberExternalIds: m365Groups.memberExternalIds,
+      memberExternalIds: m365Groups.memberExternalIds
     })
     .from(m365Groups)
     .where(and(eq(m365Groups.linkId, linkId), isNull(m365Groups.deletedAt)));
 }
 
-async function activePolicies(
-  db: Db,
-  linkId: string,
-): Promise<PolicyConditionsRow[]> {
+async function activePolicies(db: Db, linkId: string): Promise<PolicyConditionsRow[]> {
   return db
     .select({ id: m365Policies.id, conditions: m365Policies.conditions })
     .from(m365Policies)
-    .where(
-      and(eq(m365Policies.linkId, linkId), isNull(m365Policies.deletedAt)),
-    );
+    .where(and(eq(m365Policies.linkId, linkId), isNull(m365Policies.deletedAt)));
 }
 
 async function roles(db: Db): Promise<RoleRow[]> {
-  return db
-    .select({ id: m365Roles.id, templateId: m365Roles.templateId })
-    .from(m365Roles);
+  return db.select({ id: m365Roles.id, templateId: m365Roles.templateId }).from(m365Roles);
 }
 
 async function insertInChunks<T extends Record<string, unknown>>(
   db: Db,
   table: unknown,
-  rows: T[],
+  rows: T[]
 ): Promise<void> {
   const chunkSize = 1_000;
   for (let index = 0; index < rows.length; index += chunkSize) {
