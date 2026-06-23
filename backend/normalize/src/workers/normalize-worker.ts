@@ -1,7 +1,7 @@
 import { Queue, Worker } from "bullmq";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
 import type { NormalizeJobData, PolicyJobData } from "@mspbyte/pipeline";
-import { orgQueueName, QUEUES } from "@mspbyte/pipeline";
+import { orgQueueName, pipelineJobPriority, QUEUES } from "@mspbyte/pipeline";
 import { canProcessOrg, env, requireEncryptionKey } from "../env.js";
 import { serializeError } from "../errors.js";
 import { logger } from "../logger.js";
@@ -99,6 +99,7 @@ async function enqueuePolicyJob(
       jobId,
       attempts: 3,
       backoff: { type: "exponential", delay: 5_000 },
+      priority: pipelineJobPriority(data.provider),
       removeOnComplete: 1_000,
       removeOnFail: 5_000,
     });

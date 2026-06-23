@@ -313,29 +313,33 @@ async function* fetchAuthMethods(
 
   for (let index = 0; index < allUsers.length; index += batchSize) {
     const rows: unknown[] = [];
+    const batch = allUsers.slice(index, index + batchSize);
+    const results = await connector.users.authMethodsBatch(
+      batch.map((user) => user.id),
+    );
 
-    for (const user of allUsers.slice(index, index + batchSize)) {
-      try {
-        const data = await connector.users.authMethods(user.id);
-        for (const method of data.value) {
-          const odataType =
-            typeof method["@odata.type"] === "string"
-              ? method["@odata.type"]
-              : "";
-          if (odataType === "#microsoft.graph.passwordAuthenticationMethod")
-            continue;
-
-          rows.push({
-            ...method,
-            _identity_external_id: user.id,
-            _method_type: authMethodType(odataType),
-          });
-        }
-      } catch (error) {
+    for (const result of results) {
+      if (result.error || !result.data) {
         logger.warn("Failed to fetch M365 auth methods for user", {
           linkId: context.linkId,
-          userId: user.id,
-          error: serializeError(error),
+          userId: result.userId,
+          error: serializeError(result.error),
+        });
+        continue;
+      }
+
+      for (const method of result.data.value) {
+        const odataType =
+          typeof method["@odata.type"] === "string"
+            ? method["@odata.type"]
+            : "";
+        if (odataType === "#microsoft.graph.passwordAuthenticationMethod")
+          continue;
+
+        rows.push({
+          ...method,
+          _identity_external_id: result.userId,
+          _method_type: authMethodType(odataType),
         });
       }
     }

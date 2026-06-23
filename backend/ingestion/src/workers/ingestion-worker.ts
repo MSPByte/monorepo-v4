@@ -3,6 +3,7 @@ import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
 import {
   assertBullMqName,
   orgQueueName,
+  pipelineJobPriority,
   QUEUES,
   type IngestionJobData,
   type ProjectionJobData,
@@ -154,6 +155,7 @@ export function createIngestionWorker(
                 ),
                 attempts: 3,
                 backoff: { type: "exponential", delay: 5_000 },
+                priority: pipelineJobPriority(data.provider),
                 removeOnComplete: 100,
                 removeOnFail: 500,
               },

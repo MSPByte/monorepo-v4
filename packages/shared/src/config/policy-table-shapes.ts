@@ -244,6 +244,33 @@ export const M365DevicesShape: SchemaFields = {
   }
 };
 
+export const SophosPartnerEndpointShape: SchemaFields = {
+  externalId: {
+    label: 'External ID',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'externalId',
+    required: true
+  },
+  hostname: {
+    label: 'Hostname',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'hostname',
+    required: false
+  },
+  lastHeartbeatAt: {
+    label: 'Last Heartbeat',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    required: false,
+    ingestPath: 'lastHeartbeatAt'
+  }
+};
+
 export const VendorAssetSourceShape: SchemaFields = {
   externalId: {
     label: 'External ID',

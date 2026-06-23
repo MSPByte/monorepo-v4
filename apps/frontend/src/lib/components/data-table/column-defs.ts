@@ -45,12 +45,14 @@ export function tagsColumn<T>(overrides?: Partial<DataTableColumn<T>>): DataTabl
 export function nullableTextColumn<T>(
   key: string,
   title: string,
+  cellProps?: { pretty?: boolean },
   overrides?: Partial<DataTableColumn<T>>
 ): DataTableColumn<T> {
   return {
     key,
     title,
     cellComponent: NullableTextCell,
+    cellProps,
     ...overrides,
   };
 }
@@ -105,6 +107,7 @@ export function textColumn<T>(
   key: string,
   title: string,
   placeholder?: string,
+  cellProps?: { pretty?: boolean },
   overrides?: Partial<DataTableColumn<T>>
 ): DataTableColumn<T> {
   return {
@@ -112,6 +115,8 @@ export function textColumn<T>(
     title,
     sortable: true,
     searchable: true,
+    cellComponent: NullableTextCell,
+    cellProps,
     filter: {
       type: 'text',
       operators: ['contains', 'eq'],

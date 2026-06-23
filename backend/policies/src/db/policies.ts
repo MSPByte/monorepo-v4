@@ -931,7 +931,12 @@ function dateAgeDays(value: unknown): number {
 }
 
 function numberValue(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : fallback;
+  if (typeof value === 'string') {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+  }
+  return fallback;
 }
 
 function stringValue(value: unknown, fallback: string): string;

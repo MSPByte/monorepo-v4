@@ -4,9 +4,10 @@
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import { DataTable, type DataTableColumn, type PaginationInput } from '$lib/components/data-table';
-  import { numberColumn, textColumn } from '$lib/components/data-table/column-defs';
+  import { numberColumn, stateColumn, textColumn } from '$lib/components/data-table/column-defs';
   import SourceBadge from '$lib/components/domain/source-badge.svelte';
   import { toServerTableInput } from '$lib/components/domain/server-table';
+    import { prettyText } from "$lib/utils/format";
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   type AssetRow = {
@@ -25,9 +26,25 @@
 
   const columns: DataTableColumn<AssetRow>[] = [
     textColumn<AssetRow>('hostname', 'Hostname'),
-    { key: 'assetType', title: 'Type', sortable: true, filter: { type: 'select', operators: ['eq'], options: [{ label: 'Server', value: 'server' }, { label: 'Workstation', value: 'workstation' }, { label: 'Network', value: 'network' }, { label: 'Mobile', value: 'mobile' }] } },
+    textColumn<AssetRow>('assetType', 'Type', undefined, { pretty: true }, 
+      {
+        filter: { type: 'select', operators: ['eq'], options: [{ label: 'Server', value: 'server' }, { label: 'Workstation', value: 'workstation' }, { label: 'Network', value: 'network' }] }
+      }
+    ),
     textColumn<AssetRow>('os', 'OS'),
-    { key: 'status', title: 'Status', sortable: true, filter: { type: 'select', operators: ['eq'], options: [{ label: 'Active', value: 'active' }, { label: 'Inactive', value: 'inactive' }, { label: 'Unknown', value: 'unknown' }] } },
+    stateColumn<AssetRow>('status', 'Status', {
+      evaluate: (value) => {
+        switch (value) {
+          case 'active': return 'success';
+          case 'inactive': return 'destructive';
+          case 'unknown': return 'info';
+          default: return 'info';
+        }
+      },
+      transform: (value) => {
+        return prettyText(String(value))
+      }
+    }, { filter: { type: 'select', operators: ['eq'], options: [{ label: 'Active', value: 'active' }, { label: 'Inactive', value: 'inactive' }, { label: 'Unknown', value: 'unknown' }] } }),
     textColumn<AssetRow>('siteName', 'Site'),
     numberColumn<AssetRow>('openFindingCount', 'Open Findings'),
     { key: 'sourceList', title: 'Sources', searchable: true, cell: sourcesCell, width: '240px' },

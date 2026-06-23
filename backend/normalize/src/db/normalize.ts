@@ -1,4 +1,4 @@
-import { and, eq, isNull, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import {
   assets,
   coveEndpoints,
@@ -29,6 +29,14 @@ export type NormalizeMetrics = {
 
 type ConfidenceLabel = 'high' | 'medium' | 'low';
 type SourceStatus = 'candidate' | 'confirmed' | 'rejected' | 'superseded';
+type PersonMatch = {
+  canonicalId: string | undefined;
+  confidence: number;
+  method: string;
+  evidence: Record<string, unknown>;
+};
+type AssetMatch = PersonMatch;
+type M365IdentityInput = typeof m365Identities.$inferSelect & { normalizedEmail: string };
 
 const CONFIRMED_THRESHOLD = 85;
 
@@ -45,7 +53,7 @@ type AssetInput = {
   row: {
     id: string;
     linkId: string;
-    siteId: string | null;
+    siteId?: string | null;
     externalId: string;
     [key: string]: unknown;
   };
@@ -173,92 +181,129 @@ async function normalizeM365Identities(
   db: Db,
   params: { linkId: string; siteId?: string; provider: string; type: string }
 ): Promise<NormalizeMetrics> {
-  const rows = await db
+  const rows = (await db
     .select()
     .from(m365Identities)
-    .where(and(eq(m365Identities.linkId, params.linkId), isNull(m365Identities.deletedAt)));
+    .where(and(eq(m365Identities.linkId, params.linkId), isNull(m365Identities.deletedAt)))) as Array<
+    typeof m365Identities.$inferSelect
+  >;
   const metrics = emptyMetrics();
   metrics.recordsIn = rows.length;
 
+  const validRows: M365IdentityInput[] = [];
   for (const row of rows) {
-    const email = normalizeEmail(row.email);
-    if (!email) {
-      metrics.skippedCt++;
-      continue;
-    }
+    const normalizedEmail = normalizeEmail(row.email);
+    if (!normalizedEmail) metrics.skippedCt++;
+    else validRows.push({ ...row, normalizedEmail });
+  }
+  if (validRows.length === 0) return metrics;
 
-    const existingSource = await findSource(db, 'm365_identities', row.id);
-    const match = existingSource
+  const existingSources = await findSourcesBatch(
+    db,
+    'm365_identities',
+    validRows.map((row) => row.id)
+  );
+  const rowsNeedingMatch = validRows.filter((row) => !existingSources.has(row.id));
+  const peopleMatches = await findPeopleMatchesBatch(
+    db,
+    rowsNeedingMatch.map((row) => ({
+      email: row.normalizedEmail,
+      siteId: row.siteId ?? params.siteId
+    }))
+  );
+
+  const planned = validRows.map((row) => {
+    const existingSource = existingSources.get(row.id);
+    const match: PersonMatch = existingSource
       ? {
           canonicalId: existingSource.canonicalId,
           confidence: 100,
           method: 'existing_source',
           evidence: { entitySourceId: existingSource.id }
         }
-      : await matchPerson(db, row.siteId ?? params.siteId, email);
+      : (peopleMatches.get(siteEmailKey(row.siteId ?? params.siteId, row.normalizedEmail)) ?? {
+          canonicalId: undefined,
+          confidence: 0,
+          method: 'no_match',
+          evidence: { email: row.normalizedEmail }
+        });
     const status: SourceStatus =
       match.confidence >= CONFIRMED_THRESHOLD ? 'confirmed' : 'candidate';
+
     if (match.canonicalId && status === 'candidate') metrics.candidateCt++;
 
-    let canonicalId = match.canonicalId;
-    let canonicalCreated = false;
-    if (!canonicalId || status !== 'confirmed') {
-      const created = await createPerson(db, {
-        siteId: row.siteId ?? params.siteId,
-        primaryEmail: email,
-        displayName: row.name || email,
-        status: row.enabled ? 'active' : 'inactive',
-        sourceConfidence: 'high',
-        attributes: {
-          m365: {
-            linkId: params.linkId,
-            externalId: row.externalId,
-            email,
-            displayName: row.name || email
-          }
-        }
-      });
-      canonicalId = created.id;
-      canonicalCreated = true;
-    } else {
-      await updatePerson(db, canonicalId, {
-        displayName: row.name || email,
-        status: row.enabled ? 'active' : 'inactive',
-        sourceConfidence: confidenceLabel(match.confidence),
-        attributes: {
-          m365: {
-            linkId: params.linkId,
-            externalId: row.externalId,
-            email,
-            displayName: row.name || email
-          }
-        }
-      });
-      metrics.canonicalUpdatedCt++;
-    }
+    return {
+      row,
+      match,
+      status,
+      needsCreate: !match.canonicalId || status !== 'confirmed'
+    };
+  });
 
-    if (canonicalCreated) metrics.canonicalCreatedCt++;
-    const sourceResult = await upsertEntitySource(db, {
-      canonicalType: 'person',
-      canonicalId,
-      vendorTable: 'm365_identities',
-      vendorRecordId: row.id,
-      linkId: params.linkId,
+  const createInputs = uniqueBy(
+    planned.filter((item) => item.needsCreate),
+    (item) => siteEmailKey(item.row.siteId ?? params.siteId, item.row.normalizedEmail)
+  );
+  const createdPeople = await upsertPeopleBatch(
+    db,
+    createInputs.map(({ row }) => ({
       siteId: row.siteId ?? params.siteId,
-      provider: params.provider,
-      type: params.type,
-      externalId: row.externalId,
-      confidence: canonicalCreated ? 100 : match.confidence,
-      matchMethod: canonicalCreated ? 'created_from_m365_identity' : match.method,
-      matchEvidence: canonicalCreated
-        ? { email, reason: 'no confirmed existing person match' }
-        : match.evidence,
-      status: 'confirmed'
-    });
-    if (sourceResult.created) metrics.sourceCreatedCt++;
-    else metrics.sourceUpdatedCt++;
-    metrics.recordsOut++;
-  }
+      primaryEmail: row.normalizedEmail,
+      displayName: row.name || row.normalizedEmail,
+      status: personStatus(row.enabled),
+      sourceConfidence: 'high',
+      attributes: m365PersonAttributes(params.linkId, row)
+    }))
+  );
+  metrics.canonicalCreatedCt += createdPeople.createdCt;
+  metrics.canonicalUpdatedCt += createdPeople.updatedCt;
+
+  const createdBySiteEmail = new Map(
+    createdPeople.rows.map((row) => [siteEmailKey(row.siteId ?? undefined, row.primaryEmail), row.id])
+  );
+
+  const updateInputs = planned
+    .filter((item) => !item.needsCreate && item.match.canonicalId)
+    .map(({ row, match }) => ({
+      id: match.canonicalId!,
+      displayName: row.name || row.normalizedEmail,
+      status: personStatus(row.enabled),
+      sourceConfidence: confidenceLabel(match.confidence),
+      attributes: m365PersonAttributes(params.linkId, row)
+    }));
+  const updatedPeopleCt = await updatePeopleBatch(db, updateInputs);
+  metrics.canonicalUpdatedCt += updatedPeopleCt;
+
+  const sourceRows = planned.flatMap(({ row, match, needsCreate }) => {
+    const canonicalId = needsCreate
+      ? createdBySiteEmail.get(siteEmailKey(row.siteId ?? params.siteId, row.normalizedEmail))
+      : match.canonicalId;
+    if (!canonicalId) return [];
+
+    return [
+      {
+        canonicalType: 'person' as const,
+        canonicalId,
+        vendorTable: 'm365_identities',
+        vendorRecordId: row.id,
+        linkId: params.linkId,
+        siteId: row.siteId ?? params.siteId,
+        provider: params.provider,
+        type: params.type,
+        externalId: row.externalId,
+        confidence: needsCreate ? 100 : match.confidence,
+        matchMethod: needsCreate ? 'created_from_m365_identity' : match.method,
+        matchEvidence: needsCreate
+          ? { email: row.normalizedEmail, reason: 'no confirmed existing person match' }
+          : match.evidence,
+        status: 'confirmed' as const
+      }
+    ];
+  });
+  const sourceResult = await upsertEntitySourcesBatch(db, sourceRows);
+  metrics.sourceCreatedCt += sourceResult.createdCt;
+  metrics.sourceUpdatedCt += sourceResult.updatedCt;
+  metrics.recordsOut += sourceRows.length;
 
   return metrics;
 }
@@ -267,102 +312,41 @@ async function normalizeM365Devices(
   db: Db,
   params: { linkId: string; siteId?: string; provider: string; type: string }
 ): Promise<NormalizeMetrics> {
-  const rows = await db
+  const rows = (await db
     .select()
     .from(m365Devices)
-    .where(and(eq(m365Devices.linkId, params.linkId), isNull(m365Devices.deletedAt)));
+    .where(and(eq(m365Devices.linkId, params.linkId), isNull(m365Devices.deletedAt)))) as Array<
+    typeof m365Devices.$inferSelect
+  >;
   const metrics = emptyMetrics();
   metrics.recordsIn = rows.length;
 
-  for (const row of rows) {
-    const hostname = normalizeHostname(row.displayName);
-    if (!hostname) {
-      metrics.skippedCt++;
-      continue;
-    }
-
-    const existingSource = await findSource(db, 'm365_devices', row.id);
-    const match = existingSource
-      ? {
-          canonicalId: existingSource.canonicalId,
-          confidence: 100,
-          method: 'existing_source',
-          evidence: { entitySourceId: existingSource.id }
-        }
-      : await matchAsset(db, {
-          siteId: row.siteId ?? params.siteId,
-          hostname
-        });
-    const status: SourceStatus =
-      match.confidence >= CONFIRMED_THRESHOLD ? 'confirmed' : 'candidate';
-    if (match.canonicalId && status === 'candidate') metrics.candidateCt++;
-
-    let canonicalId = match.canonicalId;
-    let canonicalCreated = false;
-    if (!canonicalId || status !== 'confirmed') {
-      const created = await createAsset(db, {
-        siteId: row.siteId ?? params.siteId,
-        displayName: row.displayName,
-        hostname,
-        os: normalizeAssetOs(row.operatingSystem),
-        assetType: assetTypeFromOperatingSystem(row.operatingSystem),
-        status: row.isManaged === false ? 'unknown' : 'active',
-        sourceConfidence: 'medium',
-        attributes: {
-          m365: {
-            linkId: params.linkId,
-            externalId: row.externalId,
-            hostname,
-            displayName: row.displayName,
-            os: normalizeAssetOs(row.operatingSystem)
-          }
-        }
-      });
-      canonicalId = created.id;
-      canonicalCreated = true;
-    } else {
-      await updateAsset(db, canonicalId, {
-        displayName: row.displayName,
-        hostname,
-        os: normalizeAssetOs(row.operatingSystem),
-        assetType: assetTypeFromOperatingSystem(row.operatingSystem),
-        status: row.isManaged === false ? 'unknown' : 'active',
-        sourceConfidence: confidenceLabel(match.confidence),
-        attributes: {
-          m365: {
-            linkId: params.linkId,
-            externalId: row.externalId,
-            hostname,
-            displayName: row.displayName,
-            os: normalizeAssetOs(row.operatingSystem)
-          }
-        }
-      });
-      metrics.canonicalUpdatedCt++;
-    }
-
-    if (canonicalCreated) metrics.canonicalCreatedCt++;
-    const sourceResult = await upsertEntitySource(db, {
-      canonicalType: 'asset',
-      canonicalId,
+  await normalizeAssetsBatch(
+    db,
+    params,
+    metrics,
+    rows.map((row) => ({
       vendorTable: 'm365_devices',
-      vendorRecordId: row.id,
-      linkId: params.linkId,
-      siteId: row.siteId ?? params.siteId,
-      provider: params.provider,
-      type: params.type,
-      externalId: row.externalId,
-      confidence: canonicalCreated ? 100 : match.confidence,
-      matchMethod: canonicalCreated ? 'created_from_m365_device' : match.method,
-      matchEvidence: canonicalCreated
-        ? { hostname, reason: 'no confirmed existing asset match' }
-        : match.evidence,
-      status: 'confirmed'
-    });
-    if (sourceResult.created) metrics.sourceCreatedCt++;
-    else metrics.sourceUpdatedCt++;
-    metrics.recordsOut++;
-  }
+      canonicalType: 'asset',
+      row,
+      displayName: row.displayName,
+      hostname: row.displayName,
+      os: normalizeAssetOs(row.operatingSystem),
+      assetType: assetTypeFromOperatingSystem(row.operatingSystem),
+      status: row.isManaged === false ? 'unknown' : 'active',
+      sourceConfidence: 'medium',
+      attributes: {
+        m365: {
+          linkId: params.linkId,
+          externalId: row.externalId,
+          hostname: normalizeHostname(row.displayName),
+          displayName: row.displayName,
+          os: normalizeAssetOs(row.operatingSystem)
+        }
+      },
+      createMatchMethod: 'created_from_m365_device'
+    }))
+  );
 
   return metrics;
 }
@@ -375,8 +359,11 @@ async function normalizeSophosEndpoints(
   const metrics = emptyMetrics();
   metrics.recordsIn = rows.length;
 
-  for (const row of rows) {
-    await normalizeAsset(db, params, metrics, {
+  await normalizeAssetsBatch(
+    db,
+    params,
+    metrics,
+    rows.map((row) => ({
       vendorTable: 'sophos_endpoints',
       canonicalType: 'asset',
       row,
@@ -396,8 +383,8 @@ async function normalizeSophosEndpoints(
         }
       },
       createMatchMethod: 'created_from_sophos_endpoint'
-    });
-  }
+    }))
+  );
 
   return metrics;
 }
@@ -410,8 +397,11 @@ async function normalizeSophosFirewalls(
   const metrics = emptyMetrics();
   metrics.recordsIn = rows.length;
 
-  for (const row of rows) {
-    await normalizeAsset(db, params, metrics, {
+  await normalizeAssetsBatch(
+    db,
+    params,
+    metrics,
+    rows.map((row) => ({
       vendorTable: 'sophos_firewalls',
       canonicalType: 'asset',
       row,
@@ -433,8 +423,8 @@ async function normalizeSophosFirewalls(
       },
       createMatchMethod: 'created_from_sophos_firewall',
       allowHostnameMatch: false
-    });
-  }
+    }))
+  );
 
   return metrics;
 }
@@ -447,8 +437,11 @@ async function normalizeDattoEndpoints(
   const metrics = emptyMetrics();
   metrics.recordsIn = rows.length;
 
-  for (const row of rows) {
-    await normalizeAsset(db, params, metrics, {
+  await normalizeAssetsBatch(
+    db,
+    params,
+    metrics,
+    rows.map((row) => ({
       vendorTable: 'datto_endpoints',
       canonicalType: 'asset',
       row,
@@ -468,8 +461,8 @@ async function normalizeDattoEndpoints(
         }
       },
       createMatchMethod: 'created_from_datto_endpoint'
-    });
-  }
+    }))
+  );
 
   return metrics;
 }
@@ -482,8 +475,11 @@ async function normalizeCoveEndpoints(
   const metrics = emptyMetrics();
   metrics.recordsIn = rows.length;
 
-  for (const row of rows) {
-    await normalizeAsset(db, params, metrics, {
+  await normalizeAssetsBatch(
+    db,
+    params,
+    metrics,
+    rows.map((row) => ({
       vendorTable: 'cove_endpoints',
       canonicalType: 'asset',
       row,
@@ -502,99 +498,154 @@ async function normalizeCoveEndpoints(
         }
       },
       createMatchMethod: 'created_from_cove_endpoint'
-    });
-  }
+    }))
+  );
 
   return metrics;
 }
 
-async function normalizeAsset(
+async function normalizeAssetsBatch(
   db: Db,
   params: { linkId: string; siteId?: string; provider: string; type: string },
   metrics: NormalizeMetrics,
-  input: AssetInput
+  inputs: AssetInput[]
 ): Promise<void> {
-  const hostname = normalizeHostname(input.hostname);
-  const serialNumber = normalizeSerial(input.serialNumber);
+  const validInputs = inputs.flatMap((input) => {
+    const hostname = normalizeHostname(input.hostname);
+    const serialNumber = normalizeSerial(input.serialNumber);
+    if (!hostname && !serialNumber) {
+      metrics.skippedCt++;
+      return [];
+    }
 
-  if (!hostname && !serialNumber) {
-    metrics.skippedCt++;
-    return;
-  }
-
-  const siteId = input.row.siteId ?? params.siteId;
-  const existingSource = await findSource(db, input.vendorTable, input.row.id);
-  const match = existingSource
-    ? {
-        canonicalId: existingSource.canonicalId,
-        confidence: 100,
-        method: 'existing_source',
-        evidence: { entitySourceId: existingSource.id }
-      }
-    : await matchAsset(db, {
-        siteId,
+    return [
+      {
+        ...input,
+        siteId: input.row.siteId ?? params.siteId,
         hostname,
-        serialNumber,
-        allowHostnameMatch: input.allowHostnameMatch !== false
-      });
-  const status: SourceStatus = match.confidence >= CONFIRMED_THRESHOLD ? 'confirmed' : 'candidate';
-  if (match.canonicalId && status === 'candidate') metrics.candidateCt++;
+        serialNumber
+      }
+    ];
+  });
+  if (validInputs.length === 0) return;
 
-  let canonicalId = match.canonicalId;
-  let canonicalCreated = false;
-  if (!canonicalId || status !== 'confirmed') {
-    const created = await createAsset(db, {
-      siteId,
+  const existingSources = await findSourcesBatch(
+    db,
+    validInputs[0]!.vendorTable,
+    validInputs.map((input) => input.row.id)
+  );
+  const inputsNeedingMatch = validInputs.filter((input) => !existingSources.has(input.row.id));
+  const assetMatches = await findAssetMatchesBatch(
+    db,
+    inputsNeedingMatch.map((input) => ({
+      siteId: input.siteId,
+      hostname: input.hostname,
+      serialNumber: input.serialNumber,
+      allowHostnameMatch: input.allowHostnameMatch !== false
+    }))
+  );
+
+  const planned = validInputs.map((input) => {
+    const existingSource = existingSources.get(input.row.id);
+    const match: AssetMatch = existingSource
+      ? {
+          canonicalId: existingSource.canonicalId,
+          confidence: 100,
+          method: 'existing_source',
+          evidence: { entitySourceId: existingSource.id }
+        }
+      : (assetMatches.get(assetMatchKey(input)) ?? {
+          canonicalId: undefined,
+          confidence: 0,
+          method: 'no_match',
+          evidence: { hostname: input.hostname, serialNumber: input.serialNumber }
+        });
+    const status: SourceStatus =
+      match.confidence >= CONFIRMED_THRESHOLD ? 'confirmed' : 'candidate';
+
+    if (match.canonicalId && status === 'candidate') metrics.candidateCt++;
+
+    return {
+      input,
+      match,
+      status,
+      needsCreate: !match.canonicalId || status !== 'confirmed'
+    };
+  });
+
+  const createInputs = uniqueBy(
+    planned.filter((item) => item.needsCreate),
+    (item) => assetCreateKey(item.input)
+  );
+  const createdAssets = await insertAssetsBatch(
+    db,
+    createInputs.map(({ input }) => ({
+      siteId: input.siteId,
       displayName: input.displayName,
-      hostname,
-      serialNumber,
+      hostname: input.hostname,
+      serialNumber: input.serialNumber,
       os: input.os,
       assetType: input.assetType,
       status: input.status,
       sourceConfidence: input.sourceConfidence,
       attributes: input.attributes
-    });
-    canonicalId = created.id;
-    canonicalCreated = true;
-  } else {
-    await updateAsset(db, canonicalId, {
+    }))
+  );
+  metrics.canonicalCreatedCt += createdAssets.length;
+  const createdByKey = new Map(
+    createdAssets.map((row) => [assetCreateKey(row), row.id])
+  );
+
+  const updateInputs = planned
+    .filter((item) => !item.needsCreate && item.match.canonicalId)
+    .map(({ input, match }) => ({
+      id: match.canonicalId!,
       displayName: input.displayName,
-      hostname,
-      serialNumber,
+      hostname: input.hostname,
+      serialNumber: input.serialNumber,
       os: input.os,
       assetType: input.assetType,
       status: input.status,
       sourceConfidence: confidenceLabel(match.confidence),
       attributes: input.attributes
-    });
-    metrics.canonicalUpdatedCt++;
-  }
+    }));
+  const updatedAssetCt = await updateAssetsBatch(db, updateInputs);
+  metrics.canonicalUpdatedCt += updatedAssetCt;
 
-  if (canonicalCreated) metrics.canonicalCreatedCt++;
-  const sourceResult = await upsertEntitySource(db, {
-    canonicalType: input.canonicalType,
-    canonicalId,
-    vendorTable: input.vendorTable,
-    vendorRecordId: input.row.id,
-    linkId: params.linkId,
-    siteId,
-    provider: params.provider,
-    type: params.type,
-    externalId: input.row.externalId,
-    confidence: canonicalCreated ? 100 : match.confidence,
-    matchMethod: canonicalCreated ? input.createMatchMethod : match.method,
-    matchEvidence: canonicalCreated
-      ? {
-          hostname,
-          serialNumber,
-          reason: 'no confirmed existing asset match'
-        }
-      : match.evidence,
-    status: 'confirmed'
+  const sourceRows = planned.flatMap(({ input, match, needsCreate }) => {
+    const canonicalId = needsCreate
+      ? createdByKey.get(assetCreateKey(input))
+      : match.canonicalId;
+    if (!canonicalId) return [];
+
+    return [
+      {
+        canonicalType: input.canonicalType,
+        canonicalId,
+        vendorTable: input.vendorTable,
+        vendorRecordId: input.row.id,
+        linkId: params.linkId,
+        siteId: input.siteId,
+        provider: params.provider,
+        type: params.type,
+        externalId: input.row.externalId,
+        confidence: needsCreate ? 100 : match.confidence,
+        matchMethod: needsCreate ? input.createMatchMethod : match.method,
+        matchEvidence: needsCreate
+          ? {
+              hostname: input.hostname,
+              serialNumber: input.serialNumber,
+              reason: 'no confirmed existing asset match'
+            }
+          : match.evidence,
+        status: 'confirmed' as const
+      }
+    ];
   });
-  if (sourceResult.created) metrics.sourceCreatedCt++;
-  else metrics.sourceUpdatedCt++;
-  metrics.recordsOut++;
+  const sourceResult = await upsertEntitySourcesBatch(db, sourceRows);
+  metrics.sourceCreatedCt += sourceResult.createdCt;
+  metrics.sourceUpdatedCt += sourceResult.updatedCt;
+  metrics.recordsOut += sourceRows.length;
 }
 
 async function activeVendorRows(db: Db, table: AssetTable, linkId: string): Promise<Array<any>> {
@@ -604,202 +655,366 @@ async function activeVendorRows(db: Db, table: AssetTable, linkId: string): Prom
     .where(and(eq(table.linkId, linkId), isNull(table.deletedAt)));
 }
 
-async function findSource(db: Db, vendorTable: string, vendorRecordId: string) {
-  const [row] = await db
+async function findSourcesBatch(
+  db: Db,
+  vendorTable: string,
+  vendorRecordIds: string[]
+): Promise<Map<string, { id: string; canonicalId: string; status: string }>> {
+  if (vendorRecordIds.length === 0) return new Map();
+
+  const rows = await db
     .select({
       id: entitySources.id,
       canonicalId: entitySources.canonicalId,
+      vendorRecordId: entitySources.vendorRecordId,
       status: entitySources.status
     })
     .from(entitySources)
     .where(
       and(
         eq(entitySources.vendorTable, vendorTable),
-        eq(entitySources.vendorRecordId, vendorRecordId)
+        inArray(entitySources.vendorRecordId, unique(vendorRecordIds))
       )
-    )
-    .limit(1);
+    );
 
-  return row?.status === 'confirmed' ? row : undefined;
+  return new Map(
+    rows
+      .filter((row: { status: string }) => row.status === 'confirmed')
+      .map((row: { vendorRecordId: string; id: string; canonicalId: string; status: string }) => [
+        row.vendorRecordId,
+        row
+      ])
+  );
 }
 
-async function matchPerson(db: Db, siteId: string | undefined, email: string) {
-  const [row] = await db
-    .select({ id: people.id, siteId: people.siteId })
+async function findPeopleMatchesBatch(
+  db: Db,
+  inputs: Array<{ siteId?: string; email: string }>
+): Promise<Map<string, PersonMatch>> {
+  if (inputs.length === 0) return new Map();
+
+  const emails = unique(inputs.map((input) => input.email));
+  const rows = (await db
+    .select({ id: people.id, siteId: people.siteId, primaryEmail: people.primaryEmail })
     .from(people)
-    .where(
-      siteId
-        ? and(eq(people.primaryEmail, email), or(eq(people.siteId, siteId), isNull(people.siteId)))
-        : eq(people.primaryEmail, email)
-    )
-    .limit(1);
+    .where(inArray(people.primaryEmail, emails))) as Array<{
+    id: string;
+    siteId: string | null;
+    primaryEmail: string;
+  }>;
+  const byEmail = groupBy(rows, (row) => row.primaryEmail);
+  const result = new Map<string, PersonMatch>();
 
-  if (!row) {
-    return {
-      canonicalId: undefined,
-      confidence: 0,
-      method: 'no_match',
-      evidence: { email }
-    };
-  }
-
-  return {
-    canonicalId: row.id,
-    confidence: row.siteId === siteId ? 95 : 90,
-    method: row.siteId === siteId ? 'site_email' : 'email',
-    evidence: { email, siteId }
-  };
-}
-
-async function matchAsset(
-  db: Db,
-  options: {
-    siteId: string | undefined;
-    hostname?: string;
-    serialNumber?: string;
-    allowHostnameMatch?: boolean;
-  }
-) {
-  const { siteId, hostname, serialNumber } = options;
-  const allowHostnameMatch = options.allowHostnameMatch !== false;
-  if (serialNumber) {
-    const [row] = await db
-      .select({
-        id: assets.id,
-        siteId: assets.siteId,
-        serialNumber: assets.serialNumber
-      })
-      .from(assets)
-      .where(
-        siteId
-          ? and(
-              eq(assets.serialNumber, serialNumber),
-              or(eq(assets.siteId, siteId), isNull(assets.siteId))
-            )
-          : eq(assets.serialNumber, serialNumber)
-      )
-      .limit(1);
-
-    if (row) {
-      return {
-        canonicalId: row.id,
-        confidence: row.siteId === siteId ? 98 : 93,
-        method: 'serial_number',
-        evidence: { serialNumber, siteId }
-      };
+  for (const input of inputs) {
+    const candidates = byEmail.get(input.email) ?? [];
+    const row =
+      candidates.find((candidate) => candidate.siteId === input.siteId) ??
+      candidates.find((candidate) => candidate.siteId == null) ??
+      candidates[0];
+    if (!row) {
+      result.set(siteEmailKey(input.siteId, input.email), {
+        canonicalId: undefined,
+        confidence: 0,
+        method: 'no_match',
+        evidence: { email: input.email }
+      });
+      continue;
     }
+
+    result.set(siteEmailKey(input.siteId, input.email), {
+      canonicalId: row.id,
+      confidence: row.siteId === input.siteId ? 95 : 90,
+      method: row.siteId === input.siteId ? 'site_email' : 'email',
+      evidence: { email: input.email, siteId: input.siteId }
+    });
   }
 
-  if (!hostname || !allowHostnameMatch) {
-    return {
-      canonicalId: undefined,
-      confidence: 0,
-      method: 'no_match',
-      evidence: { hostname, serialNumber }
-    };
-  }
+  return result;
+}
 
-  const [row] = await db
-    .select({
-      id: assets.id,
-      siteId: assets.siteId,
-      hostname: assets.hostname,
-      displayName: assets.displayName
+async function upsertPeopleBatch(
+  db: Db,
+  values: Array<typeof people.$inferInsert>
+): Promise<{
+  rows: Array<{ id: string; siteId: string | null; primaryEmail: string }>;
+  createdCt: number;
+  updatedCt: number;
+}> {
+  if (values.length === 0) return { rows: [], createdCt: 0, updatedCt: 0 };
+
+  const now = new Date().toISOString();
+  const rows = await db
+    .insert(people)
+    .values(values.map((value) => ({ ...value, updatedAt: now })))
+    .onConflictDoUpdate({
+      target: [people.siteId, people.primaryEmail],
+      set: {
+        displayName: sql`excluded.display_name`,
+        status: sql`excluded.status`,
+        sourceConfidence: sql`excluded.source_confidence`,
+        attributes: sql`coalesce(${people.attributes}, '{}'::jsonb) || excluded.attributes`,
+        updatedAt: now
+      }
     })
-    .from(assets)
-    .where(
-      siteId
-        ? and(
-            or(eq(assets.hostname, hostname), eq(sql`lower(${assets.displayName})`, hostname)),
-            or(eq(assets.siteId, siteId), isNull(assets.siteId))
-          )
-        : or(eq(assets.hostname, hostname), eq(sql`lower(${assets.displayName})`, hostname))
-    )
-    .limit(1);
-
-  if (!row) {
-    return {
-      canonicalId: undefined,
-      confidence: 0,
-      method: 'no_match',
-      evidence: { hostname, serialNumber }
-    };
-  }
+    .returning({
+      id: people.id,
+      siteId: people.siteId,
+      primaryEmail: people.primaryEmail,
+      xmax: sql<string>`xmax::text`
+    });
+  const createdCt = rows.filter((row: { xmax?: string }) => row.xmax === '0').length;
 
   return {
-    canonicalId: row.id,
-    confidence: row.siteId === siteId ? 90 : 85,
-    method: row.hostname === hostname ? 'hostname' : 'display_name',
-    evidence: { hostname, serialNumber, siteId }
+    rows,
+    createdCt,
+    updatedCt: rows.length - createdCt
   };
 }
 
-async function createPerson(db: Db, values: typeof people.$inferInsert) {
-  const [row] = await db.insert(people).values(values).returning({ id: people.id });
-  return row;
-}
-
-async function updatePerson(
+async function updatePeopleBatch(
   db: Db,
-  id: string,
-  values: Partial<typeof people.$inferInsert>
-): Promise<void> {
-  if (values.attributes) {
-    values.attributes = await mergePersonAttributes(db, id, values.attributes);
-  }
-  await db
-    .update(people)
-    .set({ ...values, updatedAt: new Date().toISOString() })
-    .where(eq(people.id, id));
-}
+  values: Array<{
+    id: string;
+    displayName: string;
+    status: 'active' | 'inactive' | 'unknown';
+    sourceConfidence: ConfidenceLabel;
+    attributes: Record<string, unknown>;
+  }>
+): Promise<number> {
+  const rows = uniqueBy(values, (value) => value.id);
+  if (rows.length === 0) return 0;
 
-async function createAsset(db: Db, values: typeof assets.$inferInsert) {
-  const [row] = await db.insert(assets).values(values).returning({ id: assets.id });
-  return row;
-}
-
-async function updateAsset(
-  db: Db,
-  id: string,
-  values: Partial<typeof assets.$inferInsert>
-): Promise<void> {
-  if (values.attributes) {
-    values.attributes = await mergeAssetAttributes(db, id, values.attributes);
-  }
-  await db
-    .update(assets)
-    .set({ ...values, updatedAt: new Date().toISOString() })
-    .where(eq(assets.id, id));
-}
-
-async function upsertEntitySource(
-  db: Db,
-  values: typeof entitySources.$inferInsert
-): Promise<{ created: boolean }> {
-  const now = new Date().toISOString();
   const returned = await db
+    .update(people)
+    .set({
+      displayName: caseById(people.id, rows.map((row) => [row.id, row.displayName]), people.displayName),
+      status: caseById(people.id, rows.map((row) => [row.id, row.status]), people.status),
+      sourceConfidence: caseById(
+        people.id,
+        rows.map((row) => [row.id, row.sourceConfidence]),
+        people.sourceConfidence
+      ),
+      attributes: sql`coalesce(${people.attributes}, '{}'::jsonb) || ${caseJsonById(
+        people.id,
+        rows.map((row) => [row.id, row.attributes]),
+        sql`'{}'::jsonb`
+      )}`,
+      updatedAt: new Date().toISOString()
+    })
+    .where(inArray(people.id, rows.map((row) => row.id)))
+    .returning({ id: people.id });
+
+  return returned.length;
+}
+
+async function upsertEntitySourcesBatch(
+  db: Db,
+  values: Array<typeof entitySources.$inferInsert>
+): Promise<{ createdCt: number; updatedCt: number }> {
+  if (values.length === 0) return { createdCt: 0, updatedCt: 0 };
+
+  const now = new Date().toISOString();
+  const rows = await db
     .insert(entitySources)
-    .values({ ...values, updatedAt: now })
+    .values(values.map((value) => ({ ...value, updatedAt: now })))
     .onConflictDoUpdate({
       target: [entitySources.vendorTable, entitySources.vendorRecordId],
       set: {
-        canonicalType: values.canonicalType,
-        canonicalId: values.canonicalId,
-        linkId: values.linkId,
-        siteId: values.siteId,
-        provider: values.provider,
-        type: values.type,
-        externalId: values.externalId,
-        confidence: values.confidence,
-        matchMethod: values.matchMethod,
-        matchEvidence: values.matchEvidence,
-        status: values.status,
+        canonicalType: sql`excluded.canonical_type`,
+        canonicalId: sql`excluded.canonical_id`,
+        linkId: sql`excluded.link_id`,
+        siteId: sql`excluded.site_id`,
+        provider: sql`excluded.provider`,
+        type: sql`excluded.type`,
+        externalId: sql`excluded.external_id`,
+        confidence: sql`excluded.confidence`,
+        matchMethod: sql`excluded.match_method`,
+        matchEvidence: sql`excluded.match_evidence`,
+        status: sql`excluded.status`,
         updatedAt: now
       }
     })
     .returning({ xmax: sql<string>`xmax::text` });
+  const createdCt = rows.filter((row: { xmax?: string }) => row.xmax === '0').length;
 
-  return { created: returned[0]?.xmax === '0' };
+  return {
+    createdCt,
+    updatedCt: rows.length - createdCt
+  };
+}
+
+async function findAssetMatchesBatch(
+  db: Db,
+  inputs: Array<{
+    siteId?: string;
+    hostname?: string;
+    serialNumber?: string;
+    allowHostnameMatch?: boolean;
+  }>
+): Promise<Map<string, AssetMatch>> {
+  if (inputs.length === 0) return new Map();
+
+  const serialNumbers = unique(inputs.flatMap((input) => (input.serialNumber ? [input.serialNumber] : [])));
+  const hostnames = unique(
+    inputs.flatMap((input) =>
+      input.hostname && input.allowHostnameMatch !== false ? [input.hostname] : []
+    )
+  );
+  const serialMatches = serialNumbers.length
+    ? ((await db
+        .select({
+          id: assets.id,
+          siteId: assets.siteId,
+          serialNumber: assets.serialNumber
+        })
+        .from(assets)
+        .where(inArray(assets.serialNumber, serialNumbers))) as Array<{
+        id: string;
+        siteId: string | null;
+        serialNumber: string | null;
+      }>)
+    : [];
+  const hostnameMatches = hostnames.length
+    ? ((await db
+        .select({
+          id: assets.id,
+          siteId: assets.siteId,
+          hostname: assets.hostname,
+          displayName: assets.displayName
+        })
+        .from(assets)
+        .where(
+          or(
+            inArray(assets.hostname, hostnames),
+            inArray(sql`lower(${assets.displayName})`, hostnames)
+          )
+        )) as Array<{
+        id: string;
+        siteId: string | null;
+        hostname: string | null;
+        displayName: string;
+      }>)
+    : [];
+
+  const serialByValue = groupBy(
+    serialMatches.filter((row) => row.serialNumber != null),
+    (row) => row.serialNumber!
+  );
+  const hostnameByValue = groupBy(hostnameMatches, (row) => normalizeHostname(row.hostname) ?? '');
+  const displayNameByValue = groupBy(hostnameMatches, (row) => normalizeHostname(row.displayName) ?? '');
+  const result = new Map<string, AssetMatch>();
+
+  for (const input of inputs) {
+    if (input.serialNumber) {
+      const row = bestSiteMatch(serialByValue.get(input.serialNumber) ?? [], input.siteId);
+      if (row) {
+        result.set(assetMatchKey(input), {
+          canonicalId: row.id,
+          confidence: row.siteId === input.siteId ? 98 : 93,
+          method: 'serial_number',
+          evidence: { serialNumber: input.serialNumber, siteId: input.siteId }
+        });
+        continue;
+      }
+    }
+
+    if (!input.hostname || input.allowHostnameMatch === false) {
+      result.set(assetMatchKey(input), {
+        canonicalId: undefined,
+        confidence: 0,
+        method: 'no_match',
+        evidence: { hostname: input.hostname, serialNumber: input.serialNumber }
+      });
+      continue;
+    }
+
+    const hostnameRow = bestSiteMatch(hostnameByValue.get(input.hostname) ?? [], input.siteId);
+    const displayNameRow = bestSiteMatch(displayNameByValue.get(input.hostname) ?? [], input.siteId);
+    const row = hostnameRow ?? displayNameRow;
+    if (!row) {
+      result.set(assetMatchKey(input), {
+        canonicalId: undefined,
+        confidence: 0,
+        method: 'no_match',
+        evidence: { hostname: input.hostname, serialNumber: input.serialNumber }
+      });
+      continue;
+    }
+
+    result.set(assetMatchKey(input), {
+      canonicalId: row.id,
+      confidence: row.siteId === input.siteId ? 90 : 85,
+      method: normalizeHostname(row.hostname) === input.hostname ? 'hostname' : 'display_name',
+      evidence: { hostname: input.hostname, serialNumber: input.serialNumber, siteId: input.siteId }
+    });
+  }
+
+  return result;
+}
+
+async function insertAssetsBatch(
+  db: Db,
+  values: Array<typeof assets.$inferInsert>
+): Promise<Array<{ id: string; siteId: string | null; hostname: string | null; serialNumber: string | null }>> {
+  if (values.length === 0) return [];
+
+  return db
+    .insert(assets)
+    .values(values)
+    .returning({
+      id: assets.id,
+      siteId: assets.siteId,
+      hostname: assets.hostname,
+      serialNumber: assets.serialNumber
+    });
+}
+
+async function updateAssetsBatch(
+  db: Db,
+  values: Array<{
+    id: string;
+    displayName: string;
+    hostname?: string;
+    serialNumber?: string;
+    os?: string;
+    assetType: 'workstation' | 'server' | 'network' | 'mobile' | 'unknown';
+    status: 'active' | 'inactive' | 'unknown';
+    sourceConfidence: ConfidenceLabel;
+    attributes: Record<string, unknown>;
+  }>
+): Promise<number> {
+  const rows = uniqueBy(values, (value) => value.id);
+  if (rows.length === 0) return 0;
+
+  const returned = await db
+    .update(assets)
+    .set({
+      displayName: caseById(assets.id, rows.map((row) => [row.id, row.displayName]), assets.displayName),
+      hostname: caseNullableById(assets.id, rows.map((row) => [row.id, row.hostname]), assets.hostname),
+      serialNumber: caseNullableById(
+        assets.id,
+        rows.map((row) => [row.id, row.serialNumber]),
+        assets.serialNumber
+      ),
+      os: caseNullableById(assets.id, rows.map((row) => [row.id, row.os]), assets.os),
+      assetType: caseById(assets.id, rows.map((row) => [row.id, row.assetType]), assets.assetType),
+      status: caseById(assets.id, rows.map((row) => [row.id, row.status]), assets.status),
+      sourceConfidence: caseById(
+        assets.id,
+        rows.map((row) => [row.id, row.sourceConfidence]),
+        assets.sourceConfidence
+      ),
+      attributes: sql`coalesce(${assets.attributes}, '{}'::jsonb) || ${caseJsonById(
+        assets.id,
+        rows.map((row) => [row.id, row.attributes]),
+        sql`'{}'::jsonb`
+      )}`,
+      updatedAt: new Date().toISOString()
+    })
+    .where(inArray(assets.id, rows.map((row) => row.id)))
+    .returning({ id: assets.id });
+
+  return returned.length;
 }
 
 function emptyMetrics(): NormalizeMetrics {
@@ -815,41 +1030,103 @@ function emptyMetrics(): NormalizeMetrics {
   };
 }
 
-async function mergePersonAttributes(
-  db: Db,
-  id: string,
-  incoming: unknown
-): Promise<Record<string, unknown>> {
-  const [row] = await db
-    .select({ attributes: people.attributes })
-    .from(people)
-    .where(eq(people.id, id))
-    .limit(1);
-  return mergeRecord(row?.attributes, incoming);
-}
-
-async function mergeAssetAttributes(
-  db: Db,
-  id: string,
-  incoming: unknown
-): Promise<Record<string, unknown>> {
-  const [row] = await db
-    .select({ attributes: assets.attributes })
-    .from(assets)
-    .where(eq(assets.id, id))
-    .limit(1);
-  return mergeRecord(row?.attributes, incoming);
-}
-
-function mergeRecord(existing: unknown, incoming: unknown): Record<string, unknown> {
+function m365PersonAttributes(linkId: string, row: M365IdentityInput): Record<string, unknown> {
   return {
-    ...(isRecord(existing) ? existing : {}),
-    ...(isRecord(incoming) ? incoming : {})
+    m365: {
+      linkId,
+      externalId: row.externalId,
+      email: row.normalizedEmail,
+      displayName: row.name || row.normalizedEmail
+    }
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+function personStatus(enabled: boolean): 'active' | 'inactive' {
+  return enabled ? 'active' : 'inactive';
+}
+
+function caseById(
+  idColumn: unknown,
+  values: Array<[string, unknown]>,
+  fallback: unknown
+) {
+  return sql`case ${idColumn as never} ${sql.join(
+    values.map(([id, value]) => sql`when ${id} then ${value}`),
+    sql.raw(' ')
+  )} else ${fallback as never} end`;
+}
+
+function caseNullableById(
+  idColumn: unknown,
+  values: Array<[string, unknown]>,
+  fallback: unknown
+) {
+  return sql`case ${idColumn as never} ${sql.join(
+    values.map(([id, value]) => sql`when ${id} then ${value ?? null}`),
+    sql.raw(' ')
+  )} else ${fallback as never} end`;
+}
+
+function caseJsonById(
+  idColumn: unknown,
+  values: Array<[string, unknown]>,
+  fallback: unknown
+) {
+  return sql`case ${idColumn as never} ${sql.join(
+    values.map(([id, value]) => sql`when ${id} then ${JSON.stringify(value)}::jsonb`),
+    sql.raw(' ')
+  )} else ${fallback as never} end`;
+}
+
+function siteEmailKey(siteId: string | undefined, email: string): string {
+  return `${siteId ?? ''}:${email}`;
+}
+
+function assetMatchKey(input: {
+  siteId?: string;
+  hostname?: string;
+  serialNumber?: string;
+  allowHostnameMatch?: boolean;
+}): string {
+  return [
+    input.siteId ?? '',
+    input.serialNumber ?? '',
+    input.allowHostnameMatch === false ? '' : (input.hostname ?? '')
+  ].join(':');
+}
+
+function assetCreateKey(input: {
+  siteId?: string | null;
+  hostname?: string | null;
+  serialNumber?: string | null;
+}): string {
+  return [input.siteId ?? '', input.serialNumber ?? '', input.hostname ?? ''].join(':');
+}
+
+function bestSiteMatch<T extends { siteId: string | null }>(
+  rows: T[],
+  siteId: string | undefined
+): T | undefined {
+  return rows.find((row) => row.siteId === siteId) ?? rows.find((row) => row.siteId == null) ?? rows[0];
+}
+
+function unique<T>(values: T[]): T[] {
+  return [...new Set(values)];
+}
+
+function uniqueBy<T>(values: T[], keyFn: (value: T) => string): T[] {
+  return [...new Map(values.map((value) => [keyFn(value), value])).values()];
+}
+
+function groupBy<T>(values: T[], keyFn: (value: T) => string): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const value of values) {
+    const key = keyFn(value);
+    const group = groups.get(key) ?? [];
+    group.push(value);
+    groups.set(key, group);
+  }
+  return groups;
 }
 
 function normalizeEmail(value: string | null | undefined): string | undefined {

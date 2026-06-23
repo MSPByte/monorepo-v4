@@ -10,6 +10,27 @@ interface TokenEntry {
   expiresAt: number;
 }
 
+const RETRYABLE_STATUSES = new Set([429, 503, 504]);
+const MAX_GRAPH_RETRIES = 3;
+const DEFAULT_RETRY_DELAY_MS = 1_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function retryDelayMs(res: Response, attempt: number): number {
+  const retryAfter = res.headers.get('retry-after');
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+
+    const retryAt = Date.parse(retryAfter);
+    if (!Number.isNaN(retryAt)) return Math.max(0, retryAt - Date.now());
+  }
+
+  return DEFAULT_RETRY_DELAY_MS * 2 ** attempt;
+}
+
 export class M365GraphClient {
   // Process-level cache keyed by `${clientId}::${tenantId}`.
   // Stores the in-flight Promise so concurrent callers share one auth request.
@@ -72,7 +93,7 @@ export class M365GraphClient {
 
   async get<T>(url: string): Promise<{ data: T; res: Response }> {
     const token = await this.getToken();
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await this.fetchWithRetry(url, { headers: { Authorization: `Bearer ${token}` } });
     if (res.status === 401) {
       throw Object.assign(new Error('M365 auth rejected'), { failParent: true });
     }
@@ -97,6 +118,14 @@ export class M365GraphClient {
     return { data: (await res.json()) as T, res };
   }
 
+  private async fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetch(url, init);
+      if (!RETRYABLE_STATUSES.has(res.status) || attempt >= MAX_GRAPH_RETRIES) return res;
+      await sleep(retryDelayMs(res, attempt));
+    }
+  }
+
   // Fetches all pages of a Graph collection endpoint via @odata.nextLink.
   // If the response status is in ignoreStatuses, returns items collected so far ([] if first page).
   async getAll<T>(url: string, opts?: { ignoreStatuses?: number[] }): Promise<T[]> {
@@ -104,7 +133,9 @@ export class M365GraphClient {
     const items: T[] = [];
     let nextLink: string | null = url;
     while (nextLink) {
-      const res = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await this.fetchWithRetry(nextLink, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       if (opts?.ignoreStatuses?.includes(res.status)) return items;
       if (res.status === 401) {
         throw Object.assign(new Error('M365 auth rejected'), { failParent: true });
@@ -131,7 +162,9 @@ export class M365GraphClient {
     let deltaLink: string | undefined;
 
     while (nextLink) {
-      const res = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await this.fetchWithRetry(nextLink, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       if (opts?.ignoreStatuses?.includes(res.status)) return { items, cursor: deltaLink };
       if (res.status === 401) {
         throw Object.assign(new Error('M365 auth rejected'), { failParent: true });

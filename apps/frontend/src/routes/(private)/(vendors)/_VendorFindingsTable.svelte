@@ -6,6 +6,7 @@
     DataTable,
     type DataTableColumn,
     type PaginationInput,
+    type TableView,
   } from '$lib/components/data-table';
   import {
     relativeDateColumn,
@@ -105,12 +106,23 @@
       },
     },
     textColumn<FindingRow>('policyName', 'Policy'),
-    textColumn<FindingRow>('title', 'Title', undefined, { width: '260px' }),
+    textColumn<FindingRow>('title', 'Title', undefined, undefined, { width: '260px' }),
     ...(showSiteColumn ? [textColumn<FindingRow>('siteName', 'Site')] : []),
     ...(showLinkColumn ? [textColumn<FindingRow>('linkName', 'Link')] : []),
     textColumn<FindingRow>('resourceName', 'Affected Resource'),
     relativeDateColumn<FindingRow>('lastSeenAt', 'Last Seen'),
   ]);
+
+  const views: TableView<FindingRow>[] = [
+    {
+      id: 'open-findings',
+      label: 'Open',
+      isDefault: true,
+      filters: [
+        { field: 'status', 'operator': 'eq', value: 'open' }
+      ]
+    }
+  ]
 
   async function fetchData(input: PaginationInput) {
     const baseInput = toServerTableInput(input, [
@@ -148,6 +160,7 @@
 <DataTable
   {fetchData}
   {columns}
+  {views}
   defaultPageSize={25}
   defaultSort={{ field: 'severity', dir: 'desc' }}
   {refreshKey}

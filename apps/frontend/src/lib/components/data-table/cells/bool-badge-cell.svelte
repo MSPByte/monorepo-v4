@@ -12,10 +12,10 @@
     trueLabel?: string;
     falseLabel?: string;
     falseVariant?: 'muted' | 'destructive';
-    evaluate?: (value: unknown) => boolean;
+    evaluate?: (value: unknown) => boolean | undefined;
   } = $props();
 
-  const boolValue = $derived(evaluate ? evaluate(value) : (value as boolean | null));
+  const boolValue = $derived(evaluate ? evaluate(value) : (value as boolean | undefined));
 
   const falseClass = $derived(
     falseVariant === 'destructive'
@@ -29,8 +29,8 @@
 {:else}
   <Badge
     variant="outline"
-    class={boolValue ? 'bg-success/15 text-success border-success/30' : falseClass}
+    class={boolValue === undefined ? '' : boolValue ? 'bg-success/15 text-success border-success/30' : falseClass}
   >
-    {boolValue ? trueLabel : falseLabel}
+    {boolValue === undefined ? '-' : boolValue ? trueLabel : falseLabel}
   </Badge>
 {/if}

@@ -172,7 +172,7 @@
 {#snippet Detail(label: string, value: string | null | undefined)}
   <div class="min-w-0">
     <dt class="text-xs font-medium text-muted-foreground">{label}</dt>
-    <dd class="mt-1 break-words text-sm">{value || '-'}</dd>
+    <dd class="mt-1 wrap-break-word text-sm">{value || '-'}</dd>
   </div>
 {/snippet}
 
@@ -226,9 +226,9 @@
   </div>
 {/snippet}
 
+<!-- TODO: Link this to the /[integration] and scope in the URL params -->
 {#snippet LinkRow(link: SourceLink)}
-  <a
-    href={integrationHref(link)}
+  <div
     class="flex justify-between gap-3 border-b px-4 py-3 transition-colors last:border-b-0 hover:bg-accent/40 md:grid-cols-[minmax(0,1fr)_160px_120px] md:items-center"
   >
     <div class="w-fit">
@@ -240,7 +240,7 @@
     <div class="text-xs">
       Link
     </div>
-  </a>
+  </div>
 {/snippet}
 
 {#snippet FindingRow(finding: Finding)}
