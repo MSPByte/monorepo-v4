@@ -7,6 +7,8 @@
   import FindingSeverityBadge from '$lib/components/domain/finding-severity-badge.svelte';
   import * as Card from '$lib/components/ui/card';
   import { formatRelativeDate } from '$lib/utils/format';
+    import Loader from "$lib/components/transition/loader.svelte";
+    import FadeIn from "$lib/components/transition/fade-in.svelte";
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
 
@@ -73,7 +75,7 @@
           <a href="/home/findings" class="text-xs text-muted-foreground hover:text-foreground">View all rollups →</a>
         </div>
         {#if rollups.data && rollups.data.length > 0}
-          <div class="grid gap-3 md:grid-cols-2">
+          <FadeIn class="grid gap-3 md:grid-cols-2">
             {#each rollups.data.slice(0, 8) as rollup}
               <a
                 href={`/findings?policyId=${encodeURIComponent(rollup.policyId)}`}
@@ -92,7 +94,7 @@
                 </div>
               </a>
             {/each}
-          </div>
+          </FadeIn>
         {:else if rollups.data}
           <Card.Root class="rounded-lg">
             <Card.Content class="py-6 text-center text-sm text-muted-foreground">
@@ -100,7 +102,7 @@
             </Card.Content>
           </Card.Root>
         {:else}
-          <div class="text-sm text-muted-foreground">Loading rollups…</div>
+          <Loader />
         {/if}
       </section>
 
@@ -129,7 +131,7 @@
             {:else if sitePressure.data}
               <div class="py-4 text-center text-sm text-muted-foreground">No sites with open work.</div>
             {:else}
-              <div class="text-sm text-muted-foreground">Loading…</div>
+              <Loader />
             {/if}
           </Card.Content>
         </Card.Root>

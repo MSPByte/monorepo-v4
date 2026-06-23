@@ -6,6 +6,8 @@
   import FindingSeverityBadge from '$lib/components/domain/finding-severity-badge.svelte';
   import * as Card from '$lib/components/ui/card';
   import { formatRelativeDate, formatStringProper } from '$lib/utils/format';
+    import Loader from "$lib/components/transition/loader.svelte";
+    import FadeIn from "$lib/components/transition/fade-in.svelte";
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
 
@@ -67,7 +69,7 @@
 
     {#if rollups.data && rollups.data.length > 0}
       {#if groupBy === 'policy'}
-        <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <FadeIn class="grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {#each rollups.data as rollup}
             <a
               href={`/findings?policyId=${encodeURIComponent(rollup.policyId)}`}
@@ -85,9 +87,9 @@
               </div>
             </a>
           {/each}
-        </div>
+        </FadeIn>
       {:else if groupBy === 'resource'}
-        <div class="grid gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+        <FadeIn class="grid gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
           {#each groupedByResource(rollups.data) as group}
             <Card.Root class="rounded-lg">
               <Card.Header class="pb-2">
@@ -100,9 +102,9 @@
               </Card.Content>
             </Card.Root>
           {/each}
-        </div>
+        </FadeIn>
       {:else}
-        <div class="grid gap-3 sm:grid-cols-4">
+        <FadeIn class="grid gap-3 sm:grid-cols-4">
           {#each groupedBySeverity(rollups.data) as bucket}
             <Card.Root class="rounded-lg">
               <Card.Header class="pb-2">
@@ -116,7 +118,7 @@
               </Card.Content>
             </Card.Root>
           {/each}
-        </div>
+        </FadeIn>
       {/if}
     {:else if rollups.data}
       <Card.Root class="rounded-lg">
@@ -125,7 +127,7 @@
         </Card.Content>
       </Card.Root>
     {:else}
-      <div class="text-sm text-muted-foreground">Loading rollups…</div>
+      <Loader />
     {/if}
   </div>
 </div>

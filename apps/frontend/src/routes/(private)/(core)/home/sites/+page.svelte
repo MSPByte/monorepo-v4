@@ -5,6 +5,8 @@
   import type { TRPCClient } from '@trpc/client';
   import * as Card from '$lib/components/ui/card';
   import { CheckCircle2 } from '@lucide/svelte';
+    import Loader from "$lib/components/transition/loader.svelte";
+    import FadeIn from "$lib/components/transition/fade-in.svelte";
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
 
@@ -37,7 +39,7 @@
     </div>
 
     {#if sitePressure.data && sitePressure.data.length > 0}
-      <div class="grid gap-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+      <FadeIn class="grid gap-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
         {#each sorted(sitePressure.data) as site}
           {@const clean = site.openFindingCount === 0}
           <a
@@ -94,7 +96,7 @@
             {/if}
           </a>
         {/each}
-      </div>
+        </FadeIn>
     {:else if sitePressure.data}
       <Card.Root class="rounded-lg">
         <Card.Content class="py-12 text-center text-sm text-muted-foreground">
@@ -102,7 +104,7 @@
         </Card.Content>
       </Card.Root>
     {:else}
-      <div class="text-sm text-muted-foreground">Loading sites…</div>
+      <Loader />
     {/if}
   </div>
 </div>
