@@ -1,3 +1,4 @@
+import dns from 'node:dns';
 import { M365Connector, SkuCatalogService, TenantCapabilityService } from '@mspbyte/connectors';
 import { m365Roles } from '@mspbyte/drizzle';
 import {
@@ -14,9 +15,17 @@ import type {
   RawRecordEnvelope,
   SyncMode
 } from '@mspbyte/pipeline';
-import { requireMicrosoftCredentials } from '../../env.js';
+import { getMicrosoftCertPem, requireMicrosoftCredentials, env } from '../../env.js';
 import { logger } from '../../logger.js';
 import { serializeError } from '../../errors.js';
+import {
+  INBOX_RULES_BATCH_SIZE,
+  runExchangeOnlineDomainConfig,
+  runExchangeOnlineFull,
+  runInboxRules,
+  runMailboxForwardingFull,
+  runMicrosoftTeams
+} from './ps-runner.js';
 
 const M365_IDENTITY_BASE_FIELDS = [
   'id',
@@ -43,7 +52,12 @@ export const m365Adapter: IngestionAdapter = {
     ProviderFacet.M365CAPolicies,
     ProviderFacet.M365Devices,
     ProviderFacet.M365OAuthGrants,
-    ProviderFacet.M365RiskyUsers
+    ProviderFacet.M365RiskyUsers,
+    ProviderFacet.M365ExchangeConfig,
+    ProviderFacet.M365DomainConfig,
+    ProviderFacet.M365TeamsConfig,
+    ProviderFacet.M365MailboxForwarding,
+    ProviderFacet.M365InboxRules
   ],
 
   async *fetch(type, mode, cursor, context): AsyncGenerator<FetchPage, FetchResultCursor> {
@@ -66,6 +80,16 @@ export const m365Adapter: IngestionAdapter = {
         return yield* fetchOAuthGrants(connector, context);
       case ProviderFacet.M365RiskyUsers:
         return yield* fetchRiskyUsers(connector, context, capabilities);
+      case ProviderFacet.M365ExchangeConfig:
+        return yield* fetchExchangeConfig(context);
+      case ProviderFacet.M365DomainConfig:
+        return yield* fetchDomainConfig(context);
+      case ProviderFacet.M365TeamsConfig:
+        return yield* fetchTeamsConfig(context);
+      case ProviderFacet.M365MailboxForwarding:
+        return yield* fetchMailboxForwarding(context);
+      case ProviderFacet.M365InboxRules:
+        return yield* fetchInboxRules(connector, context);
       default:
         throw new Error(`Unsupported M365 ingestion facet: ${type}`);
     }
@@ -332,6 +356,316 @@ async function* fetchRiskyUsers(
 
     throw error;
   }
+}
+
+type PowerShellRequirements = {
+  clientId: string;
+  certPem: string;
+  defaultDomain: string;
+  gdapTenantId: string;
+};
+
+function requirePowerShellRequirements(
+  context: IngestionAdapterContext,
+  requiredRoles: string[],
+  facetLabel: string
+): PowerShellRequirements | null {
+  const roles = Array.isArray(context.linkMeta?.roles)
+    ? (context.linkMeta?.roles as unknown[]).filter(
+        (role): role is string => typeof role === 'string'
+      )
+    : [];
+  const hasRequiredRole = requiredRoles.some((role) => roles.includes(role));
+  if (!hasRequiredRole) {
+    logger.warn(`Skipping M365 ${facetLabel}: required directory role not assigned`, {
+      linkId: context.linkId,
+      requiredRoles,
+      assignedRoles: roles
+    });
+    return null;
+  }
+
+  const clientId = env.MICROSOFT_CLIENT_ID;
+  if (!clientId) {
+    logger.warn(`Skipping M365 ${facetLabel}: MICROSOFT_CLIENT_ID not configured`, {
+      linkId: context.linkId
+    });
+    return null;
+  }
+
+  const certPem = getMicrosoftCertPem();
+  if (!certPem) {
+    logger.warn(`Skipping M365 ${facetLabel}: MICROSOFT_CERT_PEM not configured`, {
+      linkId: context.linkId
+    });
+    return null;
+  }
+
+  const gdapTenantId = getTenantId(context);
+  const linkDefaultDomain = context.linkMeta?.defaultDomain;
+  const defaultDomain =
+    typeof linkDefaultDomain === 'string' && linkDefaultDomain.length > 0
+      ? linkDefaultDomain
+      : gdapTenantId;
+
+  return { clientId, certPem, defaultDomain, gdapTenantId };
+}
+
+async function* fetchExchangeConfig(
+  context: IngestionAdapterContext
+): AsyncGenerator<FetchPage> {
+  const requirements = requirePowerShellRequirements(
+    context,
+    ['Exchange Administrator'],
+    'exchange_config'
+  );
+  if (!requirements) return;
+
+  const result = await runExchangeOnlineFull(
+    requirements.clientId,
+    requirements.certPem,
+    requirements.defaultDomain
+  );
+  if (result == null) return;
+
+  yield {
+    records: [{ externalId: 'org-config', op: 'upsert', payload: result }]
+  };
+}
+
+async function* fetchDomainConfig(
+  context: IngestionAdapterContext
+): AsyncGenerator<FetchPage> {
+  const requirements = requirePowerShellRequirements(
+    context,
+    ['Exchange Administrator'],
+    'domain_config'
+  );
+  if (!requirements) return;
+
+  const psResult = await runExchangeOnlineDomainConfig(
+    requirements.clientId,
+    requirements.certPem,
+    requirements.defaultDomain
+  );
+  const psRecord = (psResult ?? {}) as Record<string, unknown>;
+
+  const acceptedDomains: string[] = Array.isArray(psRecord.AcceptedDomains)
+    ? (psRecord.AcceptedDomains as Array<Record<string, unknown>>)
+        .map((domain) =>
+          typeof domain.DomainName === 'string' ? domain.DomainName.toLowerCase() : ''
+        )
+        .filter(Boolean)
+    : [];
+
+  const dkimByDomain = new Map<string, Record<string, unknown>>();
+  if (Array.isArray(psRecord.DkimConfigs)) {
+    for (const dkim of psRecord.DkimConfigs as Array<Record<string, unknown>>) {
+      if (typeof dkim.Domain === 'string') dkimByDomain.set(dkim.Domain.toLowerCase(), dkim);
+    }
+  }
+
+  const dnsResults = await resolveDomainDns(acceptedDomains);
+
+  const records: RawRecordEnvelope[] = acceptedDomains.map((domainName) => {
+    const dkim = dkimByDomain.get(domainName);
+    const dnsResult = dnsResults[domainName] ?? {};
+    return {
+      externalId: domainName,
+      op: 'upsert',
+      payload: {
+        domainName,
+        spfRecord: dnsResult.spfRecord ?? null,
+        spfIsPermissive: dnsResult.spfIsPermissive ?? null,
+        dmarcRecord: dnsResult.dmarcRecord ?? null,
+        dmarcPolicy: dnsResult.dmarcPolicy ?? null,
+        dkimEnabled: dkim ? ((dkim.Enabled as boolean | null) ?? null) : null,
+        dkimSelector1Present: dkim ? Boolean(dkim.Selector1PublicKey) : null,
+        dkimSelector2Present: dkim ? Boolean(dkim.Selector2PublicKey) : null
+      }
+    };
+  });
+
+  if (records.length > 0) yield { records };
+}
+
+async function* fetchTeamsConfig(context: IngestionAdapterContext): AsyncGenerator<FetchPage> {
+  const requirements = requirePowerShellRequirements(
+    context,
+    ['Teams Administrator', 'Global Administrator'],
+    'teams_config'
+  );
+  if (!requirements) return;
+
+  const result = await runMicrosoftTeams(
+    requirements.clientId,
+    requirements.certPem,
+    requirements.gdapTenantId
+  );
+  if (result == null) return;
+
+  yield {
+    records: [{ externalId: 'teams-config', op: 'upsert', payload: result }]
+  };
+}
+
+async function* fetchMailboxForwarding(
+  context: IngestionAdapterContext
+): AsyncGenerator<FetchPage> {
+  const requirements = requirePowerShellRequirements(
+    context,
+    ['Exchange Administrator'],
+    'mailbox_forwarding'
+  );
+  if (!requirements) return;
+
+  const result = await runMailboxForwardingFull(
+    requirements.clientId,
+    requirements.certPem,
+    requirements.defaultDomain
+  );
+  const forwardingMailboxes = ((result as Record<string, unknown>)?.ForwardingMailboxes ??
+    []) as Array<Record<string, unknown>>;
+  if (forwardingMailboxes.length === 0) return;
+
+  yield {
+    records: forwardingMailboxes
+      .filter((mailbox) => typeof mailbox.UserPrincipalName === 'string')
+      .map((mailbox) => ({
+        externalId: (mailbox.UserPrincipalName as string).toLowerCase(),
+        op: 'upsert' as const,
+        payload: mailbox
+      }))
+  };
+}
+
+async function* fetchInboxRules(
+  connector: M365Connector,
+  context: IngestionAdapterContext
+): AsyncGenerator<FetchPage> {
+  const requirements = requirePowerShellRequirements(
+    context,
+    ['Exchange Administrator'],
+    'inbox_rules'
+  );
+  if (!requirements) return;
+
+  let activeUpns: string[] = [];
+  try {
+    const allUsers = await connector.users.listForInboxRules();
+    activeUpns = allUsers.filter((user) => user.accountEnabled).map((user) => user.userPrincipalName);
+  } catch (error) {
+    logger.warn('Failed to fetch UPN list for M365 inbox_rules; skipping', {
+      linkId: context.linkId,
+      error: serializeError(error)
+    });
+    return;
+  }
+
+  if (activeUpns.length === 0) {
+    logger.warn('Skipping M365 inbox_rules: no active identities found', {
+      linkId: context.linkId
+    });
+    return;
+  }
+
+  const totalBatches = Math.ceil(activeUpns.length / INBOX_RULES_BATCH_SIZE);
+  logger.info('Starting M365 inbox_rules batched fetch', {
+    linkId: context.linkId,
+    users: activeUpns.length,
+    batches: totalBatches
+  });
+
+  for (let i = 0; i < activeUpns.length; i += INBOX_RULES_BATCH_SIZE) {
+    const batch = activeUpns.slice(i, i + INBOX_RULES_BATCH_SIZE);
+    const batchNum = Math.floor(i / INBOX_RULES_BATCH_SIZE) + 1;
+
+    let batchResult: unknown;
+    try {
+      batchResult = await runInboxRules(
+        requirements.clientId,
+        requirements.certPem,
+        requirements.defaultDomain,
+        batch
+      );
+    } catch (error) {
+      logger.warn('M365 inbox_rules batch failed, continuing', {
+        linkId: context.linkId,
+        batch: batchNum,
+        totalBatches,
+        error: serializeError(error)
+      });
+      continue;
+    }
+
+    const rules = ((batchResult as Record<string, unknown>)?.InboxRules ?? []) as Array<
+      Record<string, unknown>
+    >;
+    logger.info('M365 inbox_rules batch complete', {
+      linkId: context.linkId,
+      batch: batchNum,
+      totalBatches,
+      rules: rules.length
+    });
+    if (rules.length === 0) continue;
+
+    yield {
+      records: rules
+        .filter(
+          (rule) =>
+            typeof rule.MailboxUserPrincipalName === 'string' &&
+            (typeof rule.Identity === 'string' || typeof rule.Name === 'string')
+        )
+        .map((rule) => ({
+          externalId: `${(rule.MailboxUserPrincipalName as string).toLowerCase()}::${
+            (rule.Identity as string | undefined) ?? (rule.Name as string)
+          }`,
+          op: 'upsert' as const,
+          payload: rule
+        }))
+    };
+  }
+}
+
+type DnsResult = {
+  spfRecord?: string;
+  spfIsPermissive?: boolean;
+  dmarcRecord?: string;
+  dmarcPolicy?: string;
+};
+
+async function resolveDomainDns(domains: string[]): Promise<Record<string, DnsResult>> {
+  const results: Record<string, DnsResult> = {};
+  await Promise.all(
+    domains.map(async (domain) => {
+      const entry: DnsResult = {};
+      try {
+        const chunks = await dns.promises.resolveTxt(domain);
+        const spf = chunks.map((chunk) => chunk.join('')).find((value) => value.startsWith('v=spf1'));
+        if (spf) {
+          entry.spfRecord = spf;
+          entry.spfIsPermissive = !spf.includes('-all');
+        }
+      } catch {
+        /* no SPF or DNS failure */
+      }
+      try {
+        const chunks = await dns.promises.resolveTxt(`_dmarc.${domain}`);
+        const dmarc = chunks
+          .map((chunk) => chunk.join(''))
+          .find((value) => value.startsWith('v=DMARC1'));
+        if (dmarc) {
+          entry.dmarcRecord = dmarc;
+          const match = dmarc.match(/\bp=(\w+)/);
+          entry.dmarcPolicy = match?.[1]?.toLowerCase();
+        }
+      } catch {
+        /* no DMARC or DNS failure */
+      }
+      results[domain] = entry;
+    })
+  );
+  return results;
 }
 
 function page(facet: ProviderFacet, records: unknown[]): FetchPage {

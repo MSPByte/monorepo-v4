@@ -39,6 +39,7 @@ export const env = {
   ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
   MICROSOFT_CLIENT_ID: process.env.MICROSOFT_CLIENT_ID,
   MICROSOFT_CLIENT_SECRET: process.env.MICROSOFT_CLIENT_SECRET,
+  MICROSOFT_CERT_PEM: process.env.MICROSOFT_CERT_PEM,
   LOG_LEVEL: process.env.LOG_LEVEL ?? "info",
   SCHEDULER_ENABLED: boolean("INGESTION_SCHEDULER_ENABLED", true),
   SCHEDULE_INTERVAL_MS: integer("INGESTION_SCHEDULE_INTERVAL_MS", 60_000),
@@ -76,6 +77,18 @@ export function requireMicrosoftCredentials(): {
 
 export function hasMicrosoftCredentials(): boolean {
   return Boolean(env.MICROSOFT_CLIENT_ID && env.MICROSOFT_CLIENT_SECRET);
+}
+
+export function getMicrosoftCertPem(): string | null {
+  const raw = env.MICROSOFT_CERT_PEM;
+  if (!raw) return null;
+  try {
+    const decoded = Buffer.from(raw, "base64").toString("utf8");
+    if (decoded.includes("-----BEGIN")) return decoded;
+  } catch {
+    /* not base64 */
+  }
+  return raw;
 }
 
 export function canProcessOrg(org: { isDev: boolean }): boolean {
