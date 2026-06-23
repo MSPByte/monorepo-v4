@@ -244,6 +244,33 @@ export const M365DevicesShape: SchemaFields = {
   }
 };
 
+export const VendorAssetSourceShape: SchemaFields = {
+  externalId: {
+    label: 'External ID',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'externalId',
+    required: true
+  },
+  hostname: {
+    label: 'Hostname',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'hostname',
+    required: false
+  },
+  lastSeenAt: {
+    label: 'Last Seen',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'lastSeenAt',
+    required: false
+  }
+};
+
 export const PolicyTableShapes: PolicyTableShape[] = [
   {
     table: 'assets',
@@ -284,7 +311,48 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     targetType: 'vendor',
     providerId: 'microsoft-365',
     canonicalResourceTypes: ['asset'],
+    route: { path: '/microsoft-365/devices', searchField: 'externalId' },
     shape: M365DevicesShape
+  },
+  {
+    table: 'sophosEndpoints',
+    label: 'Sophos Endpoints',
+    resourceType: 'sophos_endpoint',
+    targetType: 'vendor',
+    providerId: 'sophos-partner',
+    canonicalResourceTypes: ['asset'],
+    route: { path: '/sophos-partner/endpoints', searchField: 'externalId' },
+    shape: VendorAssetSourceShape
+  },
+  {
+    table: 'sophosFirewalls',
+    label: 'Sophos Firewalls',
+    resourceType: 'sophos_firewall',
+    targetType: 'vendor',
+    providerId: 'sophos-partner',
+    canonicalResourceTypes: ['asset'],
+    route: { path: '/sophos-partner/firewalls', searchField: 'externalId' },
+    shape: VendorAssetSourceShape
+  },
+  {
+    table: 'dattoEndpoints',
+    label: 'Datto RMM Endpoints',
+    resourceType: 'datto_endpoint',
+    targetType: 'vendor',
+    providerId: 'dattormm',
+    canonicalResourceTypes: ['asset'],
+    route: { path: '/dattormm/endpoints', searchField: 'externalId' },
+    shape: VendorAssetSourceShape
+  },
+  {
+    table: 'coveEndpoints',
+    label: 'Cove Endpoints',
+    resourceType: 'cove_endpoint',
+    targetType: 'vendor',
+    providerId: 'cove',
+    canonicalResourceTypes: ['asset'],
+    route: { path: '/cove/endpoints', searchField: 'externalId' },
+    shape: VendorAssetSourceShape
   }
 ];
 
