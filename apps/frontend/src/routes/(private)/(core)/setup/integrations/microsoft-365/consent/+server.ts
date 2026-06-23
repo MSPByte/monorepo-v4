@@ -19,10 +19,7 @@ interface RetryOptions {
   maxDelayMs?: number;
 }
 
-async function fetchWithRetry<T>(
-  fn: () => Promise<T>,
-  options: RetryOptions = {}
-): Promise<T> {
+async function fetchWithRetry<T>(fn: () => Promise<T>, options: RetryOptions = {}): Promise<T> {
   const { maxRetries = 3, baseDelayMs = 1000, maxDelayMs = 10_000 } = options;
 
   let lastError: unknown;
@@ -40,7 +37,6 @@ async function fetchWithRetry<T>(
 
   throw lastError;
 }
-
 
 const M365ConfigSchema = z.object({
   tenantId: z.string(),
@@ -146,8 +142,8 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     // 4. Count users (non-fatal)
     let userCount = 0;
     try {
-      const userIds = await connector.users.listIdsAll();
-      userCount = userIds.length;
+      const users = await connector.users.listAll('id');
+      userCount = users.length;
     } catch {
       /* non-fatal */
     }

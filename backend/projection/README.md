@@ -43,7 +43,6 @@ The first implementation supports Microsoft 365 Graph-backed facets:
 - `m365_groups`
 - `m365_licenses`
 - `m365_ca_policies`
-- `m365_auth_methods`
 - `m365_devices`
 - `m365_oauth_grants`
 - `m365_risky_users`

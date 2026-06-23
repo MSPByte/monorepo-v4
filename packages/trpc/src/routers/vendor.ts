@@ -1,15 +1,9 @@
 // TODO: Findings Implementation
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import {
-  eq,
-  and,
-  count,
-  sql,
-  inArray,
-  desc
-} from 'drizzle-orm';
+import { eq, and, count, sql, inArray, desc } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
+import { M365Connector } from '@mspbyte/connectors';
 import {
   customerLogs,
   findings,
@@ -25,7 +19,6 @@ import {
   m365PolicyRoles,
   m365Licenses,
   m365ExchangeConfigs,
-  m365AuthMethods,
   m365Devices,
   m365OAuthGrants,
   m365DomainConfig,
@@ -56,7 +49,6 @@ const VENDOR_TABLE_MAP = {
   m365_policies: m365Policies,
   m365_licenses: m365Licenses,
   m365_exchange_configs: m365ExchangeConfigs,
-  m365_auth_methods: m365AuthMethods,
   m365_devices: m365Devices,
   m365_oauth_grants: m365OAuthGrants,
   m365_domain_config: m365DomainConfig,
@@ -130,6 +122,12 @@ const SophosConfigSchema = z.object({
   clientSecret: z.string().optional()
 });
 
+const M365ConfigSchema = z.object({
+  clientId: z.string().optional(),
+  clientSecret: z.string().optional(),
+  tenantId: z.string().optional()
+});
+
 type SophosEndpointDeleteResult = {
   id: string;
   externalId: string;
@@ -146,6 +144,43 @@ type SophosEndpointTamperProtectionResult = SophosEndpointDeleteResult & {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function authMethodType(method: Record<string, unknown>): string {
+  const odataType = typeof method['@odata.type'] === 'string' ? method['@odata.type'] : '';
+  const typeMap: Record<string, string> = {
+    '#microsoft.graph.emailAuthenticationMethod': 'Email',
+    '#microsoft.graph.fido2AuthenticationMethod': 'FIDO2',
+    '#microsoft.graph.microsoftAuthenticatorAuthenticationMethod': 'Microsoft Authenticator',
+    '#microsoft.graph.phoneAuthenticationMethod': 'Phone',
+    '#microsoft.graph.softwareOathAuthenticationMethod': 'Software OATH',
+    '#microsoft.graph.windowsHelloForBusinessAuthenticationMethod': 'Windows Hello',
+    '#microsoft.graph.temporaryAccessPassAuthenticationMethod': 'Temporary Access Pass',
+    '#microsoft.graph.passwordAuthenticationMethod': 'Password'
+  };
+
+  return typeMap[odataType] ?? 'Unknown';
+}
+
+function m365ClientCredentials(
+  config: unknown,
+  envCredentials?: { clientId: string; clientSecret: string } | null
+): { clientId: string; clientSecret: string } | null {
+  const parsed = M365ConfigSchema.safeParse(config);
+  const clientId =
+    parsed.success && parsed.data.clientId
+      ? parsed.data.clientId
+      : (envCredentials?.clientId ?? process.env.MICROSOFT_CLIENT_ID);
+  const encryptedSecret = parsed.success ? parsed.data.clientSecret : undefined;
+  const clientSecret = encryptedSecret
+    ? (Encryption.decrypt(encryptedSecret, process.env.ENCRYPTION_KEY ?? '') ??
+      envCredentials?.clientSecret ??
+      process.env.MICROSOFT_CLIENT_SECRET)
+    : (envCredentials?.clientSecret ?? process.env.MICROSOFT_CLIENT_SECRET);
+
+  if (!clientId || !clientSecret) return null;
+
+  return { clientId, clientSecret };
 }
 
 export const vendorRouter = t.router({
@@ -545,6 +580,8 @@ export const vendorRouter = t.router({
     .input(z.object({ linkId: z.string().uuid(), identityId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const [
+        identityRows,
+        linkRows,
         roles,
         groups,
         directAssignments,
@@ -552,6 +589,27 @@ export const vendorRouter = t.router({
         roleAssignments,
         allUsersPolicies
       ] = await Promise.all([
+        ctx.db
+          .select({ externalId: m365Identities.externalId })
+          .from(m365Identities)
+          .where(
+            and(eq(m365Identities.id, input.identityId), eq(m365Identities.linkId, input.linkId))
+          )
+          .limit(1),
+        ctx.db
+          .select({
+            externalId: integrationLinks.externalId,
+            integrationConfig: integrations.config
+          })
+          .from(integrationLinks)
+          .innerJoin(integrations, eq(integrationLinks.integrationId, integrations.id))
+          .where(
+            and(
+              eq(integrationLinks.id, input.linkId),
+              eq(integrationLinks.integrationId, 'microsoft-365')
+            )
+          )
+          .limit(1),
         ctx.db
           .select({ id: m365Roles.id, name: m365Roles.name })
           .from(m365IdentityRoles)
@@ -646,6 +704,15 @@ export const vendorRouter = t.router({
           )
       ]);
 
+      const identity = identityRows[0];
+      const link = linkRows[0];
+      if (!identity) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'M365 identity not found' });
+      }
+      if (!link?.externalId) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'M365 integration link not found' });
+      }
+
       type PolicyRow = { id: string; name: string; policyState: string; included: boolean };
       const policyMap = new Map<string, PolicyRow>();
       for (const p of allUsersPolicies) policyMap.set(p.id, { ...p, included: true });
@@ -659,7 +726,42 @@ export const vendorRouter = t.router({
       }
       for (const p of directAssignments) policyMap.set(p.id, p);
 
-      return { roles, groups, policies: Array.from(policyMap.values()) };
+      let authMethods: Array<{ id: string; type: string; createdDateTime: string | null }> = [];
+      let authMethodsError: string | null = null;
+      const credentials = m365ClientCredentials(link.integrationConfig, ctx.microsoftCredentials);
+
+      if (!credentials) {
+        authMethodsError = 'Microsoft 365 credentials are not configured for live Graph lookup.';
+      } else {
+        try {
+          const connector = new M365Connector(
+            credentials.clientId,
+            credentials.clientSecret,
+            link.externalId
+          );
+          authMethods = (await connector.users.authMethods(identity.externalId)).value
+            .filter(
+              (method: Record<string, unknown>) =>
+                method['@odata.type'] !== '#microsoft.graph.passwordAuthenticationMethod'
+            )
+            .map((method: Record<string, unknown>) => ({
+              id: typeof method.id === 'string' ? method.id : randomUUID(),
+              type: authMethodType(method),
+              createdDateTime:
+                typeof method.createdDateTime === 'string' ? method.createdDateTime : null
+            }));
+        } catch (error) {
+          authMethodsError = errorMessage(error);
+        }
+      }
+
+      return {
+        roles,
+        groups,
+        policies: Array.from(policyMap.values()),
+        authMethods,
+        authMethodsError
+      };
     }),
 
   groupMembers: authProcedure
@@ -848,9 +950,7 @@ export const vendorRouter = t.router({
         .where(eq(integrationLinks.integrationId, input.integrationId))
         .orderBy(integrationLinks.name);
 
-      const siteIds = links
-        .map((link) => link.siteId)
-        .filter((id): id is string => !!id);
+      const siteIds = links.map((link) => link.siteId).filter((id): id is string => !!id);
 
       const siteRows = siteIds.length
         ? await ctx.db
@@ -877,14 +977,12 @@ export const vendorRouter = t.router({
         .catch(() => [] as { linkId: string | null; count: number; maxSeverity: number }[]);
 
       const findingsByLink = new Map(
-        findingRows
-          .filter((row) => row.linkId)
-          .map((row) => [row.linkId as string, row])
+        findingRows.filter((row) => row.linkId).map((row) => [row.linkId as string, row])
       );
 
       return links.map((link) => {
         const f = findingsByLink.get(link.id);
-        const siteName = link.siteId ? siteNameById.get(link.siteId) ?? null : null;
+        const siteName = link.siteId ? (siteNameById.get(link.siteId) ?? null) : null;
         return {
           linkId: link.id,
           siteId: link.siteId,
@@ -907,7 +1005,9 @@ export const vendorRouter = t.router({
       z.object({
         linkId: z.string().uuid(),
         limit: z.number().int().min(1).max(500).default(200),
-        status: z.array(z.enum(['open', 'acknowledged', 'suppressed', 'resolved', 'regressed'])).optional()
+        status: z
+          .array(z.enum(['open', 'acknowledged', 'suppressed', 'resolved', 'regressed']))
+          .optional()
       })
     )
     .query(async ({ ctx, input }) => {

@@ -1,22 +1,9 @@
 import { M365GraphClient } from './graph-client.js';
 
-const AUTH_METHODS_BATCH_SIZE = 20;
-const AUTH_METHODS_BATCH_DELAY_MS = 1_000;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export interface DelegatedAdminRelationship {
   id: string;
   status: string;
   customer: { tenantId: string; displayName?: string } | null;
-}
-
-export interface AuthMethodsBatchResult {
-  userId: string;
-  data?: { value: Array<Record<string, unknown>> };
-  error?: unknown;
 }
 
 export class M365Connector {
@@ -30,10 +17,8 @@ export class M365Connector {
   readonly users: {
     listAll: (select: string) => Promise<unknown[]>;
     delta: (select: string, cursor?: string) => Promise<{ items: unknown[]; cursor?: string }>;
-    listIdsAll: () => Promise<Array<{ id: string }>>;
     listForInboxRules: () => Promise<Array<{ userPrincipalName: string; accountEnabled: boolean }>>;
     authMethods: (userId: string) => Promise<{ value: Array<Record<string, unknown>> }>;
-    authMethodsBatch: (userIds: string[]) => Promise<AuthMethodsBatchResult[]>;
   };
 
   readonly groups: {
@@ -114,9 +99,6 @@ export class M365Connector {
           cursor
         ),
 
-      listIdsAll: () =>
-        this.client.getAll<{ id: string }>('https://graph.microsoft.com/v1.0/users?$select=id'),
-
       listForInboxRules: () =>
         this.client.getAll<{ userPrincipalName: string; accountEnabled: boolean }>(
           'https://graph.microsoft.com/v1.0/users?$select=userPrincipalName,accountEnabled'
@@ -124,32 +106,10 @@ export class M365Connector {
 
       authMethods: (userId) =>
         this.client
-          .get<{ value: Array<Record<string, unknown>> }>(
-            `https://graph.microsoft.com/v1.0/users/${userId}/authentication/methods`
-          )
-          .then((r) => r.data),
-
-      authMethodsBatch: async (userIds) => {
-        const results: AuthMethodsBatchResult[] = [];
-        for (let index = 0; index < userIds.length; index += AUTH_METHODS_BATCH_SIZE) {
-          const batch = userIds.slice(index, index + AUTH_METHODS_BATCH_SIZE);
-          for (const userId of batch) {
-            try {
-              results.push({
-                userId,
-                data: await this.users.authMethods(userId)
-              });
-            } catch (error) {
-              results.push({ userId, error });
-            }
-          }
-
-          if (index + AUTH_METHODS_BATCH_SIZE < userIds.length) {
-            await sleep(AUTH_METHODS_BATCH_DELAY_MS);
-          }
-        }
-        return results;
-      }
+          .get<{
+            value: Array<Record<string, unknown>>;
+          }>(`https://graph.microsoft.com/v1.0/users/${userId}/authentication/methods`)
+          .then((r) => r.data)
     };
 
     this.groups = {

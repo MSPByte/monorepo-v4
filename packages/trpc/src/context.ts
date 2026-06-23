@@ -99,6 +99,13 @@ export async function createContext({ req, redis }: { req: IncomingRequest; redi
     ipAddress:
       headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? headers.get('x-real-ip') ?? null,
     userAgent: headers.get('user-agent') ?? null,
+    microsoftCredentials:
+      process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET
+        ? {
+            clientId: process.env.MICROSOFT_CLIENT_ID,
+            clientSecret: process.env.MICROSOFT_CLIENT_SECRET
+          }
+        : null,
     redis
   };
 }

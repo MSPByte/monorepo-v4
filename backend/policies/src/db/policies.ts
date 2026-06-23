@@ -7,7 +7,6 @@ import {
   entitySources,
   findings,
   integrationLinks,
-  m365AuthMethods,
   m365Devices,
   m365DomainConfig,
   m365ExchangeConfigs,
@@ -119,11 +118,6 @@ const tableRegistry: Record<string, TableEntry> = {
     table: m365ExchangeConfigs,
     resourceType: 'm365_exchange_config',
     resourceTable: 'vendors.m365_exchange_configs'
-  },
-  m365AuthMethods: {
-    table: m365AuthMethods,
-    resourceType: 'm365_auth_method',
-    resourceTable: 'vendors.m365_auth_methods'
   },
   m365Devices: {
     table: m365Devices,

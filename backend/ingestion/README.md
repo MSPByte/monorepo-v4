@@ -105,7 +105,6 @@ The first Microsoft 365 adapter covers Graph-backed facets:
 - `m365_groups`
 - `m365_licenses`
 - `m365_ca_policies`
-- `m365_auth_methods`
 - `m365_devices`
 - `m365_oauth_grants`
 - `m365_risky_users`

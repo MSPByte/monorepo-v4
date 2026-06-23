@@ -21,7 +21,7 @@
 
   const NOW = Date.now();
 
-  type Tab = 'Roles' | 'Groups' | 'Policies';
+  type Tab = 'Roles' | 'Groups' | 'Policies' | 'Auth Methods';
   let drawerTab = $state<Tab>('Roles');
 
   $effect(() => {
@@ -80,7 +80,12 @@
           </div>
           <div>
             <div class="text-muted-foreground mb-0.5">MFA</div>
-            <div class={cn('font-medium', identity.mfaEnforced === false ? 'text-destructive' : 'text-success')}>
+            <div
+              class={cn(
+                'font-medium',
+                identity.mfaEnforced === false ? 'text-destructive' : 'text-success'
+              )}
+            >
               {identity.mfaEnforced === false ? 'Disabled' : 'Enabled'}
             </div>
           </div>
@@ -89,14 +94,14 @@
         <!-- Tabs -->
         <div class="border-t pt-3">
           <div class="flex gap-1 border-b mb-3">
-            {#each (['Roles', 'Groups', 'Policies'] as const) as tab}
+            {#each ['Roles', 'Groups', 'Policies', 'Auth Methods'] as const as tab}
               <button
                 onclick={() => (drawerTab = tab)}
                 class={cn(
                   'px-3 py-2 text-sm font-medium border-b-2 transition-colors -mb-px',
                   drawerTab === tab
                     ? 'border-primary text-primary'
-                    : 'border-transparent text-muted-foreground hover:text-foreground',
+                    : 'border-transparent text-muted-foreground hover:text-foreground'
                 )}
               >
                 {tab}
@@ -140,16 +145,58 @@
                 <div class="text-sm text-muted-foreground p-2">No policies assigned</div>
               {:else}
                 {#each detailsQuery.data!.policies as policy}
-                  {@const stateLabel = policy.policyState === 'enabled' ? 'Enabled' : policy.policyState === 'enabledForReportingButNotEnforced' ? 'Report Only' : 'Disabled'}
-                  {@const stateClass = policy.policyState === 'enabled' ? 'text-success' : policy.policyState === 'enabledForReportingButNotEnforced' ? 'text-warning' : 'text-muted-foreground'}
-                  <div class="flex items-center justify-between p-2.5 rounded-md border text-sm gap-2">
+                  {@const stateLabel =
+                    policy.policyState === 'enabled'
+                      ? 'Enabled'
+                      : policy.policyState === 'enabledForReportingButNotEnforced'
+                        ? 'Report Only'
+                        : 'Disabled'}
+                  {@const stateClass =
+                    policy.policyState === 'enabled'
+                      ? 'text-success'
+                      : policy.policyState === 'enabledForReportingButNotEnforced'
+                        ? 'text-warning'
+                        : 'text-muted-foreground'}
+                  <div
+                    class="flex items-center justify-between p-2.5 rounded-md border text-sm gap-2"
+                  >
                     <span class="truncate">{policy.name}</span>
                     <div class="flex items-center gap-1.5 shrink-0">
                       <span class={cn('text-xs font-medium', stateClass)}>{stateLabel}</span>
-                      <span class={cn('text-xs font-medium', policy.included ? 'text-foreground' : 'text-muted-foreground')}>
+                      <span
+                        class={cn(
+                          'text-xs font-medium',
+                          policy.included ? 'text-foreground' : 'text-muted-foreground'
+                        )}
+                      >
                         {policy.included ? 'Included' : 'Excluded'}
                       </span>
                     </div>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          {:else if drawerTab === 'Auth Methods'}
+            <div class="flex flex-col gap-2">
+              {#if detailsQuery.isPending}
+                <div class="h-8 bg-muted rounded animate-pulse"></div>
+              {:else if detailsQuery.data?.authMethodsError}
+                <div class="text-sm text-muted-foreground p-2">
+                  {detailsQuery.data.authMethodsError}
+                </div>
+              {:else if (detailsQuery.data?.authMethods ?? []).length === 0}
+                <div class="text-sm text-muted-foreground p-2">No authentication methods found</div>
+              {:else}
+                {#each detailsQuery.data!.authMethods as method}
+                  <div
+                    class="flex items-center justify-between p-2.5 rounded-md border text-sm gap-2"
+                  >
+                    <span>{method.type}</span>
+                    <span class="text-xs text-muted-foreground shrink-0">
+                      {method.createdDateTime
+                        ? relativeTime(method.createdDateTime)
+                        : 'No created date'}
+                    </span>
                   </div>
                 {/each}
               {/if}

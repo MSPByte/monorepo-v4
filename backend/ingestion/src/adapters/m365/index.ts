@@ -1,42 +1,38 @@
-import {
-  M365Connector,
-  SkuCatalogService,
-  TenantCapabilityService,
-} from "@mspbyte/connectors";
-import { m365Roles } from "@mspbyte/drizzle";
+import { M365Connector, SkuCatalogService, TenantCapabilityService } from '@mspbyte/connectors';
+import { m365Roles } from '@mspbyte/drizzle';
 import {
   CAPABILITY_PLANS,
   M365_BLOAT_LICENSES,
-  type MSGraphCapabilities,
-} from "@mspbyte/shared/config/integrations/microsoft-365";
-import { getM365RawSchema, PROVIDER_IDS, ProviderFacet } from "@mspbyte/shared";
+  type MSGraphCapabilities
+} from '@mspbyte/shared/config/integrations/microsoft-365';
+import { getM365RawSchema, PROVIDER_IDS, ProviderFacet } from '@mspbyte/shared';
 import type {
   FetchPage,
   FetchResultCursor,
   IngestionAdapter,
   IngestionAdapterContext,
   RawRecordEnvelope,
-  SyncMode,
-} from "@mspbyte/pipeline";
-import { requireMicrosoftCredentials } from "../../env.js";
-import { logger } from "../../logger.js";
-import { serializeError } from "../../errors.js";
+  SyncMode
+} from '@mspbyte/pipeline';
+import { requireMicrosoftCredentials } from '../../env.js';
+import { logger } from '../../logger.js';
+import { serializeError } from '../../errors.js';
 
 const M365_IDENTITY_BASE_FIELDS = [
-  "id",
-  "displayName",
-  "userType",
-  "userPrincipalName",
-  "accountEnabled",
-  "assignedLicenses",
+  'id',
+  'displayName',
+  'userType',
+  'userPrincipalName',
+  'accountEnabled',
+  'assignedLicenses'
 ];
 const M365_IDENTITY_DELTA_FIELDS = [
-  "id",
-  "displayName",
-  "userType",
-  "userPrincipalName",
-  "accountEnabled",
-].join(",");
+  'id',
+  'displayName',
+  'userType',
+  'userPrincipalName',
+  'accountEnabled'
+].join(',');
 
 export const m365Adapter: IngestionAdapter = {
   providerId: PROVIDER_IDS.M365,
@@ -45,43 +41,25 @@ export const m365Adapter: IngestionAdapter = {
     ProviderFacet.M365Groups,
     ProviderFacet.M365Licenses,
     ProviderFacet.M365CAPolicies,
-    ProviderFacet.M365AuthMethods,
     ProviderFacet.M365Devices,
     ProviderFacet.M365OAuthGrants,
-    ProviderFacet.M365RiskyUsers,
+    ProviderFacet.M365RiskyUsers
   ],
 
-  async *fetch(
-    type,
-    mode,
-    cursor,
-    context,
-  ): AsyncGenerator<FetchPage, FetchResultCursor> {
+  async *fetch(type, mode, cursor, context): AsyncGenerator<FetchPage, FetchResultCursor> {
     const facet = type as ProviderFacet;
     const connector = createConnector(context);
     const capabilities = await getCapabilities(connector, context);
 
     switch (facet) {
       case ProviderFacet.M365Identities:
-        return yield* fetchIdentities(
-          connector,
-          mode,
-          cursor,
-          capabilities,
-          context,
-        );
+        return yield* fetchIdentities(connector, mode, cursor, capabilities, context);
       case ProviderFacet.M365Groups:
         return yield* fetchGroups(connector);
       case ProviderFacet.M365Licenses:
         return yield* fetchLicenses(connector);
       case ProviderFacet.M365CAPolicies:
-        return yield* fetchConditionalAccessPolicies(
-          connector,
-          context,
-          capabilities,
-        );
-      case ProviderFacet.M365AuthMethods:
-        return yield* fetchAuthMethods(connector, context);
+        return yield* fetchConditionalAccessPolicies(connector, context, capabilities);
       case ProviderFacet.M365Devices:
         return yield* fetchDevices(connector);
       case ProviderFacet.M365OAuthGrants:
@@ -91,7 +69,7 @@ export const m365Adapter: IngestionAdapter = {
       default:
         throw new Error(`Unsupported M365 ingestion facet: ${type}`);
     }
-  },
+  }
 };
 
 function createConnector(context: IngestionAdapterContext): M365Connector {
@@ -102,31 +80,28 @@ function createConnector(context: IngestionAdapterContext): M365Connector {
 
 function getTenantId(context: IngestionAdapterContext): string {
   const tenantId = context.linkMeta?.externalId;
-  if (typeof tenantId === "string" && tenantId.length > 0) return tenantId;
+  if (typeof tenantId === 'string' && tenantId.length > 0) return tenantId;
   throw new Error(`M365 tenant ID missing for link ${context.linkId}`);
 }
 
 async function getCapabilities(
   connector: M365Connector,
-  context: IngestionAdapterContext,
+  context: IngestionAdapterContext
 ): Promise<Record<MSGraphCapabilities, boolean>> {
   const configured = context.linkMeta?.capabilities;
-  if (
-    configured &&
-    typeof configured === "object" &&
-    !Array.isArray(configured)
-  ) {
+  if (configured && typeof configured === 'object' && !Array.isArray(configured)) {
     return configured as Record<MSGraphCapabilities, boolean>;
   }
 
   try {
-    return (await new TenantCapabilityService(connector).probe(
-      CAPABILITY_PLANS,
-    )) as Record<MSGraphCapabilities, boolean>;
+    return (await new TenantCapabilityService(connector).probe(CAPABILITY_PLANS)) as Record<
+      MSGraphCapabilities,
+      boolean
+    >;
   } catch (error) {
-    logger.warn("Failed to probe M365 tenant capabilities", {
+    logger.warn('Failed to probe M365 tenant capabilities', {
       linkId: context.linkId,
-      error: serializeError(error),
+      error: serializeError(error)
     });
     return {} as Record<MSGraphCapabilities, boolean>;
   }
@@ -137,39 +112,31 @@ async function* fetchIdentities(
   mode: SyncMode,
   cursor: string | undefined,
   capabilities: Record<MSGraphCapabilities, boolean>,
-  context: IngestionAdapterContext,
+  context: IngestionAdapterContext
 ): AsyncGenerator<FetchPage, FetchResultCursor> {
   const fields = [...M365_IDENTITY_BASE_FIELDS];
-  if (capabilities.signInActivity) fields.push("signInActivity");
+  if (capabilities.signInActivity) fields.push('signInActivity');
 
-  if (mode === "full" || !cursor) {
-    const users = (await connector.users.listAll(fields.join(","))) as Array<
+  if (mode === 'full' || !cursor) {
+    const users = (await connector.users.listAll(fields.join(','))) as Array<
       Record<string, unknown>
     >;
-    const roleTemplateIdsByUserId = await fetchRoleTemplateIdsByUserId(
-      connector,
-      context,
-    );
+    const roleTemplateIdsByUserId = await fetchRoleTemplateIdsByUserId(connector, context);
     const records = users.map((user) => {
-      const userId = typeof user.id === "string" ? user.id : "";
+      const userId = typeof user.id === 'string' ? user.id : '';
       const roleTemplateIds = roleTemplateIdsByUserId.get(userId) ?? [];
       return {
         ...user,
-        _role_template_ids: roleTemplateIds,
+        _role_template_ids: roleTemplateIds
       };
     });
     yield page(ProviderFacet.M365Identities, records);
 
-    const cursorResult = await connector.users.delta(
-      M365_IDENTITY_DELTA_FIELDS,
-    );
+    const cursorResult = await connector.users.delta(M365_IDENTITY_DELTA_FIELDS);
     return cursorResult.cursor;
   }
 
-  const result = await connector.users.delta(
-    M365_IDENTITY_DELTA_FIELDS,
-    cursor,
-  );
+  const result = await connector.users.delta(M365_IDENTITY_DELTA_FIELDS, cursor);
   yield page(ProviderFacet.M365Identities, result.items);
   return result.cursor;
 }
@@ -180,7 +147,7 @@ type M365RoleTemplateRow = {
 
 async function fetchRoleTemplateIdsByUserId(
   connector: M365Connector,
-  context: IngestionAdapterContext,
+  context: IngestionAdapterContext
 ): Promise<Map<string, string[]>> {
   const roleRows = await m365RoleTemplates(context);
   const roleTemplateIdsByUserId = new Map<string, string[]>();
@@ -190,13 +157,10 @@ async function fetchRoleTemplateIdsByUserId(
     try {
       members = await connector.directoryRoles.members(role.templateId);
     } catch (error) {
-      logger.warn(
-        "Failed to fetch M365 directory role members during ingestion",
-        {
-          roleTemplateId: role.templateId,
-          error: serializeError(error),
-        },
-      );
+      logger.warn('Failed to fetch M365 directory role members during ingestion', {
+        roleTemplateId: role.templateId,
+        error: serializeError(error)
+      });
       continue;
     }
 
@@ -211,74 +175,64 @@ async function fetchRoleTemplateIdsByUserId(
   return roleTemplateIdsByUserId;
 }
 
-async function m365RoleTemplates(
-  context: IngestionAdapterContext,
-): Promise<M365RoleTemplateRow[]> {
+async function m365RoleTemplates(context: IngestionAdapterContext): Promise<M365RoleTemplateRow[]> {
   if (!context.tenantDb) return [];
   const db = context.tenantDb as any;
   return db.select({ templateId: m365Roles.templateId }).from(m365Roles);
 }
 
-async function* fetchGroups(
-  connector: M365Connector,
-): AsyncGenerator<FetchPage> {
+async function* fetchGroups(connector: M365Connector): AsyncGenerator<FetchPage> {
   const groups = (await connector.groups.listAll(
-    "id,displayName,description,groupTypes,mailEnabled,securityEnabled",
+    'id,displayName,description,groupTypes,mailEnabled,securityEnabled'
   )) as Array<Record<string, unknown>>;
   const records = await Promise.all(
     groups.map(async (group) => ({
       ...group,
-      _member_ids: await groupMemberIds(connector, group),
-    })),
+      _member_ids: await groupMemberIds(connector, group)
+    }))
   );
   yield page(ProviderFacet.M365Groups, records);
 }
 
 async function groupMemberIds(
   connector: M365Connector,
-  group: Record<string, unknown>,
+  group: Record<string, unknown>
 ): Promise<string[]> {
-  if (typeof group.id !== "string") return [];
+  if (typeof group.id !== 'string') return [];
 
   try {
     const members = await connector.groups.members(group.id);
     return members
       .map((member) => member.id)
-      .filter((id): id is string => typeof id === "string" && id.length > 0);
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
   } catch (error) {
-    logger.warn("Failed to fetch M365 group members during ingestion", {
+    logger.warn('Failed to fetch M365 group members during ingestion', {
       groupId: group.id,
-      error: serializeError(error),
+      error: serializeError(error)
     });
     return [];
   }
 }
 
-async function* fetchLicenses(
-  connector: M365Connector,
-): AsyncGenerator<FetchPage> {
+async function* fetchLicenses(connector: M365Connector): AsyncGenerator<FetchPage> {
   const [skus, skuNames] = await Promise.all([
     connector.subscribedSkus.listAll(),
-    SkuCatalogService.resolve(),
+    SkuCatalogService.resolve()
   ]);
   const records = skus
     .filter((sku) => {
       const record = sku as Record<string, unknown>;
-      return typeof record.skuPartNumber === "string"
+      return typeof record.skuPartNumber === 'string'
         ? !M365_BLOAT_LICENSES.includes(record.skuPartNumber)
         : true;
     })
     .map((sku) => {
       const record = sku as Record<string, unknown>;
       const skuPartNumber =
-        typeof record.skuPartNumber === "string"
-          ? record.skuPartNumber
-          : undefined;
+        typeof record.skuPartNumber === 'string' ? record.skuPartNumber : undefined;
       return {
         ...record,
-        _friendlyName: skuPartNumber
-          ? (skuNames.get(skuPartNumber) ?? skuPartNumber)
-          : record.skuId,
+        _friendlyName: skuPartNumber ? (skuNames.get(skuPartNumber) ?? skuPartNumber) : record.skuId
       };
     });
 
@@ -288,15 +242,12 @@ async function* fetchLicenses(
 async function* fetchConditionalAccessPolicies(
   connector: M365Connector,
   context: IngestionAdapterContext,
-  capabilities: Record<MSGraphCapabilities, boolean>,
+  capabilities: Record<MSGraphCapabilities, boolean>
 ): AsyncGenerator<FetchPage> {
   if (!capabilities.conditionalAccess) {
-    logger.warn(
-      "Skipping M365 CA policies because conditionalAccess capability is unavailable",
-      {
-        linkId: context.linkId,
-      },
-    );
+    logger.warn('Skipping M365 CA policies because conditionalAccess capability is unavailable', {
+      linkId: context.linkId
+    });
     return;
   }
 
@@ -304,73 +255,23 @@ async function* fetchConditionalAccessPolicies(
   yield page(ProviderFacet.M365CAPolicies, policies);
 }
 
-async function* fetchAuthMethods(
-  connector: M365Connector,
-  context: IngestionAdapterContext,
-): AsyncGenerator<FetchPage> {
-  const allUsers = await connector.users.listIdsAll();
-  const batchSize = 20;
-
-  for (let index = 0; index < allUsers.length; index += batchSize) {
-    const rows: unknown[] = [];
-    const batch = allUsers.slice(index, index + batchSize);
-    const results = await connector.users.authMethodsBatch(
-      batch.map((user) => user.id),
-    );
-
-    for (const result of results) {
-      if (result.error || !result.data) {
-        logger.warn("Failed to fetch M365 auth methods for user", {
-          linkId: context.linkId,
-          userId: result.userId,
-          error: serializeError(result.error),
-        });
-        continue;
-      }
-
-      for (const method of result.data.value) {
-        const odataType =
-          typeof method["@odata.type"] === "string"
-            ? method["@odata.type"]
-            : "";
-        if (odataType === "#microsoft.graph.passwordAuthenticationMethod")
-          continue;
-
-        rows.push({
-          ...method,
-          _identity_external_id: result.userId,
-          _method_type: authMethodType(odataType),
-        });
-      }
-    }
-
-    if (rows.length > 0) yield page(ProviderFacet.M365AuthMethods, rows);
-  }
-}
-
-async function* fetchDevices(
-  connector: M365Connector,
-): AsyncGenerator<FetchPage> {
+async function* fetchDevices(connector: M365Connector): AsyncGenerator<FetchPage> {
   const select =
-    "id,displayName,operatingSystem,operatingSystemVersion,isCompliant,isManaged,deviceOwnership,approximateLastSignInDateTime,registrationDateTime";
+    'id,displayName,operatingSystem,operatingSystemVersion,isCompliant,isManaged,deviceOwnership,approximateLastSignInDateTime,registrationDateTime';
   const devices = await connector.devices.listAll(select);
   yield page(ProviderFacet.M365Devices, devices);
 }
 
 async function* fetchOAuthGrants(
   connector: M365Connector,
-  context: IngestionAdapterContext,
+  context: IngestionAdapterContext
 ): AsyncGenerator<FetchPage> {
-  const grants = (await connector.oauthGrants.listAll()) as Array<
-    Record<string, unknown>
-  >;
+  const grants = (await connector.oauthGrants.listAll()) as Array<Record<string, unknown>>;
   const servicePrincipalIds = new Set<string>();
 
   for (const grant of grants) {
-    if (typeof grant.clientId === "string")
-      servicePrincipalIds.add(grant.clientId);
-    if (typeof grant.resourceId === "string")
-      servicePrincipalIds.add(grant.resourceId);
+    if (typeof grant.clientId === 'string') servicePrincipalIds.add(grant.clientId);
+    if (typeof grant.resourceId === 'string') servicePrincipalIds.add(grant.resourceId);
   }
 
   const displayNames = new Map<string, string>();
@@ -378,22 +279,16 @@ async function* fetchOAuthGrants(
     try {
       const servicePrincipals = await connector.directoryObjects.getByIds(
         [...servicePrincipalIds],
-        ["servicePrincipal"],
+        ['servicePrincipal']
       );
       for (const servicePrincipal of servicePrincipals) {
-        displayNames.set(
-          servicePrincipal.id,
-          servicePrincipal.displayName ?? "",
-        );
+        displayNames.set(servicePrincipal.id, servicePrincipal.displayName ?? '');
       }
     } catch (error) {
-      logger.warn(
-        "Failed to resolve M365 OAuth grant service principal display names",
-        {
-          linkId: context.linkId,
-          error: serializeError(error),
-        },
-      );
+      logger.warn('Failed to resolve M365 OAuth grant service principal display names', {
+        linkId: context.linkId,
+        error: serializeError(error)
+      });
     }
   }
 
@@ -402,29 +297,22 @@ async function* fetchOAuthGrants(
     grants.map((grant) => ({
       ...grant,
       clientDisplayName:
-        typeof grant.clientId === "string"
-          ? (displayNames.get(grant.clientId) ?? null)
-          : null,
+        typeof grant.clientId === 'string' ? (displayNames.get(grant.clientId) ?? null) : null,
       resourceDisplayName:
-        typeof grant.resourceId === "string"
-          ? (displayNames.get(grant.resourceId) ?? null)
-          : null,
-    })),
+        typeof grant.resourceId === 'string' ? (displayNames.get(grant.resourceId) ?? null) : null
+    }))
   );
 }
 
 async function* fetchRiskyUsers(
   connector: M365Connector,
   context: IngestionAdapterContext,
-  capabilities: Record<MSGraphCapabilities, boolean>,
+  capabilities: Record<MSGraphCapabilities, boolean>
 ): AsyncGenerator<FetchPage> {
   if (!capabilities.identityProtection) {
-    logger.warn(
-      "Skipping M365 risky users because identityProtection capability is unavailable",
-      {
-        linkId: context.linkId,
-      },
-    );
+    logger.warn('Skipping M365 risky users because identityProtection capability is unavailable', {
+      linkId: context.linkId
+    });
     return;
   }
 
@@ -435,13 +323,10 @@ async function* fetchRiskyUsers(
     yield page(ProviderFacet.M365RiskyUsers, users);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("403")) {
-      logger.warn(
-        "Skipping M365 risky users because IdentityRiskyUser.Read.All is unavailable",
-        {
-          linkId: context.linkId,
-        },
-      );
+    if (message.includes('403')) {
+      logger.warn('Skipping M365 risky users because IdentityRiskyUser.Read.All is unavailable', {
+        linkId: context.linkId
+      });
       return;
     }
 
@@ -451,13 +336,13 @@ async function* fetchRiskyUsers(
 
 function page(facet: ProviderFacet, records: unknown[]): FetchPage {
   return {
-    records: records.map((record) => envelope(facet, record)),
+    records: records.map((record) => envelope(facet, record))
   };
 }
 
 function envelope(facet: ProviderFacet, record: unknown): RawRecordEnvelope {
   const raw = asRecord(record);
-  const removed = raw["@removed"] != null;
+  const removed = raw['@removed'] != null;
 
   if (!removed) {
     const schema = getM365RawSchema(facet);
@@ -466,27 +351,20 @@ function envelope(facet: ProviderFacet, record: unknown): RawRecordEnvelope {
 
   return {
     externalId: externalId(facet, raw),
-    op: removed ? "delete" : "upsert",
-    payload: raw,
+    op: removed ? 'delete' : 'upsert',
+    payload: raw
   };
 }
 
-function externalId(
-  facet: ProviderFacet,
-  record: Record<string, unknown>,
-): string {
-  if (facet === ProviderFacet.M365AuthMethods) {
-    return `${stringField(record, "_identity_external_id")}_${stringField(record, "id")}`;
-  }
+function externalId(facet: ProviderFacet, record: Record<string, unknown>): string {
+  if (facet === ProviderFacet.M365Licenses) return stringField(record, 'skuId');
 
-  if (facet === ProviderFacet.M365Licenses) return stringField(record, "skuId");
-
-  return stringField(record, "id");
+  return stringField(record, 'id');
 }
 
 function stringField(record: Record<string, unknown>, key: string): string {
   const value = record[key];
-  if (typeof value !== "string" || value.length === 0) {
+  if (typeof value !== 'string' || value.length === 0) {
     throw new Error(`M365 record missing required string field ${key}`);
   }
 
@@ -494,27 +372,9 @@ function stringField(record: Record<string, unknown>, key: string): string {
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("M365 record is not an object");
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('M365 record is not an object');
   }
 
   return value as Record<string, unknown>;
-}
-
-function authMethodType(odataType: string): string {
-  const typeMap: Record<string, string> = {
-    "#microsoft.graph.emailAuthenticationMethod": "Email",
-    "#microsoft.graph.fido2AuthenticationMethod": "FIDO2",
-    "#microsoft.graph.microsoftAuthenticatorAuthenticationMethod":
-      "Microsoft Authenticator",
-    "#microsoft.graph.phoneAuthenticationMethod": "Phone",
-    "#microsoft.graph.softwareOathAuthenticationMethod": "Software OAuth",
-    "#microsoft.graph.windowsHelloForBusinessAuthenticationMethod":
-      "Windows Hello",
-    "#microsoft.graph.temporaryAccessPassAuthenticationMethod":
-      "Temporary Pass",
-    "#microsoft.graph.passwordAuthenticationMethod": "Password",
-  };
-
-  return typeMap[odataType] ?? "Unknown";
 }

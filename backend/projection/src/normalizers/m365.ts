@@ -1,5 +1,4 @@
 import {
-  M365AuthMethodSchema,
   M365CAPolicySchema,
   M365DeviceSchema,
   M365GroupSchema,
@@ -8,7 +7,6 @@ import {
   M365SubscribedSkuSchema,
   M365UserSchema,
   ProviderFacet,
-  type M365AuthMethod,
   type M365CAPolicy,
   type M365Device,
   type M365Group,
@@ -30,8 +28,6 @@ export function normalizeM365(facet: string, raw: unknown): RecordValue {
       return normalizeLicense(M365SubscribedSkuSchema.parse(raw));
     case ProviderFacet.M365CAPolicies:
       return normalizePolicy(M365CAPolicySchema.parse(raw));
-    case ProviderFacet.M365AuthMethods:
-      return normalizeAuthMethod(M365AuthMethodSchema.parse(raw));
     case ProviderFacet.M365Devices:
       return normalizeDevice(M365DeviceSchema.parse(raw));
     case ProviderFacet.M365OAuthGrants:
@@ -101,16 +97,6 @@ function normalizePolicy(raw: M365CAPolicy): RecordValue {
     conditions: raw.conditions ?? null,
     grantControls: raw.grantControls ?? null,
     sessionControls: raw.sessionControls ?? null
-  };
-}
-
-function normalizeAuthMethod(raw: M365AuthMethod): RecordValue {
-  return {
-    externalId: `${raw._identity_external_id}_${raw.id}`,
-    identityExternalId: raw._identity_external_id,
-    type: raw._method_type,
-    creationDateAt: dateString(raw.createdDateTime),
-    meta: raw
   };
 }
 
