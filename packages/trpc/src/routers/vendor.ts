@@ -6,13 +6,17 @@ import {
   and,
   count,
   sql,
-  inArray
+  inArray,
+  desc
 } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import {
   customerLogs,
+  findings,
+  findingsWithContext,
   integrations,
   integrationLinks,
+  sites,
   m365Identities,
   m365Groups,
   m365Policies,
@@ -824,5 +828,125 @@ export const vendorRouter = t.router({
         licenses: { skus: Number(lic.skus), unused: Number(lic.unused) },
         policies: { total: Number(pol.total), enabled: Number(pol.enabled) }
       };
+    }),
+
+  linkOverview: authProcedure
+    .input(z.object({ integrationId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const links = await ctx.db
+        .select({
+          id: integrationLinks.id,
+          siteId: integrationLinks.siteId,
+          name: integrationLinks.name,
+          externalId: integrationLinks.externalId,
+          status: integrationLinks.status,
+          disposition: integrationLinks.disposition,
+          note: integrationLinks.note,
+          updatedAt: integrationLinks.updatedAt
+        })
+        .from(integrationLinks)
+        .where(eq(integrationLinks.integrationId, input.integrationId))
+        .orderBy(integrationLinks.name);
+
+      const siteIds = links
+        .map((link) => link.siteId)
+        .filter((id): id is string => !!id);
+
+      const siteRows = siteIds.length
+        ? await ctx.db
+            .select({ id: sites.id, name: sites.name })
+            .from(sites)
+            .where(inArray(sites.id, siteIds))
+        : [];
+      const siteNameById = new Map(siteRows.map((row) => [row.id, row.name]));
+
+      const findingRows = await ctx.db
+        .select({
+          linkId: findings.linkId,
+          count: sql<number>`count(*)::int`,
+          maxSeverity: sql<number>`max(${findings.severity})::int`
+        })
+        .from(findings)
+        .where(
+          and(
+            eq(findings.providerId, input.integrationId),
+            inArray(findings.status, ['open', 'acknowledged', 'regressed'])
+          )
+        )
+        .groupBy(findings.linkId)
+        .catch(() => [] as { linkId: string | null; count: number; maxSeverity: number }[]);
+
+      const findingsByLink = new Map(
+        findingRows
+          .filter((row) => row.linkId)
+          .map((row) => [row.linkId as string, row])
+      );
+
+      return links.map((link) => {
+        const f = findingsByLink.get(link.id);
+        const siteName = link.siteId ? siteNameById.get(link.siteId) ?? null : null;
+        return {
+          linkId: link.id,
+          siteId: link.siteId,
+          siteName: siteName ?? link.name ?? link.externalId ?? 'Unlinked',
+          linkName: link.name,
+          externalId: link.externalId,
+          status: link.status,
+          disposition: link.disposition,
+          dispositioned: link.status === 'dispositioned' || !!link.disposition,
+          note: link.note,
+          updatedAt: link.updatedAt,
+          findingCount: f?.count ?? 0,
+          maxSeverity: f?.maxSeverity ?? null
+        };
+      });
+    }),
+
+  linkFindings: authProcedure
+    .input(
+      z.object({
+        linkId: z.string().uuid(),
+        limit: z.number().int().min(1).max(500).default(200),
+        status: z.array(z.enum(['open', 'acknowledged', 'suppressed', 'resolved', 'regressed'])).optional()
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const statusFilter = input.status?.length
+        ? input.status
+        : (['open', 'acknowledged', 'regressed'] as const);
+
+      const rows = await ctx.db
+        .select({
+          id: findingsWithContext.id,
+          title: findingsWithContext.title,
+          severity: findingsWithContext.severity,
+          status: findingsWithContext.status,
+          siteId: findingsWithContext.siteId,
+          siteName: findingsWithContext.siteName,
+          linkId: findingsWithContext.linkId,
+          linkName: findingsWithContext.linkName,
+          resourceType: findingsWithContext.resourceType,
+          resourceTable: findingsWithContext.resourceTable,
+          resourceId: findingsWithContext.resourceId,
+          resourceName: findingsWithContext.resourceName,
+          policyId: findingsWithContext.policyId,
+          policyName: findingsWithContext.policyName,
+          evidenceSummary: findingsWithContext.evidenceSummary,
+          recommendation: findingsWithContext.recommendation,
+          firstSeenAt: findingsWithContext.firstSeenAt,
+          lastSeenAt: findingsWithContext.lastSeenAt
+        })
+        .from(findingsWithContext)
+        .where(
+          and(
+            eq(findingsWithContext.linkId, input.linkId),
+            inArray(findingsWithContext.status, [...statusFilter])
+          )
+        )
+        .orderBy(desc(findingsWithContext.severity), desc(findingsWithContext.lastSeenAt))
+        .limit(input.limit)
+        .catch(() => []);
+
+      return rows;
     })
 });

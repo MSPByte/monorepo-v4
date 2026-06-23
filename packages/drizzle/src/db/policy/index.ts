@@ -192,6 +192,12 @@ export const findings = policySchema.table(
       withTimezone: true,
       mode: 'string'
     }),
+    suppressedAt: timestamp('suppressed_at', {
+      withTimezone: true,
+      mode: 'string'
+    }),
+    suppressionReason: text('suppression_reason'),
+    suppressedBy: text('suppressed_by'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .notNull()
       .defaultNow(),
@@ -233,6 +239,10 @@ export const findingsWithContext = policySchema
     }).notNull(),
     evidenceSummary: text('evidence_summary').notNull(),
     recommendation: text('recommendation'),
+    suppressedUntil: timestamp('suppressed_until', { withTimezone: true, mode: 'string' }),
+    suppressedAt: timestamp('suppressed_at', { withTimezone: true, mode: 'string' }),
+    suppressionReason: text('suppression_reason'),
+    suppressedBy: text('suppressed_by'),
     firstSeenAt: timestamp('first_seen_at', { withTimezone: true, mode: 'string' }).notNull(),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' }).notNull()
   })
@@ -258,6 +268,10 @@ export const findingsWithContext = policySchema
       f.status,
       coalesce(f.summary, f.evidence->>'summary', 'Structured evidence is available on the finding.') as evidence_summary,
       f.recommendation,
+      f.suppressed_until,
+      f.suppressed_at,
+      f.suppression_reason,
+      f.suppressed_by,
       f.first_seen_at,
       f.last_seen_at
     from policy.findings f

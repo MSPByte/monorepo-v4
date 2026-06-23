@@ -73,7 +73,6 @@ const ROUTES: Route[] = [
     href: '/wiki',
     devOnly: true,
     permission: 'Assets.Read',
-    group: 'Setup',
   },
   {
     label: 'Pipeline',

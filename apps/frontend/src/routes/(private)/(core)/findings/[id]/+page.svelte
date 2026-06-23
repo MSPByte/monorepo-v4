@@ -2,6 +2,8 @@
   import { getContext } from 'svelte';
   import { page } from '$app/state';
   import { createQuery } from '@tanstack/svelte-query';
+  import { getLocalTimeZone, parseDate, today, type CalendarDate } from '@internationalized/date';
+  import { toast } from 'svelte-sonner';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import EntityHeader from '$lib/components/domain/entity-header.svelte';
@@ -13,6 +15,9 @@
   import Loader from '$lib/components/transition/loader.svelte';
   import { getPolicyTableShape } from '@mspbyte/shared';
   import { serializeFilters } from '$lib/components/data-table';
+  import DatePicker from '$lib/components/date-picker.svelte';
+  import { Button } from '$lib/components/ui/button';
+  import Textarea from '$lib/components/ui/textarea/textarea.svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const id = $derived(page.params.id ?? '');
@@ -37,6 +42,31 @@
     queryKey: ['findings.byId', id],
     queryFn: () => trpc.findings.byId.query({ id }),
   }));
+
+  let suppressionReason = $state('');
+  let suppressDate = $state<CalendarDate | undefined>(undefined);
+  let lifecycleBusy = $state(false);
+  let lifecycleError = $state<string | null>(null);
+
+  const suppressionPresets = [
+    { label: '1 week', days: 7 },
+    { label: '2 weeks', days: 14 },
+    { label: '1 month', days: 30 },
+    { label: '3 months', days: 90 },
+    { label: '6 months', days: 180 },
+  ];
+
+  const maxSuppressionDate = $derived(today(getLocalTimeZone()).add({ days: 180 }));
+
+  $effect(() => {
+    const finding = findingQuery.data;
+    if (!finding) return;
+    suppressionReason = finding.suppressionReason ?? '';
+    suppressDate = finding.suppressedUntil
+      ? calendarDateFromIso(finding.suppressedUntil)
+      : undefined;
+    lifecycleError = null;
+  });
 
   type Related = NonNullable<typeof findingQuery.data>['relatedBySite'][number];
 
@@ -104,6 +134,80 @@
         return { label, kind: 'scalar', value: displayText(value) };
       });
   }
+
+  function calendarDateFromIso(value: string): CalendarDate | undefined {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return undefined;
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return parseDate(`${year}-${month}-${day}`);
+  }
+
+  function applyPreset(days: number) {
+    suppressDate = today(getLocalTimeZone()).add({ days });
+  }
+
+  function isActivePreset(days: number): boolean {
+    if (!suppressDate) return false;
+    return suppressDate.toString() === today(getLocalTimeZone()).add({ days }).toString();
+  }
+
+  async function suppressFinding() {
+    const finding = findingQuery.data;
+    if (!finding) return;
+    const reason = suppressionReason.trim();
+    if (reason.length < 3) {
+      lifecycleError = 'Enter a suppression reason.';
+      return;
+    }
+    if (!suppressDate) {
+      lifecycleError = 'Choose how long to suppress this finding.';
+      return;
+    }
+
+    lifecycleBusy = true;
+    lifecycleError = null;
+    try {
+      const suppressedUntil = suppressDate.toDate(getLocalTimeZone());
+      if (suppressedUntil <= new Date()) {
+        lifecycleError = 'Choose a future suppression date.';
+        return;
+      }
+      await trpc.findings.suppress.mutate({
+        id: finding.id,
+        reason,
+        suppressedUntil: suppressedUntil.toISOString(),
+      });
+      await findingQuery.refetch();
+      toast.success('Finding suppressed');
+    } catch (error) {
+      lifecycleError = error instanceof Error ? error.message : 'Failed to suppress finding';
+      toast.error(lifecycleError);
+    } finally {
+      lifecycleBusy = false;
+    }
+  }
+
+  async function unsuppressFinding() {
+    const finding = findingQuery.data;
+    if (!finding) return;
+
+    lifecycleBusy = true;
+    lifecycleError = null;
+    try {
+      await trpc.findings.unsuppress.mutate({ id: finding.id });
+      suppressionReason = '';
+      suppressDate = undefined;
+      await findingQuery.refetch();
+      toast.success('Finding returned to active tracking');
+    } catch (error) {
+      lifecycleError = error instanceof Error ? error.message : 'Failed to unsuppress finding';
+      toast.error(lifecycleError);
+    } finally {
+      lifecycleBusy = false;
+    }
+  }
 </script>
 
 {#snippet relatedRow(item: Related)}
@@ -119,6 +223,13 @@
     </div>
     <FindingSeverityBadge severity={item.severity} />
   </a>
+{/snippet}
+
+{#snippet detailRow(label: string, value: string | null | undefined)}
+  <div>
+    <div class="text-xs text-muted-foreground">{label}</div>
+    <div class="wrap-break-word text-sm">{value || '—'}</div>
+  </div>
 {/snippet}
 
 {#if findingQuery.data}
@@ -249,6 +360,90 @@
           </Card.Header>
           <Card.Content class="text-sm text-muted-foreground">{finding.recommendation}</Card.Content
           >
+        </Card.Root>
+
+        <Card.Root class="rounded-lg">
+          <Card.Header>
+            <Card.Title>Suppression</Card.Title>
+            <Card.Description>
+              Suppressed findings are removed from active tracking until restored or the selected
+              date passes.
+            </Card.Description>
+          </Card.Header>
+          <Card.Content class="space-y-3 text-sm">
+            {#if finding.status === 'suppressed'}
+              <div class="rounded-md bg-muted p-3">
+                <div class="text-xs text-muted-foreground">Reason</div>
+                <div class="mt-1 wrap-break-word">{finding.suppressionReason ?? '—'}</div>
+                <div class="mt-3 grid gap-3">
+                  {@render detailRow('Suppressed by', finding.suppressedByLabel)}
+                  {@render detailRow(
+                    'Suppressed',
+                    finding.suppressedAt ? formatRelativeDate(finding.suppressedAt) : null
+                  )}
+                  {@render detailRow(
+                    'Suppressed until',
+                    finding.suppressedUntil
+                      ? formatRelativeDate(finding.suppressedUntil)
+                      : 'Indefinite'
+                  )}
+                </div>
+              </div>
+              <Button variant="outline" disabled={lifecycleBusy} onclick={unsuppressFinding}>
+                Return to active tracking
+              </Button>
+            {:else}
+              <div class="space-y-2">
+                <label
+                  class="text-xs font-medium text-muted-foreground"
+                  for="page-suppression-reason"
+                >
+                  Reason
+                </label>
+                <Textarea
+                  id="page-suppression-reason"
+                  bind:value={suppressionReason}
+                  placeholder="Document why this finding should not be actively tracked."
+                  rows={4}
+                />
+              </div>
+              <div class="space-y-2">
+                <span
+                  class="px-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+                >
+                  Quick select
+                </span>
+                <div class="flex flex-wrap gap-1.5">
+                  {#each suppressionPresets as preset}
+                    <button
+                      type="button"
+                      onclick={() => applyPreset(preset.days)}
+                      class={[
+                        'inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                        isActivePreset(preset.days)
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground',
+                      ].join(' ')}
+                    >
+                      {preset.label}
+                    </button>
+                  {/each}
+                </div>
+              </div>
+              <DatePicker
+                title="Suppress Until"
+                maxValue={maxSuppressionDate}
+                bind:value={suppressDate}
+              />
+              <Button disabled={!suppressDate || lifecycleBusy} onclick={suppressFinding}>
+                Suppress finding
+              </Button>
+            {/if}
+
+            {#if lifecycleError}
+              <p class="text-sm text-destructive">{lifecycleError}</p>
+            {/if}
+          </Card.Content>
         </Card.Root>
 
         {#if finding.relatedByPolicy.length}

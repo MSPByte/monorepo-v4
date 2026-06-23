@@ -13,12 +13,14 @@
 
   const tabs = [
     { label: 'Overview', href: '/microsoft-365', exact: true },
-    { label: 'Alerts', href: '/microsoft-365/alerts' },
-    ...M365_INTEGRATION_CONFIG.navigation.map((n) => ({
-      label: n.label,
-      href: `/microsoft-365${n.route}`,
-      disabled: () => n.isNullable && !scopeStore.currentLink,
-    })),
+    { label: 'Findings', href: '/microsoft-365/findings' },
+    ...M365_INTEGRATION_CONFIG.navigation
+      .filter((n) => n.route !== '/compliance')
+      .map((n) => ({
+        label: n.label,
+        href: `/microsoft-365${n.route}`,
+        disabled: () => n.isNullable && !scopeStore.currentLink,
+      })),
   ];
 
   const linksQuery = createQuery(() => ({

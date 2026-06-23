@@ -8,7 +8,7 @@
 
   const tabs = [
     { label: 'Overview', href: '/sophos-partner', exact: true },
-    { label: 'Alerts', href: '/sophos-partner/alerts' },
+    { label: 'Findings', href: '/sophos-partner/findings' },
     ...SOPHOS_PARTNER_CONFIG.navigation.map((n) => ({
       label: n.label,
       href: `/sophos-partner${n.route}`,

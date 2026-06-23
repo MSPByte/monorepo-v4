@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, ne, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, notInArray, sql } from 'drizzle-orm';
 import {
   assets,
   assetsWithSites,
@@ -30,9 +30,9 @@ import {
   sophosFirewalls,
   sophosLicenses,
   syncRuns,
-  syncRunStages,
-} from "@mspbyte/drizzle";
-import { FACET_TABLE_MAP, ProviderFacet } from "@mspbyte/shared";
+  syncRunStages
+} from '@mspbyte/drizzle';
+import { FACET_TABLE_MAP, ProviderFacet } from '@mspbyte/shared';
 
 type Db = any;
 type JsonObject = Record<string, unknown>;
@@ -90,102 +90,102 @@ type TableEntry = {
 const tableRegistry: Record<string, TableEntry> = {
   people: {
     table: peopleWithSites,
-    resourceType: "person",
-    resourceTable: "canonical.people",
+    resourceType: 'person',
+    resourceTable: 'canonical.people'
   },
   assets: {
     table: assetsWithSites,
-    resourceType: "asset",
-    resourceTable: "canonical.assets",
+    resourceType: 'asset',
+    resourceTable: 'canonical.assets'
   },
   m365Identities: {
     table: m365Identities,
-    resourceType: "m365_identity",
-    resourceTable: "vendors.m365_identities",
-    sourceTable: "m365_identities",
+    resourceType: 'm365_identity',
+    resourceTable: 'vendors.m365_identities',
+    sourceTable: 'm365_identities'
   },
   m365Policies: {
     table: m365Policies,
-    resourceType: "m365_policy",
-    resourceTable: "vendors.m365_policies",
-    sourceTable: "m365_policies",
+    resourceType: 'm365_policy',
+    resourceTable: 'vendors.m365_policies',
+    sourceTable: 'm365_policies'
   },
   m365Licenses: {
     table: m365Licenses,
-    resourceType: "m365_license",
-    resourceTable: "vendors.m365_licenses",
+    resourceType: 'm365_license',
+    resourceTable: 'vendors.m365_licenses'
   },
   m365ExchangeConfigs: {
     table: m365ExchangeConfigs,
-    resourceType: "m365_exchange_config",
-    resourceTable: "vendors.m365_exchange_configs",
+    resourceType: 'm365_exchange_config',
+    resourceTable: 'vendors.m365_exchange_configs'
   },
   m365AuthMethods: {
     table: m365AuthMethods,
-    resourceType: "m365_auth_method",
-    resourceTable: "vendors.m365_auth_methods",
+    resourceType: 'm365_auth_method',
+    resourceTable: 'vendors.m365_auth_methods'
   },
   m365Devices: {
     table: m365Devices,
-    resourceType: "m365_device",
-    resourceTable: "vendors.m365_devices",
-    sourceTable: "m365_devices",
+    resourceType: 'm365_device',
+    resourceTable: 'vendors.m365_devices',
+    sourceTable: 'm365_devices'
   },
   m365OAuthGrants: {
     table: m365OAuthGrants,
-    resourceType: "m365_oauth_grant",
-    resourceTable: "vendors.m365_oauth_grants",
+    resourceType: 'm365_oauth_grant',
+    resourceTable: 'vendors.m365_oauth_grants'
   },
   m365DomainConfig: {
     table: m365DomainConfig,
-    resourceType: "m365_domain_config",
-    resourceTable: "vendors.m365_domain_config",
+    resourceType: 'm365_domain_config',
+    resourceTable: 'vendors.m365_domain_config'
   },
   m365TeamsConfig: {
     table: m365TeamsConfig,
-    resourceType: "m365_teams_config",
-    resourceTable: "vendors.m365_teams_config",
+    resourceType: 'm365_teams_config',
+    resourceTable: 'vendors.m365_teams_config'
   },
   m365RiskyUsers: {
     table: m365RiskyUsers,
-    resourceType: "m365_risky_user",
-    resourceTable: "vendors.m365_risky_users",
+    resourceType: 'm365_risky_user',
+    resourceTable: 'vendors.m365_risky_users'
   },
   m365MailboxForwarding: {
     table: m365MailboxForwarding,
-    resourceType: "m365_mailbox_forwarding",
-    resourceTable: "vendors.m365_mailbox_forwarding",
+    resourceType: 'm365_mailbox_forwarding',
+    resourceTable: 'vendors.m365_mailbox_forwarding'
   },
   m365InboxRules: {
     table: m365InboxRules,
-    resourceType: "m365_inbox_rule",
-    resourceTable: "vendors.m365_inbox_rules",
+    resourceType: 'm365_inbox_rule',
+    resourceTable: 'vendors.m365_inbox_rules'
   },
   sophosEndpoints: {
     table: sophosEndpoints,
-    resourceType: "sophos_endpoint",
-    resourceTable: "vendors.sophos_endpoints",
+    resourceType: 'sophos_endpoint',
+    resourceTable: 'vendors.sophos_endpoints'
   },
   sophosFirewalls: {
     table: sophosFirewalls,
-    resourceType: "sophos_firewall",
-    resourceTable: "vendors.sophos_firewalls",
+    resourceType: 'sophos_firewall',
+    resourceTable: 'vendors.sophos_firewalls'
   },
   sophosLicenses: {
     table: sophosLicenses,
-    resourceType: "sophos_license",
-    resourceTable: "vendors.sophos_licenses",
+    resourceType: 'sophos_license',
+    resourceTable: 'vendors.sophos_licenses'
   },
   dattoEndpoints: {
     table: dattoEndpoints,
-    resourceType: "datto_endpoint",
-    resourceTable: "vendors.datto_endpoints",
+    resourceType: 'datto_endpoint',
+    resourceTable: 'vendors.datto_endpoints'
   },
   coveEndpoints: {
     table: coveEndpoints,
-    resourceType: "cove_endpoint",
-    resourceTable: "vendors.cove_endpoints",
-  },
+    resourceType: 'cove_endpoint',
+    resourceTable: 'vendors.cove_endpoints'
+  }
 };
 
 export async function startPolicyStage(
@@ -195,12 +195,9 @@ export async function startPolicyStage(
     provider: string;
     type: string;
     bullmqJobId: string;
-  },
+  }
 ): Promise<string> {
-  await db
-    .update(syncRuns)
-    .set({ status: "policy" })
-    .where(eq(syncRuns.id, params.syncRunId));
+  await db.update(syncRuns).set({ status: 'policy' }).where(eq(syncRuns.id, params.syncRunId));
 
   const [row] = await db
     .insert(syncRunStages)
@@ -209,9 +206,9 @@ export async function startPolicyStage(
       integrationId: params.provider,
       bullmqJobId: params.bullmqJobId,
       type: params.type,
-      stage: "policy",
-      status: "running",
-      startedAt: new Date().toISOString(),
+      stage: 'policy',
+      status: 'running',
+      startedAt: new Date().toISOString()
     })
     .returning({ id: syncRunStages.id });
 
@@ -222,25 +219,25 @@ export async function completePolicyStage(
   db: Db,
   stageId: string,
   syncRunId: string,
-  metrics: PolicyMetrics,
+  metrics: PolicyMetrics
 ): Promise<void> {
   await db
     .update(syncRunStages)
     .set({
-      status: "completed",
+      status: 'completed',
       finishedAt: new Date().toISOString(),
       recordsIn: metrics.policiesEvaluated,
       recordsOut: metrics.findingsOpen,
       createdCt: metrics.findingsOpen,
       updatedCt: metrics.findingsResolved,
       failedCt: metrics.failedCt,
-      metrics,
+      metrics
     })
     .where(eq(syncRunStages.id, stageId));
 
   await db
     .update(syncRuns)
-    .set({ status: "completed", finishedAt: new Date().toISOString() })
+    .set({ status: 'completed', finishedAt: new Date().toISOString() })
     .where(eq(syncRuns.id, syncRunId));
 }
 
@@ -248,20 +245,20 @@ export async function failPolicyStage(
   db: Db,
   stageId: string,
   syncRunId: string,
-  error: unknown,
+  error: unknown
 ): Promise<void> {
   await db
     .update(syncRunStages)
     .set({
-      status: "failed",
+      status: 'failed',
       finishedAt: new Date().toISOString(),
-      error: error instanceof Error ? error.message : String(error),
+      error: error instanceof Error ? error.message : String(error)
     })
     .where(eq(syncRunStages.id, stageId));
 
   await db
     .update(syncRuns)
-    .set({ status: "policy_failed", finishedAt: new Date().toISOString() })
+    .set({ status: 'policy_failed', finishedAt: new Date().toISOString() })
     .where(eq(syncRuns.id, syncRunId));
 }
 
@@ -273,14 +270,14 @@ export async function evaluatePolicies(
     provider: string;
     type: string;
     syncRunId: string;
-  },
+  }
 ): Promise<PolicyMetrics> {
   const metrics: PolicyMetrics = {
     assignmentsEvaluated: 0,
     policiesEvaluated: 0,
     findingsOpen: 0,
     findingsResolved: 0,
-    failedCt: 0,
+    failedCt: 0
   };
   const activeAssignments = await loadAssignmentsForRun(db, params);
   const setItems = (await db.select().from(policySetItems)) as PolicySetItemRow[];
@@ -289,7 +286,7 @@ export async function evaluatePolicies(
     .from(policies)
     .where(eq(policies.enabled, true))) as PolicyRow[];
   const policyById = new Map<string, PolicyRow>(
-    policyRows.map((policy: PolicyRow) => [policy.id, policy]),
+    policyRows.map((policy: PolicyRow) => [policy.id, policy])
   );
   const setPolicyIds = groupSetItems(setItems);
   const scope = await loadScopeContext(db, params.linkId, params.siteId);
@@ -298,7 +295,7 @@ export async function evaluatePolicies(
   for (const assignment of activeAssignments) {
     metrics.assignmentsEvaluated++;
     const policyIds =
-      assignment.subjectType === "policy_set" && assignment.policySetId
+      assignment.subjectType === 'policy_set' && assignment.policySetId
         ? (setPolicyIds.get(assignment.policySetId) ?? [])
         : assignment.policyId
           ? [assignment.policyId]
@@ -314,12 +311,12 @@ export async function evaluatePolicies(
       const context: PolicyContext = {
         assignment,
         policy,
-        policySetId: assignment.subjectType === "policy_set" ? assignment.policySetId : null,
+        policySetId: assignment.subjectType === 'policy_set' ? assignment.policySetId : null,
         linkId: params.linkId,
         siteId: params.siteId,
         provider: params.provider,
         syncRunId: params.syncRunId,
-        scope,
+        scope
       };
       const produced = await evaluatePolicy(db, context);
       await upsertProducedFindings(db, produced);
@@ -334,7 +331,7 @@ export async function evaluatePolicies(
 async function loadScopeContext(
   db: Db,
   linkId: string | undefined,
-  siteId: string | undefined,
+  siteId: string | undefined
 ): Promise<JsonObject> {
   const scope: JsonObject = {};
   if (linkId) {
@@ -343,7 +340,7 @@ async function loadScopeContext(
         id: integrationLinks.id,
         name: integrationLinks.name,
         externalId: integrationLinks.externalId,
-        integrationId: integrationLinks.integrationId,
+        integrationId: integrationLinks.integrationId
       })
       .from(integrationLinks)
       .where(eq(integrationLinks.id, linkId))
@@ -363,28 +360,21 @@ async function loadScopeContext(
 
 async function loadAssignmentsForRun(
   db: Db,
-  params: { linkId: string; siteId?: string },
+  params: { linkId: string; siteId?: string }
 ): Promise<AssignmentRow[]> {
-  const rows = await db
-    .select()
-    .from(policyAssignments)
-    .where(eq(policyAssignments.enabled, true));
-  const siteIds = params.siteId
-    ? await siteScopeIds(db, params.siteId)
-    : new Set<string>();
-  const groupIds = params.siteId
-    ? await siteGroupIdsForSite(db, params.siteId)
-    : new Set<string>();
+  const rows = await db.select().from(policyAssignments).where(eq(policyAssignments.enabled, true));
+  const siteIds = params.siteId ? await siteScopeIds(db, params.siteId) : new Set<string>();
+  const groupIds = params.siteId ? await siteGroupIdsForSite(db, params.siteId) : new Set<string>();
 
   return rows.filter((assignment: AssignmentRow) => {
-    if (assignment.scopeType === "global") return true;
-    if (assignment.scopeType === "integration_link") return assignment.linkId === params.linkId;
-    if (assignment.scopeType === "site") {
+    if (assignment.scopeType === 'global') return true;
+    if (assignment.scopeType === 'integration_link') return assignment.linkId === params.linkId;
+    if (assignment.scopeType === 'site') {
       if (!params.siteId || !assignment.siteId) return false;
       if (assignment.siteId === params.siteId) return true;
       return assignment.includeChildSites && siteIds.has(assignment.siteId);
     }
-    if (assignment.scopeType === "site_group") {
+    if (assignment.scopeType === 'site_group') {
       return !!assignment.siteGroupId && groupIds.has(assignment.siteGroupId);
     }
     return false;
@@ -397,7 +387,9 @@ async function siteScopeIds(db: Db, currentSiteId: string): Promise<Set<string>>
   let cursor: string | null | undefined = currentSiteId;
 
   while (cursor) {
-    const site = allSites.find((row: { id: string; parentSiteId: string | null }) => row.id === cursor);
+    const site = allSites.find(
+      (row: { id: string; parentSiteId: string | null }) => row.id === cursor
+    );
     cursor = site?.parentSiteId;
     if (cursor) ancestors.add(cursor);
   }
@@ -413,15 +405,12 @@ async function siteGroupIdsForSite(db: Db, siteId: string): Promise<Set<string>>
   return new Set(rows.map((row: { siteGroupId: string }) => row.siteGroupId));
 }
 
-function policyTargetsFacet(
-  policy: PolicyRow,
-  triggerTable: string | undefined,
-): boolean {
+function policyTargetsFacet(policy: PolicyRow, triggerTable: string | undefined): boolean {
   if (!triggerTable) return true;
   const definition = policy.definition;
   if (!isObject(definition)) return true;
   const target = definition.table;
-  if (typeof target !== "string") return true;
+  if (typeof target !== 'string') return true;
   return target === triggerTable;
 }
 
@@ -436,16 +425,13 @@ function groupSetItems(rows: PolicySetItemRow[]): Map<string, string[]> {
 }
 
 async function evaluatePolicy(db: Db, context: PolicyContext): Promise<ProducedFinding[]> {
-  const definition = mergeParameters(
-    context.policy.definition,
-    context.assignment.parameters,
-  );
+  const definition = mergeParameters(context.policy.definition, context.assignment.parameters);
   if (!isObject(definition)) return [];
 
   switch (definition.kind) {
-    case "tableThreshold":
+    case 'tableThreshold':
       return evaluateTableThreshold(db, context, definition);
-    case "rowExpectation":
+    case 'rowExpectation':
       return evaluateRowExpectation(db, context, definition);
     default:
       return [];
@@ -455,9 +441,9 @@ async function evaluatePolicy(db: Db, context: PolicyContext): Promise<ProducedF
 async function evaluateTableThreshold(
   db: Db,
   context: PolicyContext,
-  definition: JsonObject,
+  definition: JsonObject
 ): Promise<ProducedFinding[]> {
-  const tableName = String(definition.table ?? "");
+  const tableName = String(definition.table ?? '');
   const entry = tableRegistry[tableName];
   if (!entry) return [];
 
@@ -472,16 +458,14 @@ async function evaluateTableThreshold(
     expectations.length === 0
       ? scoped
       : scoped.filter((row) =>
-          expectations.every((expectation) =>
-            matchesCondition(row, expectation),
-          ),
+          expectations.every((expectation) => matchesCondition(row, expectation))
         );
   const threshold = numberValue(definition.threshold, 1);
   if (matching.length >= threshold) return [];
 
   return [
     buildFinding(context, {
-      resourceType: String(definition.resourceType ?? "integration_link"),
+      resourceType: String(definition.resourceType ?? 'integration_link'),
       resourceTable: entry.resourceTable,
       resourceId: context.linkId ?? context.siteId ?? context.assignment.id,
       resourceExternalId: null,
@@ -491,25 +475,25 @@ async function evaluateTableThreshold(
       summary: renderTemplate(stringValue(definition.summary, null), context.scope),
       recommendation: renderTemplate(context.policy.recommendation, context.scope),
       evidence: {
-        kind: "tableThreshold",
+        kind: 'tableThreshold',
         table: tableName,
         threshold,
         scoped: scoped.length,
         matched: matching.length,
         filter: definition.filter ?? null,
         expectations: expectations.length ? expectations : null,
-        sample: matching.slice(0, 10).map(compactRow),
-      },
-    }),
+        sample: matching.slice(0, 10).map(compactRow)
+      }
+    })
   ];
 }
 
 async function evaluateRowExpectation(
   db: Db,
   context: PolicyContext,
-  definition: JsonObject,
+  definition: JsonObject
 ): Promise<ProducedFinding[]> {
-  const tableName = String(definition.table ?? "");
+  const tableName = String(definition.table ?? '');
   const entry = tableRegistry[tableName];
   if (!entry) return [];
 
@@ -538,13 +522,13 @@ async function evaluateRowExpectation(
         summary: renderTemplate(stringValue(definition.summary, null), renderCtx),
         recommendation: renderTemplate(context.policy.recommendation, renderCtx),
         evidence: {
-          kind: "rowExpectation",
+          kind: 'rowExpectation',
           table: tableName,
           failed,
-          row: compactRow(row),
-        },
+          row: compactRow(row)
+        }
       });
-    }),
+    })
   );
 
   return findingsForRows.filter((finding): finding is ProducedFinding => finding !== null);
@@ -554,7 +538,7 @@ async function findingResourceForRow(
   db: Db,
   entry: TableEntry,
   row: JsonObject,
-  definition: JsonObject,
+  definition: JsonObject
 ): Promise<{
   resourceType: string;
   resourceTable: string | null;
@@ -564,14 +548,14 @@ async function findingResourceForRow(
   const canonicalResource = isObject(definition.canonicalResource)
     ? definition.canonicalResource
     : null;
-  const canonicalType = String(canonicalResource?.type ?? "");
-  const rowId = String(readPath(row, "id") ?? "");
+  const canonicalType = String(canonicalResource?.type ?? '');
+  const rowId = String(readPath(row, 'id') ?? '');
 
-  if (entry.sourceTable && rowId && (canonicalType === "person" || canonicalType === "asset")) {
+  if (entry.sourceTable && rowId && (canonicalType === 'person' || canonicalType === 'asset')) {
     const [source] = await db
       .select({
         canonicalId: entitySources.canonicalId,
-        externalId: entitySources.externalId,
+        externalId: entitySources.externalId
       })
       .from(entitySources)
       .where(
@@ -579,8 +563,8 @@ async function findingResourceForRow(
           eq(entitySources.vendorTable, entry.sourceTable),
           eq(entitySources.vendorRecordId, rowId),
           eq(entitySources.canonicalType, canonicalType),
-          eq(entitySources.status, "confirmed"),
-        ),
+          eq(entitySources.status, 'confirmed')
+        )
       )
       .limit(1)
       .catch(() => []);
@@ -588,9 +572,9 @@ async function findingResourceForRow(
     if (source?.canonicalId) {
       return {
         resourceType: canonicalType,
-        resourceTable: canonicalType === "person" ? "canonical.people" : "canonical.assets",
+        resourceTable: canonicalType === 'person' ? 'canonical.people' : 'canonical.assets',
         resourceId: String(source.canonicalId),
-        resourceExternalId: source.externalId ?? stringValue(readPath(row, "externalId"), null),
+        resourceExternalId: source.externalId ?? stringValue(readPath(row, 'externalId'), null)
       };
     }
   }
@@ -598,8 +582,8 @@ async function findingResourceForRow(
   return {
     resourceType: String(definition.resourceType ?? entry.resourceType),
     resourceTable: entry.resourceTable,
-    resourceId: String(readPath(row, "id") ?? readPath(row, "externalId") ?? "unknown"),
-    resourceExternalId: stringValue(readPath(row, "externalId"), null),
+    resourceId: String(readPath(row, 'id') ?? readPath(row, 'externalId') ?? 'unknown'),
+    resourceExternalId: stringValue(readPath(row, 'externalId'), null)
   };
 }
 
@@ -607,7 +591,7 @@ async function scopedRows(
   db: Db,
   entry: TableEntry,
   context: PolicyContext,
-  definition: JsonObject,
+  definition: JsonObject
 ): Promise<JsonObject[]> {
   const table = entry.table as Record<string, unknown>;
   const conditions: unknown[] = [];
@@ -631,48 +615,48 @@ async function scopedRows(
 
   const query = db.select().from(entry.table);
   const rows = (
-    conditions.length > 0
-      ? await query.where(and(...(conditions as never[])))
-      : await query
+    conditions.length > 0 ? await query.where(and(...(conditions as never[]))) : await query
   ) as JsonObject[];
 
   return rows.filter((row) => {
-    if (!linkColumn && readPath(row, "linkId") && context.linkId && readPath(row, "linkId") !== context.linkId) {
+    if (
+      !linkColumn &&
+      readPath(row, 'linkId') &&
+      context.linkId &&
+      readPath(row, 'linkId') !== context.linkId
+    ) {
       return false;
     }
-    if (!deletedAtColumn && readPath(row, "deletedAt")) return false;
-    if (!siteColumn && scope.siteId && readPath(row, "siteId") !== scope.siteId) return false;
+    if (!deletedAtColumn && readPath(row, 'deletedAt')) return false;
+    if (!siteColumn && scope.siteId && readPath(row, 'siteId') !== scope.siteId) return false;
     return true;
   });
 }
 
-function buildSqlFilter(
-  table: Record<string, unknown>,
-  filter: unknown,
-): unknown | null {
+function buildSqlFilter(table: Record<string, unknown>, filter: unknown): unknown | null {
   if (!isObject(filter)) return null;
-  const logic = String(filter.logic ?? "AND").toUpperCase();
-  if (logic !== "AND") return null;
+  const logic = String(filter.logic ?? 'AND').toUpperCase();
+  if (logic !== 'AND') return null;
   const conditions = Array.isArray(filter.conditions) ? filter.conditions : [];
   const pushed: unknown[] = [];
   for (const condition of conditions) {
     if (!isObject(condition)) continue;
-    const field = String(condition.field ?? "");
-    if (!field || field.includes(".")) continue;
+    const field = String(condition.field ?? '');
+    if (!field || field.includes('.')) continue;
     const column = table[field];
     if (!column) continue;
-    const op = String(condition.op ?? "eq");
+    const op = String(condition.op ?? 'eq');
     switch (op) {
-      case "eq":
+      case 'eq':
         pushed.push(eq(column as never, condition.value as never));
         break;
-      case "ne":
+      case 'ne':
         pushed.push(ne(column as never, condition.value as never));
         break;
-      case "exists":
+      case 'exists':
         pushed.push(sql`${column} is not null`);
         break;
-      case "missing":
+      case 'missing':
         pushed.push(sql`${column} is null`);
         break;
       default:
@@ -683,21 +667,18 @@ function buildSqlFilter(
   return and(...(pushed as never[]));
 }
 
-async function upsertProducedFindings(
-  db: Db,
-  produced: ProducedFinding[],
-): Promise<void> {
+async function upsertProducedFindings(db: Db, produced: ProducedFinding[]): Promise<void> {
   const now = new Date().toISOString();
   for (const finding of produced) {
     await db
       .insert(findings)
       .values({
         ...finding,
-        status: "open",
+        status: 'open',
         firstSeenAt: now,
         lastSeenAt: now,
         createdAt: now,
-        updatedAt: now,
+        updatedAt: now
       })
       .onConflictDoUpdate({
         target: findings.fingerprint,
@@ -714,15 +695,50 @@ async function upsertProducedFindings(
           title: finding.title,
           summary: finding.summary,
           severity: finding.severity,
-          status: sql`case when ${findings.status} = 'resolved' then 'regressed' else ${findings.status} end`,
+          status: sql`case
+            when ${findings.status} = 'resolved' then 'regressed'
+            when ${findings.status} = 'suppressed'
+              and ${findings.suppressedUntil} is not null
+              and ${findings.suppressedUntil} <= now()
+              then 'regressed'
+            else ${findings.status}
+          end`,
           evidence: finding.evidence,
           impact: finding.impact,
           remediation: finding.remediation,
           recommendation: finding.recommendation,
           lastSeenAt: now,
           resolvedAt: null,
-          updatedAt: now,
-        },
+          suppressedUntil: sql`case
+            when ${findings.status} = 'suppressed'
+              and ${findings.suppressedUntil} is not null
+              and ${findings.suppressedUntil} <= now()
+              then null
+            else ${findings.suppressedUntil}
+          end`,
+          suppressedAt: sql`case
+            when ${findings.status} = 'suppressed'
+              and ${findings.suppressedUntil} is not null
+              and ${findings.suppressedUntil} <= now()
+              then null
+            else ${findings.suppressedAt}
+          end`,
+          suppressionReason: sql`case
+            when ${findings.status} = 'suppressed'
+              and ${findings.suppressedUntil} is not null
+              and ${findings.suppressedUntil} <= now()
+              then null
+            else ${findings.suppressionReason}
+          end`,
+          suppressedBy: sql`case
+            when ${findings.status} = 'suppressed'
+              and ${findings.suppressedUntil} is not null
+              and ${findings.suppressedUntil} <= now()
+              then null
+            else ${findings.suppressedBy}
+          end`,
+          updatedAt: now
+        }
       });
   }
 }
@@ -730,7 +746,7 @@ async function upsertProducedFindings(
 async function resolveStaleFindings(
   db: Db,
   context: PolicyContext,
-  produced: ProducedFinding[],
+  produced: ProducedFinding[]
 ): Promise<number> {
   const now = new Date().toISOString();
   const fingerprints = produced.map((finding) => finding.fingerprint);
@@ -745,15 +761,13 @@ async function resolveStaleFindings(
     eq(findings.policyId, context.policy.id),
     eq(findings.policyAssignmentId, context.assignment.id),
     ...scopeFilters,
-    fingerprints.length > 0
-      ? notInArray(findings.fingerprint, fingerprints)
-      : sql`true`,
-    inArray(findings.status, ["open", "acknowledged", "regressed"]),
+    fingerprints.length > 0 ? notInArray(findings.fingerprint, fingerprints) : sql`true`,
+    inArray(findings.status, ['open', 'acknowledged', 'regressed'])
   );
 
   const resolved = await db
     .update(findings)
-    .set({ status: "resolved", resolvedAt: now, updatedAt: now })
+    .set({ status: 'resolved', resolvedAt: now, updatedAt: now })
     .where(base)
     .returning({ id: findings.id });
 
@@ -771,17 +785,17 @@ function buildFinding(
     summary: string | null;
     recommendation: string | null;
     evidence: JsonObject;
-  },
+  }
 ): ProducedFinding {
   const fingerprint = [
     context.assignment.id,
     context.policy.id,
     input.resourceType,
     input.resourceTable,
-    input.resourceId,
+    input.resourceId
   ]
     .filter(Boolean)
-    .join(":");
+    .join(':');
 
   return {
     policyId: context.policy.id,
@@ -801,7 +815,7 @@ function buildFinding(
     evidence: input.evidence,
     impact: {},
     remediation: {},
-    recommendation: input.recommendation,
+    recommendation: input.recommendation
   };
 }
 
@@ -814,47 +828,47 @@ function matchesFilter(row: JsonObject, filter: unknown): boolean {
   if (!filter) return true;
   if (!isObject(filter)) return false;
 
-  const logic = String(filter.logic ?? "AND").toUpperCase();
+  const logic = String(filter.logic ?? 'AND').toUpperCase();
   const conditions = Array.isArray(filter.conditions) ? filter.conditions : [];
   const results = conditions.map((condition) => matchesCondition(row, condition));
-  return logic === "OR" ? results.some(Boolean) : results.every(Boolean);
+  return logic === 'OR' ? results.some(Boolean) : results.every(Boolean);
 }
 
 function matchesCondition(row: JsonObject, condition: unknown): boolean {
   if (!isObject(condition)) return false;
-  const op = String(condition.op ?? "eq");
-  const field = String(condition.field ?? "");
+  const op = String(condition.op ?? 'eq');
+  const field = String(condition.field ?? '');
   const actual = readPath(row, field);
   const expected = condition.value;
 
   switch (op) {
-    case "eq":
+    case 'eq':
       return actual === expected;
-    case "ne":
+    case 'ne':
       return actual !== expected;
-    case "exists":
+    case 'exists':
       return actual !== undefined && actual !== null;
-    case "missing":
+    case 'missing':
       return actual === undefined || actual === null;
-    case "contains":
+    case 'contains':
       return Array.isArray(actual)
         ? actual.includes(expected)
-        : typeof actual === "string" && typeof expected === "string"
+        : typeof actual === 'string' && typeof expected === 'string'
           ? actual.includes(expected)
           : false;
-    case "notContains":
-      return !matchesCondition(row, { ...condition, op: "contains" });
-    case "gt":
+    case 'notContains':
+      return !matchesCondition(row, { ...condition, op: 'contains' });
+    case 'gt':
       return comparable(actual) > comparable(expected);
-    case "gte":
+    case 'gte':
       return comparable(actual) >= comparable(expected);
-    case "lt":
+    case 'lt':
       return comparable(actual) < comparable(expected);
-    case "lte":
+    case 'lte':
       return comparable(actual) <= comparable(expected);
-    case "olderThanDays":
+    case 'olderThanDays':
       return dateAgeDays(actual) > numberValue(expected, 0);
-    case "withinDays":
+    case 'withinDays':
       return dateAgeDays(actual) <= numberValue(expected, 0);
     default:
       return false;
@@ -862,8 +876,8 @@ function matchesCondition(row: JsonObject, condition: unknown): boolean {
 }
 
 function readPath(row: JsonObject, path: string): unknown {
-  const normalizedPath = path === "state" ? "policyState" : path;
-  return normalizedPath.split(".").reduce<unknown>((current, part) => {
+  const normalizedPath = path === 'state' ? 'policyState' : path;
+  return normalizedPath.split('.').reduce<unknown>((current, part) => {
     if (!isObject(current)) return undefined;
     return current[part] ?? current[toCamel(part)];
   }, row);
@@ -872,18 +886,18 @@ function readPath(row: JsonObject, path: string): unknown {
 function compactRow(row: JsonObject): JsonObject {
   const compact: JsonObject = {};
   for (const key of [
-    "id",
-    "externalId",
-    "siteId",
-    "linkId",
-    "name",
-    "displayName",
-    "email",
-    "hostname",
-    "policyState",
-    "enabled",
-    "lastSignInAt",
-    "status",
+    'id',
+    'externalId',
+    'siteId',
+    'linkId',
+    'name',
+    'displayName',
+    'email',
+    'hostname',
+    'policyState',
+    'enabled',
+    'lastSignInAt',
+    'status'
   ]) {
     const value = readPath(row, key);
     if (value !== undefined) compact[key] = value;
@@ -894,13 +908,13 @@ function compactRow(row: JsonObject): JsonObject {
 function renderTemplate(template: string | null, row: JsonObject): string | null {
   if (!template) return null;
   return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_match, path: string) =>
-    String(readPath(row, path) ?? ""),
+    String(readPath(row, path) ?? '')
   );
 }
 
 function comparable(value: unknown): number {
-  if (typeof value === "number") return value;
-  if (typeof value === "string") {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
     const date = Date.parse(value);
     if (Number.isFinite(date)) return date;
     const numeric = Number(value);
@@ -917,17 +931,17 @@ function dateAgeDays(value: unknown): number {
 }
 
 function numberValue(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
 function stringValue(value: unknown, fallback: string): string;
 function stringValue(value: unknown, fallback: string | null): string | null;
 function stringValue(value: unknown, fallback: string | null): string | null {
-  return typeof value === "string" && value.length > 0 ? value : fallback;
+  return typeof value === 'string' && value.length > 0 ? value : fallback;
 }
 
 function isObject(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function toCamel(value: string): string {
