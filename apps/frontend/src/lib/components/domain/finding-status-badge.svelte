@@ -1,10 +1,18 @@
 <script lang="ts">
-  import Badge from '$lib/components/ui/badge/badge.svelte';
-  import { formatStringProper } from '$lib/utils/format';
+  import StatusBadge from '$lib/components/status-badge.svelte';
 
   let { status }: { status: string } = $props();
+
+  const variant = $derived.by(() => {
+    switch (status) {
+      case 'open':
+        return 'medium';
+      case 'regressed':
+        return 'high';
+      default:
+        return 'default';
+    }
+  });
 </script>
 
-<Badge variant={status === 'open' || status === 'regressed' ? 'default' : 'outline'}>
-  {formatStringProper(status)}
-</Badge>
+<StatusBadge {variant}>{status.toUpperCase()}</StatusBadge>

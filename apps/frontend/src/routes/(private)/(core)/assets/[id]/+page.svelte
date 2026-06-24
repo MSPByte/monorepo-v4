@@ -2,17 +2,20 @@
   import { getContext } from 'svelte';
   import { page } from '$app/state';
   import { createQuery } from '@tanstack/svelte-query';
-  import { ExternalLink } from '@lucide/svelte';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import { getPolicyTableShape } from '@mspbyte/shared';
   import { serializeFilters } from '$lib/components/data-table';
-  import EntityHeader from '$lib/components/domain/entity-header.svelte';
+  import SectionPanel from '$lib/components/panel/section-panel.svelte';
+  import MetaRow from '$lib/components/panel/meta-row.svelte';
   import FindingSeverityBadge from '$lib/components/domain/finding-severity-badge.svelte';
   import FindingStatusBadge from '$lib/components/domain/finding-status-badge.svelte';
   import FadeIn from '$lib/components/transition/fade-in.svelte';
   import Loader from '$lib/components/transition/loader.svelte';
   import { formatRelativeDate, prettyText } from '$lib/utils/format';
+
+  import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
+  import AssetBriefing from './_components/asset-briefing.svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const id = $derived(page.params.id ?? '');
@@ -100,12 +103,6 @@
     return Array.isArray(findings) ? findings.filter(isFinding) : [];
   }
 
-  function integrationHref(link: SourceLink): string {
-    return link.integrationId
-      ? `/setup/integrations/${link.integrationId}?linkId=${link.id}`
-      : `/setup/integrations?linkId=${link.id}`;
-  }
-
   function sourceIntegrationHref(source: SourceRecord): string | null {
     if (!source.linkId) return null;
     return source.integrationId
@@ -139,127 +136,103 @@
     return `${route.path}?${params.toString()}`;
   }
 
-  function vendorTableHref(source: SourceRecord): string | null {
-    if (!source.table) return null;
-    return getPolicyTableShape(source.table)?.route?.path ?? null;
+  function integrationHref(link: SourceLink): string {
+    return link.integrationId
+      ? `/setup/integrations/${link.integrationId}?linkId=${link.id}`
+      : `/setup/integrations?linkId=${link.id}`;
   }
 
-  function statusClass(value?: string | null): string {
-    if (value === 'active') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700';
-    if (value === 'error') return 'border-destructive/30 bg-destructive/10 text-destructive';
-    if (value === 'disabled' || value === 'inactive')
-      return 'border-muted-foreground/30 bg-muted text-muted-foreground';
-    return 'border-border bg-muted/50 text-muted-foreground';
-  }
-
-  function confidenceText(value?: number): string {
-    if (value === undefined) return 'Unknown confidence';
-    return `${value}% confidence`;
-  }
-
-  function relativeOrNull(value?: string): string | null {
-    return value ? formatRelativeDate(value) : null;
+  function linkStatusDot(value?: string | null): string {
+    if (value === 'active') return 'bg-primary';
+    if (value === 'error') return 'bg-destructive';
+    if (value === 'disabled' || value === 'inactive') return 'bg-muted-foreground';
+    return 'bg-muted-foreground';
   }
 </script>
 
-{#snippet Stat(label: string, value: string | number)}
-  <div class="min-w-0 border-l pl-4">
-    <div class="text-xs font-medium uppercase tracking-normal text-muted-foreground">{label}</div>
-    <div class="mt-1 truncate text-sm font-medium">{value}</div>
-  </div>
-{/snippet}
-
-{#snippet Detail(label: string, value: string | null | undefined)}
-  <div class="min-w-0">
-    <dt class="text-xs font-medium text-muted-foreground">{label}</dt>
-    <dd class="mt-1 wrap-break-word text-sm">{value || '-'}</dd>
-  </div>
-{/snippet}
-
-{#snippet SourceRow(source: SourceRecord)}
+{#snippet sourceRow(source: SourceRecord)}
   {@const href = sourceHref(source)}
-  <div
-    class="grid gap-3 border-b px-4 py-3 last:border-b-0 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_auto] md:items-center"
+  {@const Tag = href ? 'a' : 'div'}
+  <svelte:element
+    this={Tag}
+    href={href ?? undefined}
+    class={[
+      'grid gap-3 border-b border-border/40 py-2 text-sm last:border-b-0 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto] md:items-center',
+      href ? 'transition-colors hover:bg-muted/40' : '',
+    ].join(' ')}
   >
-    <div class="min-w-0">
-      <div class="truncate text-sm font-medium">
-        {source.label ?? prettyText(source.table ?? 'Source')}
-      </div>
-      <div class="truncate text-xs text-muted-foreground">
-        {source.provider ?? 'Provider'}
+    <div class="flex min-w-0 items-baseline gap-2">
+      <span class={`size-1.5 shrink-0 translate-y-px rounded-full ${linkStatusDot(source.linkStatus)}`}></span>
+      <div class="min-w-0">
+        <div class="truncate">{source.label ?? prettyText(source.table ?? 'Source')}</div>
+        <div class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+          {source.provider ?? 'provider'}{source.confidence !== undefined ? ` · ${source.confidence}% conf` : ''}
+        </div>
       </div>
     </div>
-    <div class="min-w-0 text-sm">
+    <div class="min-w-0 font-mono text-[11.5px] text-muted-foreground">
       {#if source.linkId}
-        <a href={sourceIntegrationHref(source) ?? '#'} class="truncate hover:underline">
+        <a
+          href={sourceIntegrationHref(source) ?? '#'}
+          class="truncate hover:underline"
+          onclick={(e) => e.stopPropagation()}
+        >
           {source.linkName ?? source.linkId}
         </a>
       {:else}
-        <span class="text-muted-foreground">No link</span>
+        <span>no link</span>
       {/if}
-      <div class="text-xs text-muted-foreground">{confidenceText(source.confidence)}</div>
     </div>
-    <div class="flex flex-wrap items-center gap-2 md:justify-end">
-      {#if source.linkStatus}
-        <span class={`rounded-md border px-2 py-1 text-xs ${statusClass(source.linkStatus)}`}>
-          {prettyText(source.linkStatus)}
-        </span>
-      {/if}
+    <div class="flex shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
       {#if href}
-        <a
-          {href}
-          class="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-accent"
-        >
-          <ExternalLink class="size-3.5" />
-          Open record
-        </a>
-      {:else if vendorTableHref(source)}
-        <a
-          href={vendorTableHref(source)}
-          class="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-accent"
-        >
-          <ExternalLink class="size-3.5" />
-          Open table
-        </a>
+        open <ArrowUpRight class="size-3" />
+      {:else}
+        record
       {/if}
     </div>
-  </div>
+  </svelte:element>
 {/snippet}
 
-<!-- TODO: Link this to the /[integration] and scope in the URL params -->
-{#snippet LinkRow(link: SourceLink)}
-  <div
-    class="flex justify-between gap-3 border-b px-4 py-3 transition-colors last:border-b-0 hover:bg-accent/40 md:grid-cols-[minmax(0,1fr)_160px_120px] md:items-center"
-  >
-    <div class="w-fit">
-      <div class="truncate text-sm font-medium">{link.name}</div>
-      <div class="truncate text-xs text-muted-foreground">
-        {link.integrationId ?? 'Integration link'}
-      </div>
-    </div>
-    <div class="text-xs">
-      Link
-    </div>
-  </div>
-{/snippet}
-
-{#snippet FindingRow(finding: Finding)}
+{#snippet findingRow(finding: Finding)}
   <a
     href={`/findings/${finding.id}`}
-    class="grid gap-3 border-b px-4 py-3 transition-colors last:border-b-0 hover:bg-accent/40 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] lg:items-center"
+    class="grid gap-3 border-b border-border/40 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] lg:items-center"
   >
     <div class="min-w-0">
-      <div class="truncate text-sm font-medium">{finding.title}</div>
-      <div class="truncate text-xs text-muted-foreground">{finding.policyName}</div>
+      <div class="truncate">{finding.title}</div>
+      <div class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+        {finding.policyName}
+      </div>
     </div>
     <div class="min-w-0 text-sm text-muted-foreground">
       <div class="truncate">{finding.evidenceSummary}</div>
-      <div class="text-xs">Last seen {formatRelativeDate(finding.lastSeenAt)}</div>
+      <div class="font-mono text-[10.5px] uppercase tracking-wider">
+        last seen {formatRelativeDate(finding.lastSeenAt)}
+      </div>
     </div>
-    <div class="flex flex-wrap gap-2 lg:justify-end">
+    <div class="flex shrink-0 flex-wrap items-center gap-1.5 lg:justify-end">
       <FindingSeverityBadge severity={finding.severity} />
       <FindingStatusBadge status={finding.status} />
+      <ArrowUpRight class="size-3 text-muted-foreground" />
     </div>
+  </a>
+{/snippet}
+
+{#snippet linkRow(link: SourceLink)}
+  <a
+    href={integrationHref(link)}
+    class="flex items-center justify-between gap-3 border-b border-border/40 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40"
+  >
+    <div class="flex min-w-0 items-baseline gap-2">
+      <span class={`size-1.5 shrink-0 translate-y-px rounded-full ${linkStatusDot(link.status)}`}></span>
+      <div class="min-w-0">
+        <div class="truncate">{link.name}</div>
+        <div class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+          {link.integrationId ?? 'integration link'} · {link.sourceCount} record{link.sourceCount === 1 ? '' : 's'}
+        </div>
+      </div>
+    </div>
+    <ArrowUpRight class="size-3 shrink-0 text-muted-foreground" />
   </a>
 {/snippet}
 
@@ -271,119 +244,135 @@
   {@const sourceLinks = assetSourceLinks(asset)}
   {@const findings = assetFindings(asset)}
   <FadeIn class="size-full overflow-auto">
-    <EntityHeader
-      eyebrow="Asset"
-      title={asset.hostname}
-      subtitle={`${prettyText(asset.type)} · ${asset.os ?? 'Unknown OS'} · ${siteName}`}
-      sources={asset.sources}
+    <AssetBriefing
+      id={asset.id}
+      hostname={asset.hostname}
+      displayName={asset.displayName}
+      type={asset.type}
+      os={asset.os}
+      status={asset.status}
+      siteId={asset.siteId}
+      {siteName}
+      serialNumber={assetExtra.serialNumber}
+      sourceConfidence={assetExtra.sourceConfidence}
+      updatedAt={assetExtra.updatedAt}
+      openFindingCount={findings.length || asset.openFindingCount}
+      sourceCount={vendorEvidence.length || asset.sources.length}
+      linkCount={sourceLinks.length}
     />
 
-    <div class="mx-auto max-w-7xl space-y-6 p-6">
-      <div class="flex flex-col gap-3 border-b pb-5 lg:flex-row lg:items-end lg:justify-between">
-        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {@render Stat('Status', prettyText(asset.status))}
-          {@render Stat('Open findings', findings.length || asset.openFindingCount)}
-          {@render Stat('Source records', vendorEvidence.length || asset.sources.length)}
-          {@render Stat('Links', sourceLinks.length)}
-        </div>
-        <div class="flex flex-wrap gap-2">
-          {#if asset.siteId}
-            <a
-              href={`/sites/${asset.siteId}`}
-              class="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition-colors hover:bg-accent"
-            >
-              <ExternalLink class="size-4" />
-              Open site
-            </a>
+    <div class="mx-auto max-w-[1400px] space-y-4 p-4 lg:p-6">
+      <!-- Top legend strip -->
+      <div class="flex flex-wrap items-center justify-between gap-3 border-l-2 border-primary bg-card px-3 py-2">
+        <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+          ASSET INTELLIGENCE
+          {#if assetExtra.updatedAt}
+            <span class="ml-2 text-foreground/70">·</span>
+            <span class="ml-2">updated {formatRelativeDate(assetExtra.updatedAt)}</span>
           {/if}
-          <a
-            href={`/findings?resourceType=asset&resourceId=${asset.id}`}
-            class="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition-colors hover:bg-accent"
-          >
-            <ExternalLink class="size-4" />
-            View findings
-          </a>
+        </div>
+        <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          {vendorEvidence.length} source · {sourceLinks.length} link · {findings.length || asset.openFindingCount} finding
         </div>
       </div>
 
-      <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <div class="space-y-6">
-          <section class="overflow-hidden rounded-md border bg-background">
-            <div class="border-b px-4 py-3">
-              <h2 class="text-sm font-semibold">Vendor source records</h2>
-              <p class="mt-1 text-xs text-muted-foreground">
-                Confirmed vendor rows that reconcile into this canonical asset.
-              </p>
+      <div class="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+        <!-- LEFT COLUMN -->
+        <div class="space-y-4">
+          <SectionPanel code="01" title="VENDOR SOURCE RECORDS">
+            {#snippet aside()}
+              {vendorEvidence.length} confirmed
+            {/snippet}
+            <div>
+              {#each vendorEvidence as source}
+                {@render sourceRow(source)}
+              {:else}
+                <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
+                  no confirmed vendor records
+                </p>
+              {/each}
             </div>
-            {#each vendorEvidence as source}
-              {@render SourceRow(source)}
-            {:else}
-              <div class="px-4 py-8 text-sm text-muted-foreground">
-                No confirmed vendor source records are linked to this asset.
-              </div>
-            {/each}
-          </section>
+          </SectionPanel>
 
-          <section class="overflow-hidden rounded-md border bg-background">
-            <div class="border-b px-4 py-3">
-              <h2 class="text-sm font-semibold">Open findings</h2>
-              <p class="mt-1 text-xs text-muted-foreground">
-                Current policy failures scoped directly to this asset.
-              </p>
+          <SectionPanel code="02" title="OPEN FINDINGS">
+            {#snippet aside()}
+              <a
+                href={`/findings?resourceType=asset&resourceId=${asset.id}`}
+                class="inline-flex items-center gap-1 hover:text-foreground"
+              >
+                view all <ArrowUpRight class="size-3" />
+              </a>
+            {/snippet}
+            <div>
+              {#each findings as finding}
+                {@render findingRow(finding)}
+              {:else}
+                <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
+                  no open findings
+                </p>
+              {/each}
             </div>
-            {#each findings as finding}
-              {@render FindingRow(finding)}
-            {:else}
-              <div class="px-4 py-8 text-sm text-muted-foreground">
-                No open findings are currently tied to this asset.
-              </div>
-            {/each}
-          </section>
+          </SectionPanel>
         </div>
 
-        <aside class="space-y-6">
-          <section class="rounded-md border bg-background">
-            <div class="border-b px-4 py-3">
-              <h2 class="text-sm font-semibold">Asset facts</h2>
-            </div>
-            <dl class="grid gap-4 p-4">
-              {@render Detail('Display name', asset.displayName)}
-              {@render Detail('Hostname', asset.hostname)}
-              {@render Detail('Serial number', assetExtra.serialNumber)}
-              {@render Detail('Type', prettyText(asset.type))}
-              {@render Detail('Operating system', asset.os)}
-              {@render Detail(
-                'Source confidence',
-                assetExtra.sourceConfidence ? prettyText(assetExtra.sourceConfidence) : null
-              )}
-              {@render Detail('Updated', relativeOrNull(assetExtra.updatedAt))}
+        <!-- RIGHT COLUMN -->
+        <aside class="space-y-4">
+          <SectionPanel code="@" title="ASSET FACTS">
+            <dl>
+              <MetaRow label="Hostname" value={asset.hostname} />
+              <MetaRow label="Display Name" value={asset.displayName} />
+              <MetaRow label="Type" value={prettyText(asset.type)} />
+              <MetaRow label="Operating Sys" value={asset.os} />
+              <MetaRow label="Status" value={prettyText(asset.status)} />
+              <MetaRow label="Serial" value={assetExtra.serialNumber} mono />
+              <MetaRow
+                label="Confidence"
+                value={assetExtra.sourceConfidence ? prettyText(assetExtra.sourceConfidence) : null}
+              />
+              <MetaRow
+                label="Updated"
+                value={assetExtra.updatedAt ? formatRelativeDate(assetExtra.updatedAt) : null}
+                mono
+              />
             </dl>
-          </section>
+          </SectionPanel>
 
-          <section class="overflow-hidden rounded-md border bg-background">
-            <div class="border-b px-4 py-3">
-              <h2 class="text-sm font-semibold">Site and links</h2>
-              <p class="mt-1 text-xs text-muted-foreground">
-                Where this asset belongs and which integration links supplied it.
-              </p>
+          <SectionPanel code="↳" title="HIERARCHY">
+            <div class="space-y-2 text-sm">
+              {#if asset.siteId}
+                <a
+                  href={`/sites/${asset.siteId}`}
+                  class="flex items-center justify-between gap-2 border-b border-border/40 pb-2"
+                >
+                  <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">SITE</span>
+                  <span class="ml-auto inline-flex items-center gap-1 text-sm text-primary hover:underline">
+                    {siteName}
+                    <ArrowUpRight class="size-3" />
+                  </span>
+                </a>
+              {:else}
+                <div class="flex items-center justify-between">
+                  <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">SITE</span>
+                  <span class="font-mono text-xs text-muted-foreground/60">— unassigned —</span>
+                </div>
+              {/if}
             </div>
-            {#if asset.siteId}
-              <a
-                href={`/sites/${asset.siteId}`}
-                class="flex items-center justify-between gap-3 border-b px-4 py-3 text-sm transition-colors hover:bg-accent/40"
-              >
-                <span class="min-w-0 truncate font-medium">{siteName}</span>
-                <span class="text-xs text-muted-foreground">Site</span>
-              </a>
-            {/if}
-            {#each sourceLinks as link}
-              {@render LinkRow(link)}
-            {:else}
-              <div class="px-4 py-6 text-sm text-muted-foreground">
-                No integration links are attached to the source records.
-              </div>
-            {/each}
-          </section>
+          </SectionPanel>
+
+          <SectionPanel code="≡" title="INTEGRATION LINKS">
+            {#snippet aside()}
+              {sourceLinks.length} attached
+            {/snippet}
+            <div>
+              {#each sourceLinks as link}
+                {@render linkRow(link)}
+              {:else}
+                <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
+                  no integration links
+                </p>
+              {/each}
+            </div>
+          </SectionPanel>
         </aside>
       </div>
     </div>

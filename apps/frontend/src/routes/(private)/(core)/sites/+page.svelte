@@ -3,7 +3,11 @@
   import { goto } from '$app/navigation';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
-  import { DataTable, type DataTableColumn, type PaginationInput } from '$lib/components/data-table';
+  import {
+    DataTable,
+    type DataTableColumn,
+    type PaginationInput,
+  } from '$lib/components/data-table';
   import { numberColumn, textColumn } from '$lib/components/data-table/column-defs';
   import SourceBadge from '$lib/components/domain/source-badge.svelte';
   import { toServerTableInput } from '$lib/components/domain/server-table';
@@ -27,8 +31,6 @@
     numberColumn<SiteRow>('openFindingCount', 'Open Findings'),
     numberColumn<SiteRow>('assetCount', 'Assets'),
     numberColumn<SiteRow>('peopleCount', 'People'),
-    numberColumn<SiteRow>('frameworkScore', 'Framework Score', undefined, { cell: percentCell }),
-    numberColumn<SiteRow>('policyHealth', 'Policy Health', undefined, { cell: percentCell }),
     { key: 'sourceList', title: 'Sources', searchable: true, cell: sourcesCell, width: '260px' },
   ];
 

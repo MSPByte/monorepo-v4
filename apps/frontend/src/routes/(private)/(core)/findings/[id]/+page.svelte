@@ -6,10 +6,10 @@
   import { toast } from 'svelte-sonner';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
-  import EntityHeader from '$lib/components/domain/entity-header.svelte';
+
+  import SectionPanel from '$lib/components/panel/section-panel.svelte';
+  import MetaRow from '$lib/components/panel/meta-row.svelte';
   import FindingSeverityBadge from '$lib/components/domain/finding-severity-badge.svelte';
-  import FindingStatusBadge from '$lib/components/domain/finding-status-badge.svelte';
-  import * as Card from '$lib/components/ui/card';
   import { formatRelativeDate, prettyText } from '$lib/utils/format';
   import FadeIn from '$lib/components/transition/fade-in.svelte';
   import Loader from '$lib/components/transition/loader.svelte';
@@ -18,6 +18,9 @@
   import DatePicker from '$lib/components/date-picker.svelte';
   import { Button } from '$lib/components/ui/button';
   import Textarea from '$lib/components/ui/textarea/textarea.svelte';
+
+  import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
+  import FindingBriefing from './_components/finding-briefing.svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const id = $derived(page.params.id ?? '');
@@ -213,266 +216,305 @@
 {#snippet relatedRow(item: Related)}
   <a
     href={`/findings/${item.id}`}
-    class="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2 transition-colors hover:bg-accent"
+    class="flex items-center justify-between gap-3 border-b border-border/40 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40"
   >
     <div class="min-w-0">
-      <div class="truncate text-sm">{item.title}</div>
-      <div class="truncate text-xs text-muted-foreground">
+      <div class="truncate">{item.title}</div>
+      <div class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
         {item.resourceName} · {item.siteName}
       </div>
     </div>
-    <FindingSeverityBadge severity={item.severity} />
+    <div class="flex shrink-0 items-center gap-1.5">
+      <FindingSeverityBadge severity={item.severity} />
+      <ArrowUpRight class="size-3 text-muted-foreground" />
+    </div>
   </a>
-{/snippet}
-
-{#snippet detailRow(label: string, value: string | null | undefined)}
-  <div>
-    <div class="text-xs text-muted-foreground">{label}</div>
-    <div class="wrap-break-word text-sm">{value || '—'}</div>
-  </div>
 {/snippet}
 
 {#if findingQuery.data}
   {@const finding = findingQuery.data}
-  <FadeIn class="size-full overflow-auto">
-    <EntityHeader
-      eyebrow="Finding"
+  <FadeIn class="flex flex-col size-full">
+    <FindingBriefing
+      id={finding.id}
       title={finding.title}
-      subtitle={`${finding.resourceName} · ${finding.policyName}`}
-      sources={finding.sources}
+      severity={finding.severity}
+      status={finding.status}
+      siteId={finding.siteId}
+      siteName={finding.siteName}
+      policyName={finding.policyName}
+      resourceName={finding.resourceName}
+      linkName={finding.linkName}
+      firstSeenAt={finding.firstSeenAt}
+      lastSeenAt={finding.lastSeenAt}
+      evidenceSummary={finding.evidenceSummary}
     />
-    <div class="mx-auto grid max-w-7xl gap-6 p-6 lg:grid-cols-[1fr_360px]">
-      <div class="space-y-4">
-        <Card.Root class="rounded-lg">
-          <Card.Header>
-            <div class="flex flex-wrap gap-2">
-              <FindingSeverityBadge severity={finding.severity} />
-              <FindingStatusBadge status={finding.status} />
-            </div>
-            <Card.Title>Finding summary</Card.Title>
-            <Card.Description>{finding.evidenceSummary}</Card.Description>
-          </Card.Header>
-          <Card.Content class="grid gap-3 text-sm sm:grid-cols-2">
-            <div>
-              <div class="text-xs text-muted-foreground">Site</div>
-              {#if finding.siteId}
-                <a href={`/sites/${finding.siteId}`} class="hover:underline">{finding.siteName}</a>
-              {:else}
-                <div>{finding.siteName}</div>
-              {/if}
-            </div>
-            <div>
-              <div class="text-xs text-muted-foreground">Integration link</div>
-              <div>{finding.linkName}</div>
-            </div>
-            <div>
-              <div class="text-xs text-muted-foreground">Policy</div>
-              <a href={`/policies/${finding.policyId}`} class="hover:underline"
-                >{finding.policyName}</a
-              >
-            </div>
-            <div>
-              <div class="text-xs text-muted-foreground">Affected resource</div>
-              <div>{finding.resourceName}</div>
-            </div>
-            <div>
-              <div class="text-xs text-muted-foreground">First seen</div>
-              <div>{formatRelativeDate(finding.firstSeenAt)}</div>
-            </div>
-            <div>
-              <div class="text-xs text-muted-foreground">Last seen</div>
-              <div>{formatRelativeDate(finding.lastSeenAt)}</div>
-            </div>
-          </Card.Content>
-        </Card.Root>
 
-        <Card.Root class="rounded-lg">
-          <Card.Header>
-            <Card.Title>Data sources</Card.Title>
-            <Card.Description
-              >Underlying records this finding was evaluated against.</Card.Description
-            >
-          </Card.Header>
-          <Card.Content class="space-y-2 text-sm">
-            {#each finding.dataSources as source}
-              {@const href = dataSourceHref(source)}
-              {#if href}
-                <a
-                  {href}
-                  class="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2 transition-colors hover:bg-accent"
-                >
-                  <div class="min-w-0">
-                    <div class="truncate">{source.name}</div>
-                    <div class="text-xs text-muted-foreground">{source.label}</div>
-                  </div>
-                  <span class="text-xs text-muted-foreground">View →</span>
-                </a>
-              {:else}
-                <div class="rounded-md bg-muted px-3 py-2">
-                  <div class="truncate">{source.name}</div>
-                  <div class="text-xs text-muted-foreground">
-                    {source.label}{source.provider ? ` · ${source.provider}` : ''}
-                  </div>
-                </div>
-              {/if}
-            {/each}
-          </Card.Content>
-        </Card.Root>
+    <div class="flex size-full items-center justify-center overflow-auto p-4">
+      <div class="flex flex-col h-full mx-auto max-w-[1400px] gap-4">
+        <!-- Top legend strip -->
+        <div
+          class="flex flex-wrap items-center justify-between gap-3 border-l-2 border-primary bg-card px-3 py-2"
+        >
+          <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+            FINDING INTELLIGENCE
+            <span class="ml-2 text-foreground/70">·</span>
+            <span class="ml-2">last seen {formatRelativeDate(finding.lastSeenAt)}</span>
+          </div>
+          <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            {finding.dataSources.length} data {finding.dataSources.length === 1
+              ? 'source'
+              : 'sources'}
+            · {finding.relatedBySite.length + finding.relatedByPolicy.length} related
+          </div>
+        </div>
 
-        <Card.Root class="rounded-lg">
-          <Card.Header>
-            <Card.Title>Evidence</Card.Title>
-          </Card.Header>
-          <Card.Content class="space-y-4 text-sm">
-            {#each buildEvidence(finding.evidence) as item}
-              <div>
-                <div class="mb-1 text-xs font-medium text-muted-foreground">{item.label}</div>
-                {#if item.kind === 'scalar'}
-                  <div class="break-words">{item.value}</div>
-                {:else if item.kind === 'conditions'}
-                  <div class="flex flex-wrap gap-2">
-                    {#each item.conditions as condition}
-                      <code class="rounded bg-muted px-2 py-1 text-xs">{condition}</code>
-                    {/each}
+        <div class="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+          <!-- LEFT COLUMN -->
+          <div class="space-y-4">
+            <SectionPanel code="01" title="EVIDENCE">
+              {#snippet aside()}
+                {finding.evidenceSummary ? 'detail' : 'no detail'}
+              {/snippet}
+              <div class="space-y-4 text-sm">
+                {#each buildEvidence(finding.evidence) as item}
+                  <div>
+                    <div
+                      class="mb-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                    >
+                      {item.label}
+                    </div>
+                    {#if item.kind === 'scalar'}
+                      <div
+                        class="wrap-break-word font-mono text-[13px] tabular-nums text-foreground"
+                      >
+                        {item.value}
+                      </div>
+                    {:else if item.kind === 'conditions'}
+                      <div class="flex flex-wrap gap-1.5">
+                        {#each item.conditions as condition}
+                          <code
+                            class="rounded-[3px] border border-border/70 bg-muted/40 px-2 py-0.5 font-mono text-[11.5px] text-foreground"
+                            >{condition}</code
+                          >
+                        {/each}
+                      </div>
+                    {:else}
+                      <dl
+                        class="grid gap-x-6 gap-y-2 border border-border/50 bg-muted/20 p-3 sm:grid-cols-2"
+                      >
+                        {#each item.entries as entry}
+                          <div class="min-w-0">
+                            <dt
+                              class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                            >
+                              {entry.label}
+                            </dt>
+                            <dd class="wrap-break-word text-sm">{entry.value}</dd>
+                          </div>
+                        {/each}
+                      </dl>
+                    {/if}
                   </div>
                 {:else}
-                  <dl class="grid gap-x-6 gap-y-2 rounded-md bg-muted p-3 sm:grid-cols-2">
-                    {#each item.entries as entry}
-                      <div class="min-w-0">
-                        <dt class="text-xs text-muted-foreground">{entry.label}</dt>
-                        <dd class="break-words">{entry.value}</dd>
+                  <p
+                    class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70"
+                  >
+                    {finding.evidenceSummary || 'no evidence captured'}
+                  </p>
+                {/each}
+              </div>
+            </SectionPanel>
+
+            <SectionPanel code="02" title="DATA SOURCES">
+              {#snippet aside()}
+                {finding.dataSources.length} record{finding.dataSources.length === 1 ? '' : 's'}
+              {/snippet}
+              <div class="space-y-1">
+                {#each finding.dataSources as source}
+                  {@const href = dataSourceHref(source)}
+                  {#if href}
+                    <a
+                      {href}
+                      class="flex items-center justify-between gap-3 border-b border-border/40 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40"
+                    >
+                      <div class="flex min-w-0 items-baseline gap-2">
+                        <span
+                          class={`size-1.5 shrink-0 translate-y-px rounded-full ${source.kind === 'canonical' ? 'bg-primary' : 'bg-muted-foreground'}`}
+                        ></span>
+                        <span class="truncate">{source.name}</span>
                       </div>
-                    {/each}
-                  </dl>
+                      <span
+                        class="flex shrink-0 items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                      >
+                        {source.label}
+                        <ArrowUpRight class="size-3" />
+                      </span>
+                    </a>
+                  {:else}
+                    <div
+                      class="flex items-center justify-between gap-3 border-b border-border/40 py-2 text-sm last:border-b-0"
+                    >
+                      <div class="flex min-w-0 items-baseline gap-2">
+                        <span
+                          class={`size-1.5 shrink-0 translate-y-px rounded-full ${source.kind === 'canonical' ? 'bg-primary' : 'bg-muted-foreground'}`}
+                        ></span>
+                        <span class="truncate">{source.name}</span>
+                      </div>
+                      <span
+                        class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                      >
+                        {source.label}{source.provider ? ` · ${source.provider}` : ''}
+                      </span>
+                    </div>
+                  {/if}
+                {/each}
+              </div>
+            </SectionPanel>
+
+            <SectionPanel code="03" title="RECOMMENDATION">
+              <p class="text-sm leading-relaxed text-foreground/90">{finding.recommendation}</p>
+            </SectionPanel>
+          </div>
+
+          <!-- RIGHT COLUMN -->
+          <aside class="flex flex-col size-full space-y-4">
+            <SectionPanel code="@" title="CONTEXT">
+              <dl>
+                <MetaRow
+                  label="Site"
+                  value={finding.siteName}
+                  href={finding.siteId ? `/sites/${finding.siteId}` : undefined}
+                />
+                <MetaRow label="Link" value={finding.linkName} />
+                <MetaRow
+                  label="Policy"
+                  value={finding.policyName}
+                  href={`/policies/${finding.policyId}`}
+                />
+                <MetaRow label="Resource" value={finding.resourceName} />
+                <MetaRow label="Integration" value={finding.linkName} />
+                <MetaRow label="First Seen" value={formatRelativeDate(finding.firstSeenAt)} mono />
+                <MetaRow label="Last Seen" value={formatRelativeDate(finding.lastSeenAt)} mono />
+              </dl>
+            </SectionPanel>
+
+            <SectionPanel code="!" title="LIFECYCLE">
+              {#snippet aside()}
+                {finding.status === 'suppressed' ? 'suppressed' : 'active'}
+              {/snippet}
+              <div class="space-y-3 text-sm">
+                {#if finding.status === 'suppressed'}
+                  <div class="border border-border/50 bg-muted/20 p-3">
+                    <div
+                      class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                    >
+                      Reason
+                    </div>
+                    <div class="mt-1 wrap-break-word">{finding.suppressionReason ?? '—'}</div>
+                    <dl class="mt-3">
+                      <MetaRow label="Suppressed By" value={finding.suppressedByLabel} />
+                      <MetaRow
+                        label="Suppressed"
+                        value={finding.suppressedAt
+                          ? formatRelativeDate(finding.suppressedAt)
+                          : null}
+                        mono
+                      />
+                      <MetaRow
+                        label="Until"
+                        value={finding.suppressedUntil
+                          ? formatRelativeDate(finding.suppressedUntil)
+                          : 'Indefinite'}
+                        mono
+                      />
+                    </dl>
+                  </div>
+                  <Button variant="outline" disabled={lifecycleBusy} onclick={unsuppressFinding}>
+                    Return to active tracking
+                  </Button>
+                {:else}
+                  <div class="space-y-1.5">
+                    <label
+                      class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                      for="page-suppression-reason"
+                    >
+                      Reason
+                    </label>
+                    <Textarea
+                      id="page-suppression-reason"
+                      bind:value={suppressionReason}
+                      placeholder="Document why this finding should not be actively tracked."
+                      rows={4}
+                    />
+                  </div>
+                  <div class="space-y-1.5">
+                    <span
+                      class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                    >
+                      Quick select
+                    </span>
+                    <div class="flex flex-wrap gap-1">
+                      {#each suppressionPresets as preset}
+                        <button
+                          type="button"
+                          onclick={() => applyPreset(preset.days)}
+                          class={[
+                            'inline-flex items-center rounded-[3px] border px-2 py-0.5 font-mono text-[11px] tracking-wider transition-colors',
+                            isActivePreset(preset.days)
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-border bg-muted/30 text-muted-foreground hover:bg-muted hover:text-foreground',
+                          ].join(' ')}
+                        >
+                          {preset.label}
+                        </button>
+                      {/each}
+                    </div>
+                  </div>
+                  <DatePicker
+                    title="Suppress Until"
+                    maxValue={maxSuppressionDate}
+                    bind:value={suppressDate}
+                  />
+                  <Button disabled={!suppressDate || lifecycleBusy} onclick={suppressFinding}>
+                    Suppress finding
+                  </Button>
+                {/if}
+
+                {#if lifecycleError}
+                  <p class="font-mono text-[11px] uppercase tracking-wider text-destructive">
+                    {lifecycleError}
+                  </p>
                 {/if}
               </div>
-            {:else}
-              <p class="text-muted-foreground">{finding.evidenceSummary}</p>
-            {/each}
-          </Card.Content>
-        </Card.Root>
-      </div>
+            </SectionPanel>
 
-      <div class="space-y-4">
-        <Card.Root class="rounded-lg">
-          <Card.Header>
-            <Card.Title>Recommendation</Card.Title>
-          </Card.Header>
-          <Card.Content class="text-sm text-muted-foreground">{finding.recommendation}</Card.Content
-          >
-        </Card.Root>
-
-        <Card.Root class="rounded-lg">
-          <Card.Header>
-            <Card.Title>Suppression</Card.Title>
-            <Card.Description>
-              Suppressed findings are removed from active tracking until restored or the selected
-              date passes.
-            </Card.Description>
-          </Card.Header>
-          <Card.Content class="space-y-3 text-sm">
-            {#if finding.status === 'suppressed'}
-              <div class="rounded-md bg-muted p-3">
-                <div class="text-xs text-muted-foreground">Reason</div>
-                <div class="mt-1 wrap-break-word">{finding.suppressionReason ?? '—'}</div>
-                <div class="mt-3 grid gap-3">
-                  {@render detailRow('Suppressed by', finding.suppressedByLabel)}
-                  {@render detailRow(
-                    'Suppressed',
-                    finding.suppressedAt ? formatRelativeDate(finding.suppressedAt) : null
-                  )}
-                  {@render detailRow(
-                    'Suppressed until',
-                    finding.suppressedUntil
-                      ? formatRelativeDate(finding.suppressedUntil)
-                      : 'Indefinite'
-                  )}
-                </div>
-              </div>
-              <Button variant="outline" disabled={lifecycleBusy} onclick={unsuppressFinding}>
-                Return to active tracking
-              </Button>
-            {:else}
-              <div class="space-y-2">
-                <label
-                  class="text-xs font-medium text-muted-foreground"
-                  for="page-suppression-reason"
-                >
-                  Reason
-                </label>
-                <Textarea
-                  id="page-suppression-reason"
-                  bind:value={suppressionReason}
-                  placeholder="Document why this finding should not be actively tracked."
-                  rows={4}
-                />
-              </div>
-              <div class="space-y-2">
-                <span
-                  class="px-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground"
-                >
-                  Quick select
-                </span>
-                <div class="flex flex-wrap gap-1.5">
-                  {#each suppressionPresets as preset}
-                    <button
-                      type="button"
-                      onclick={() => applyPreset(preset.days)}
-                      class={[
-                        'inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-colors',
-                        isActivePreset(preset.days)
-                          ? 'border-primary bg-primary text-primary-foreground'
-                          : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground',
-                      ].join(' ')}
-                    >
-                      {preset.label}
-                    </button>
+            {#if finding.relatedByPolicy.length}
+              <SectionPanel code="≡" title="SIMILAR · POLICY">
+                {#snippet aside()}
+                  {finding.relatedByPolicy.length} open
+                {/snippet}
+                <div>
+                  {#each finding.relatedByPolicy as item}
+                    {@render relatedRow(item)}
                   {/each}
                 </div>
-              </div>
-              <DatePicker
-                title="Suppress Until"
-                maxValue={maxSuppressionDate}
-                bind:value={suppressDate}
-              />
-              <Button disabled={!suppressDate || lifecycleBusy} onclick={suppressFinding}>
-                Suppress finding
-              </Button>
+              </SectionPanel>
             {/if}
 
-            {#if lifecycleError}
-              <p class="text-sm text-destructive">{lifecycleError}</p>
+            {#if finding.relatedBySite.length}
+              <SectionPanel code="↳" title="SAME SITE">
+                {#snippet aside()}
+                  {finding.relatedBySite.length} open
+                {/snippet}
+                <div>
+                  {#each finding.relatedBySite as item}
+                    {@render relatedRow(item)}
+                  {/each}
+                </div>
+              </SectionPanel>
             {/if}
-          </Card.Content>
-        </Card.Root>
-
-        {#if finding.relatedByPolicy.length}
-          <Card.Root class="rounded-lg">
-            <Card.Header>
-              <Card.Title>Similar open findings</Card.Title>
-              <Card.Description>Same policy ({finding.policyName}).</Card.Description>
-            </Card.Header>
-            <Card.Content class="space-y-2">
-              {#each finding.relatedByPolicy as item}
-                {@render relatedRow(item)}
-              {/each}
-            </Card.Content>
-          </Card.Root>
-        {/if}
-
-        {#if finding.relatedBySite.length}
-          <Card.Root class="rounded-lg">
-            <Card.Header>
-              <Card.Title>Other open findings at this site</Card.Title>
-              <Card.Description>{finding.siteName}</Card.Description>
-            </Card.Header>
-            <Card.Content class="space-y-2">
-              {#each finding.relatedBySite as item}
-                {@render relatedRow(item)}
-              {/each}
-            </Card.Content>
-          </Card.Root>
-        {/if}
+          </aside>
+        </div>
       </div>
     </div>
   </FadeIn>
