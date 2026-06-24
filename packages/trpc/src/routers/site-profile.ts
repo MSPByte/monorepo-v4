@@ -606,7 +606,7 @@ export const siteProfileRouter = t.router({
           description: input.description,
           severity: input.severity,
           active: input.active,
-          updatedBy: ctx.userId
+          updatedBy: ctx.user.id
         })
         .returning();
       if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
