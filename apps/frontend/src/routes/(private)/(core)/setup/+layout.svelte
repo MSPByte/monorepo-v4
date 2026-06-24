@@ -8,6 +8,7 @@
     { href: '/setup/users', label: 'Users' },
     { href: '/setup/roles', label: 'Roles' },
     { href: '/setup/integrations', label: 'Integrations' },
+    { href: '/setup/sites', label: 'Sites' },
     { href: '/setup/audit', label: 'Audit', disabled: () => !authStore.isAllowed('Global.Admin') },
   ];
 </script>

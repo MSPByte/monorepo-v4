@@ -1,145 +1,117 @@
-/**
- * Client Intelligence Profile — the canonical, opinionated schema for what
- * an MSP needs to know about a customer before touching anything.
- *
- * Every field carries a `source` so the UI can encode where the value came
- * from. The four classes are deliberate: prefer generated, fall back to
- * structured user entry, only then to flexible notes.
- */
+export type FieldSource = 'generated' | 'user_options' | 'user_free' | 'user_flex';
 
-export type FieldSource =
-  | 'generated' // derived from connected systems
-  | 'user_free' // free-form text the user typed
-  | 'user_options' // user picked from a system-defined enum
-  | 'user_flex'; // tribal knowledge / unstructured notes
+export type FactApplicable = 'applies' | 'not_applicable' | 'unknown';
+export type FactConfidence = 'high' | 'medium' | 'low' | null;
+export type FactValue = string | number | boolean | string[] | null;
 
-export type Field<T = string> = {
-  value: T;
-  source: FieldSource;
-  /** When the source = generated, the system that produced this. */
-  origin?: string;
-  /** When the source = generated, freshness. */
-  updatedAt?: string;
-};
-
-export type Flag = {
+export type ProfileFact = {
+  key: string;
   label: string;
-  description?: string;
+  category: 'executive' | 'context' | string;
+  value: FactValue;
+  valueMode: 'single' | 'multiple';
   source: FieldSource;
-  severity?: 'info' | 'warn' | 'critical';
+  origin: string | null;
+  confidence: FactConfidence;
+  applicable: FactApplicable;
+  updatedAt: string | null;
 };
 
-export type TribalNote = {
-  category:
-    | 'quirk'
-    | 'procedure'
-    | 'common_issue'
-    | 'escalation'
-    | 'deployment'
-    | 'maintenance';
-  body: string;
-  author?: string;
-  recordedAt?: string;
+export type ProfileMetric = {
+  key: string;
+  label: string;
+  value: number | string | null;
+  source: 'generated';
+  origin: string;
+  supported: boolean;
 };
 
-export type ContactRole =
-  | 'primary'
-  | 'technical'
-  | 'executive'
-  | 'billing'
-  | 'emergency'
-  | 'third_party_it';
-
-export type Contact = {
-  role: ContactRole;
-  name: Field<string>;
-  email?: Field<string>;
-  phone?: Field<string>;
+export type StackEntry = {
+  categoryKey: string;
+  categoryLabel: string;
+  required: boolean;
+  vendor: string | null;
+  product: string | null;
+  status: 'managed' | 'third_party' | 'not_used' | 'unknown';
+  source: 'generated' | 'manual';
+  origin: string | null;
 };
 
-export type ClientProfile = {
-  // Executive Summary
-  legalName: Field<string | null>;
-  status: Field<'active' | 'prospect' | 'former' | 'internal'>;
-  supportTier: Field<'standard' | 'premium' | 'enterprise'>;
-  industry: Field<string>;
-  businessDescription: Field<string>;
-  timeZone: Field<string>;
-  primaryLocation: Field<string>;
-  numberOfLocations: Field<number>;
-  employeeCount: Field<number>;
-  managedUsers: Field<number>;
-  managedEndpoints: Field<number>;
-  managedServers: Field<number>;
-  managedNetworkDevices: Field<number>;
-  primaryDomain: Field<string | null>;
-  microsoftTenant: Field<string | null>;
-  supportHours: Field<string>;
-  criticality: Field<'low' | 'medium' | 'high' | 'mission_critical'>;
-  lastDataSync: Field<string>;
-  documentationCompleteness: Field<number>; // percent
-  healthScore: Field<number>; // 0-100
-  aiSummary: Field<string>;
+export type ProfileNote = {
+  id: string;
+  type: 'special' | 'tribal';
+  title: string;
+  description: string;
+  severity: number | null;
+  active: boolean;
+  updatedAt: string;
+};
 
-  // Technology Stack
-  stack: {
-    psa: Field<string | null>;
-    rmm: Field<string | null>;
-    identityProvider: Field<string | null>;
-    emailPlatform: Field<string | null>;
-    backupPlatform: Field<string | null>;
-    edrPlatform: Field<string | null>;
-    firewallVendor: Field<string | null>;
-    dnsProvider: Field<string | null>;
-    passwordManager: Field<string | null>;
-    remoteAccess: Field<string | null>;
-    voipProvider: Field<string | null>;
-    cloudProvider: Field<string | null>;
-    primaryIsp: Field<string | null>;
-    secondaryIsp: Field<string | null>;
+export type ProfileContact = {
+  role: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  source: FieldSource;
+  origin: string | null;
+};
+
+export type ProfileIntegration = {
+  id: string;
+  integrationId: string;
+  name: string | null;
+  status: string | null;
+  disposition: string | null;
+};
+
+export type NetworkAsset = {
+  id: string;
+  displayName: string;
+  hostname: string | null;
+  assetType: string;
+  status: string;
+  sources: string[];
+};
+
+export type NetworkFirewall = {
+  id: string;
+  name: string;
+  hostname: string;
+  model: string;
+  serialNumber: string;
+  firmwareVersion: string;
+  externalIp: string;
+  connected: boolean;
+  suspended: boolean;
+  managing: string;
+  reporting: string;
+  upgradeToVersion: string | null;
+  lastSeenAt: string;
+  origin: 'sophos-partner';
+};
+
+export type SiteProfileResponse = {
+  site: {
+    id: string;
+    name: string;
+    description: string | null;
+    parentSiteId: string | null;
+    createdAt: string;
+    updatedAt: string;
   };
-
-  // Infrastructure Metrics
-  metrics: {
-    windowsEndpoints: Field<number>;
-    macEndpoints: Field<number>;
-    linuxEndpoints: Field<number>;
-    mobileDevices: Field<number>;
-    physicalServers: Field<number>;
-    virtualServers: Field<number>;
-    azureVms: Field<number>;
-    hypervisors: Field<number>;
-    activeAlerts: Field<number>;
-    failedBackups: Field<number>;
-    offlineDevices: Field<number>;
-    diskWarnings: Field<number>;
-    expiringCertificates: Field<number>;
-    expiringDomains: Field<number>;
+  facts: ProfileFact[];
+  metrics: ProfileMetric[];
+  stack: StackEntry[];
+  notes: ProfileNote[];
+  contacts: ProfileContact[];
+  integrations: ProfileIntegration[];
+  network: {
+    assets: NetworkAsset[];
+    firewalls: NetworkFirewall[];
   };
-
-  // Business Context
-  business: {
-    lineOfBusiness: Field<string>;
-    complianceFramework: Field<string | null>;
-    cyberInsurance: Field<'yes' | 'no' | 'unknown'>;
-    revenueBand: Field<string | null>;
-    businessSize: Field<string>;
-    afterHoursSupport: Field<'yes' | 'no' | 'on_call'>;
-    changeApprovalRequired: Field<'yes' | 'no' | 'cab_only'>;
-    changeFreezeWindows: Field<string | null>;
-  };
-
-  flags: Flag[];
-  tribal: TribalNote[];
-  contacts: Contact[];
-
-  // Operational Metadata
-  meta: {
-    firstOnboarded: Field<string>;
-    lastReviewed: Field<string>;
-    lastManualUpdate: Field<string>;
-    connectedIntegrations: Field<number>;
-    missingIntegrations: Field<string[]>;
-    aiSummaryRefreshedAt: Field<string>;
+  completeness: {
+    value: number;
+    applicableCount: number;
+    completeCount: number;
   };
 };

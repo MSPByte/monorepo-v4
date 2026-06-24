@@ -12,7 +12,6 @@
     type SiteContextStore,
     type SiteRecord,
   } from './_components/site-context';
-  import { buildClientProfile } from './_profile/client-profile.mock';
   import Loader from '$lib/components/transition/loader.svelte';
   import FadeIn from '$lib/components/transition/fade-in.svelte';
 
@@ -25,21 +24,18 @@
     enabled: !!id,
   }));
 
-  const profile = $derived.by(() => {
-    const s = siteQuery.data;
-    if (!s) return null;
-    return buildClientProfile(
-      { id: s.id, name: s.name, description: s.description, createdAt: s.createdAt },
-      { assetCount: s.assetCount, peopleCount: s.peopleCount, sources: s.sources }
-    );
-  });
+  const profileQuery = createQuery(() => ({
+    queryKey: ['sites.profileById', id],
+    queryFn: () => trpc.sites.profileById.query({ id }),
+    enabled: !!id,
+  }));
 
   const store: SiteContextStore = $state({ site: null, profile: null });
   provideSiteContext(store);
 
   $effect.pre(() => {
     store.site = (siteQuery.data as SiteRecord | undefined) ?? null;
-    store.profile = profile;
+    store.profile = profileQuery.data ?? null;
   });
 
   const tabs = $derived([
@@ -48,23 +44,22 @@
     { href: `/sites/${id}/findings`, label: 'Findings' },
     { href: `/sites/${id}/wiki`, label: 'Wiki' },
     { href: `/sites/${id}/network`, label: 'Network' },
-    { href: `/sites/${id}/activity`, label: 'Activity' },
   ]);
 
   let { children } = $props();
 </script>
 
 <div class="flex size-full flex-col overflow-hidden">
-  {#if siteQuery.isLoading}
+  {#if siteQuery.isLoading || profileQuery.isLoading}
     <Loader />
-  {:else if siteQuery.error || !siteQuery.data || !profile}
+  {:else if siteQuery.error || !siteQuery.data || profileQuery.error || !profileQuery.data}
     <div class="p-8 text-sm text-destructive">Site not found.</div>
   {:else}
     <BriefingBar
       siteId={id}
       siteName={siteQuery.data.name}
       description={siteQuery.data.description}
-      {profile}
+      profile={profileQuery.data}
     />
     <UrlTabs {tabs} />
     <FadeIn class="min-h-0 flex-1 overflow-auto">

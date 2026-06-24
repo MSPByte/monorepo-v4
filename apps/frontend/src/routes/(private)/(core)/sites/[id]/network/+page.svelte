@@ -1,116 +1,132 @@
 <script lang="ts">
   import SectionPanel from '../_components/section-panel.svelte';
-  import FieldRow from '../_components/field-row.svelte';
+  import SourceGlyph from '../_components/source-glyph.svelte';
   import { useSiteContext } from '../_components/site-context';
-  import type { Field } from '../_profile/client-profile.types';
+  import { formatRelativeDate } from '$lib/utils/format';
 
   const ctx = useSiteContext();
-  const site = $derived(ctx.site!);
+  const profile = $derived(ctx.profile!);
 
-  // Mock network data — replace with real source when network ingest exists.
-  function g<T>(value: T, origin: string): Field<T> {
-    return { value, source: 'generated', origin };
-  }
-  function free<T>(value: T): Field<T> {
-    return { value, source: 'user_free' };
-  }
-  function opt<T extends string | number>(value: T): Field<T> {
-    return { value, source: 'user_options' };
-  }
-
-  const locations = [
-    {
-      callsign: 'HQ',
-      name: 'Headquarters · Cedar Rapids, IA',
-      fields: {
-        firewall: g('FortiGate 60F', 'Fortinet FortiManager'),
-        firmware: g('7.2.10', 'Fortinet FortiManager'),
-        wan: free('AT&T Fiber · 1 Gbps symmetric'),
-        publicIp: g('45.32.190.211', 'Fortinet WAN1'),
-        vpnPeers: g(3, 'IPsec gateway'),
-        vlans: free('10 (corp) · 20 (voice) · 30 (guest) · 40 (legacy)'),
-        subnets: free('10.10.0.0/22'),
-        sdwan: opt('enabled'),
-      },
-    },
-    {
-      callsign: 'BR1',
-      name: 'Branch · Dubuque, IA',
-      fields: {
-        firewall: free('Meraki MX68'),
-        firmware: g('18.211.2', 'Meraki Dashboard'),
-        wan: free('Mediacom Cable · 500/35'),
-        publicIp: g('72.10.184.5', 'Meraki Dashboard'),
-        vpnPeers: g(2, 'Meraki AutoVPN'),
-        vlans: free('10 (corp) · 30 (guest)'),
-        subnets: free('10.20.0.0/24'),
-        sdwan: opt('enabled'),
-      },
-    },
-    {
-      callsign: 'BR2',
-      name: 'Plant 2 · Davenport, IA',
-      fields: {
-        firewall: free('Meraki MX67'),
-        firmware: g('18.211.2', 'Meraki Dashboard'),
-        wan: free('Spectrum Business · 300/20 + LTE failover'),
-        publicIp: g('98.166.43.12', 'Meraki Dashboard'),
-        vpnPeers: g(2, 'Meraki AutoVPN'),
-        vlans: free('10 (corp) · 50 (PLC) · 60 (cameras)'),
-        subnets: free('10.30.0.0/24'),
-        sdwan: opt('failover-only'),
-      },
-    },
-  ];
+  const assets = $derived(profile.network.assets);
+  const firewalls = $derived(profile.network.firewalls);
 </script>
 
 <div class="mx-auto max-w-[1400px] space-y-4 p-4 lg:p-6">
-  <!-- Topology diagram -->
-  <SectionPanel code="N·0" title="TOPOLOGY">
+  <SectionPanel code="N·1" title="FIREWALLS">
     {#snippet aside()}
-      mock · awaiting network ingest pipeline
+      {firewalls.length} linked
     {/snippet}
-    <pre class="overflow-x-auto whitespace-pre py-1 font-mono text-[12px] leading-relaxed text-foreground/85"
->{`        ┌──────────── INTERNET ────────────┐
-        │                                  │
-   AT&T Fiber                       Mediacom · Spectrum
-        │                                  │
-  ┌─────┴─────┐               ┌──────┬─────┴──────┐
-  │ HQ · FW   │ ◄── IPsec ──► │ BR1  │   BR2      │
-  │ FG-60F    │               │ MX68 │   MX67     │
-  └─────┬─────┘               └───┬──┘─────┬──────┘
-        │                         │        │
-  ┌─────┴───── VLANs ──────┐  ┌───┴──┐ ┌───┴──── VLAN 50 ────┐
-  │ 10 corp · 20 voice ·   │  │  10  │ │  PLCs · isolated     │
-  │ 30 guest · 40 legacy   │  │  30  │ │  no internet egress  │
-  └────────────────────────┘  └──────┘ └──────────────────────┘`}</pre>
+    {#if firewalls.length}
+      <div class="grid gap-3 xl:grid-cols-2">
+        {#each firewalls as fw (fw.id)}
+          <div class="border border-border bg-card/40 p-3">
+            <div class="mb-2 flex items-baseline justify-between gap-2">
+              <div class="flex items-baseline gap-2">
+                <SourceGlyph source="generated" />
+                <span class="truncate text-sm font-semibold">{fw.name}</span>
+              </div>
+              <span
+                class={`font-mono text-[10px] uppercase tracking-wider ${
+                  fw.connected ? 'text-primary' : 'text-destructive'
+                }`}
+              >
+                {fw.connected ? 'connected' : 'offline'}
+                {#if fw.suspended}· suspended{/if}
+              </span>
+            </div>
+            <dl class="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1 text-[12px]">
+              <dt class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Hostname
+              </dt>
+              <dd class="truncate font-mono">{fw.hostname}</dd>
+              <dt class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Model
+              </dt>
+              <dd class="truncate">{fw.model}</dd>
+              <dt class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Serial
+              </dt>
+              <dd class="truncate font-mono">{fw.serialNumber}</dd>
+              <dt class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Firmware
+              </dt>
+              <dd class="truncate font-mono">
+                {fw.firmwareVersion}
+                {#if fw.upgradeToVersion}
+                  <span class="text-warning/90">→ {fw.upgradeToVersion}</span>
+                {/if}
+              </dd>
+              <dt class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                External IP
+              </dt>
+              <dd class="truncate font-mono">{fw.externalIp}</dd>
+              <dt class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Managing
+              </dt>
+              <dd class="truncate">{fw.managing}</dd>
+              <dt class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Reporting
+              </dt>
+              <dd class="truncate">{fw.reporting}</dd>
+              <dt class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Last Seen
+              </dt>
+              <dd class="font-mono text-muted-foreground">
+                {formatRelativeDate(fw.lastSeenAt)}
+              </dd>
+            </dl>
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
+        no firewall integration data
+      </p>
+    {/if}
   </SectionPanel>
 
-  <div class="grid gap-4 xl:grid-cols-2">
-    {#each locations as loc}
-      <SectionPanel code={loc.callsign} title={loc.name}>
-        <dl>
-          <FieldRow label="Firewall" field={loc.fields.firewall} />
-          <FieldRow label="Firmware" field={loc.fields.firmware} />
-          <FieldRow label="WAN" field={loc.fields.wan} />
-          <FieldRow label="Public IP" field={loc.fields.publicIp} />
-          <FieldRow label="VPN Peers" field={loc.fields.vpnPeers} />
-          <FieldRow label="VLANs" field={loc.fields.vlans} />
-          <FieldRow label="Subnets" field={loc.fields.subnets} />
-          <FieldRow label="SD-WAN" field={loc.fields.sdwan} />
-        </dl>
-      </SectionPanel>
-    {/each}
-  </div>
-
-  <SectionPanel code="N·X" title="UNCLAIMED NETWORK DATA">
+  <SectionPanel code="N·2" title="NETWORK ASSETS">
     {#snippet aside()}
-      site {site.id.slice(0, 4).toUpperCase()}
+      {assets.length} discovered
     {/snippet}
-    <p class="max-w-2xl text-sm leading-snug text-muted-foreground">
-      A future Firewall/Switch integration will populate these fields automatically from
-      Fortinet, Meraki, and Cisco APIs. Until then, edit free-form values inline and the
-      glyph will switch from <span class="font-mono">▯</span> to <span class="font-mono text-primary">●</span> once a connector reports a matching value.
-    </p>
+    {#if assets.length}
+      <div class="overflow-x-auto">
+        <table class="w-full border-collapse text-sm">
+          <thead>
+            <tr class="border-b border-border text-left font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              <th class="py-1.5 pr-3">Name</th>
+              <th class="py-1.5 pr-3">Hostname</th>
+              <th class="py-1.5 pr-3">Status</th>
+              <th class="py-1.5">Sources</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each assets as asset (asset.id)}
+              <tr class="border-b border-border/40 last:border-b-0">
+                <td class="py-1.5 pr-3">
+                  <span class="flex items-center gap-2">
+                    <SourceGlyph source="generated" />
+                    <span class="truncate">{asset.displayName}</span>
+                  </span>
+                </td>
+                <td class="py-1.5 pr-3 font-mono text-[12px] text-muted-foreground">
+                  {asset.hostname ?? '—'}
+                </td>
+                <td class="py-1.5 pr-3 font-mono text-[11px] uppercase tracking-wider">
+                  {asset.status}
+                </td>
+                <td class="py-1.5 font-mono text-[11px] text-muted-foreground">
+                  {asset.sources.length ? asset.sources.join(', ') : '—'}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {:else}
+      <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
+        no network assets linked
+      </p>
+    {/if}
   </SectionPanel>
 </div>

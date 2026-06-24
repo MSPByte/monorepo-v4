@@ -1,6 +1,7 @@
 import { t } from './trpc.js';
 import { authRouter } from './routers/auth.js';
 import { sitesRouter } from './routers/sites.js';
+import { siteProfileRouter } from './routers/site-profile.js';
 import { assetsRouter } from './routers/assets.js';
 import { peopleRouter } from './routers/people.js';
 import { findingsRouter } from './routers/findings.js';
@@ -22,6 +23,7 @@ export const appRouter = t.router({
   overview: overviewRouter,
   findings: findingsRouter,
   sites: sitesRouter,
+  siteProfile: siteProfileRouter,
   assets: assetsRouter,
   people: peopleRouter,
   policies: policiesRouter,

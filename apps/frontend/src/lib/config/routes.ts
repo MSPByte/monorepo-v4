@@ -45,6 +45,12 @@ const ROUTES: Route[] = [
     permission: 'Assets.Read',
   },
   {
+    label: 'Wiki',
+    href: '/wiki',
+    devOnly: true,
+    permission: 'Assets.Read',
+  },
+  {
     label: 'Users',
     href: '/setup/users',
     permission: 'Users.Read',
@@ -54,6 +60,13 @@ const ROUTES: Route[] = [
     label: 'Roles',
     href: '/setup/roles',
     permission: 'Users.Read',
+    group: 'Setup',
+  },
+  {
+    label: 'Sites',
+    href: '/setup/sites',
+    devOnly: true,
+    permission: 'Sites.Write',
     group: 'Setup',
   },
   {
@@ -67,12 +80,6 @@ const ROUTES: Route[] = [
     href: '/setup/audit',
     permission: 'Global.Admin',
     group: 'Setup',
-  },
-  {
-    label: 'Wiki',
-    href: '/wiki',
-    devOnly: true,
-    permission: 'Assets.Read',
   },
   {
     label: 'Pipeline',

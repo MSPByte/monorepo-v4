@@ -1,5 +1,5 @@
 import { getContext, setContext } from 'svelte';
-import type { ClientProfile } from '../_profile/client-profile.types';
+import type { SiteProfileResponse } from '../_profile/client-profile.types';
 
 export type SiteRecord = {
   id: string;
@@ -19,7 +19,7 @@ export type SiteRecord = {
 
 export type SiteContextStore = {
   site: SiteRecord | null;
-  profile: ClientProfile | null;
+  profile: SiteProfileResponse | null;
 };
 
 const KEY = Symbol('site-context');
