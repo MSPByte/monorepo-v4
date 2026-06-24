@@ -1,23 +1,28 @@
 <script lang="ts">
-  import { page } from "$app/state";
-  import { cn } from "$lib/utils";
-  import type { Snippet } from "svelte";
+  import { page } from '$app/state';
+  import { cn } from '$lib/utils';
+  import type { Snippet } from 'svelte';
 
-  const { tabs, children }: { 
-    tabs: { 
-      href: string; 
+  const {
+    tabs,
+    children,
+  }: {
+    tabs: {
+      href: string;
       label: string;
       exact?: boolean;
       disabled?: () => boolean;
-    }[],
+    }[];
     children?: Snippet;
   } = $props();
 </script>
 
-<div class="flex w-full justify-between border-b">
+<div class="flex w-full justify-between border-b bg-background">
   <div class="flex items-center gap-0 px-4 shrink-0">
     {#each tabs as tab}
-      {@const isActive = tab.exact ? page.url.pathname === tab.href : page.url.pathname.includes(tab.href)}
+      {@const isActive = tab.exact
+        ? page.url.pathname === tab.href
+        : page.url.pathname.includes(tab.href)}
       {@const disabled = tab.disabled?.() ?? false}
       <a
         href={tab.href}

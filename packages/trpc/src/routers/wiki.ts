@@ -1140,6 +1140,28 @@ const overridesRouter = t.router({
         .orderBy(asc(sites.name));
     }),
 
+  listForSite: authProcedure
+    .input(z.object({ siteId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      return ctx.db
+        .select({
+          id: articleOverrides.id,
+          articleId: articleOverrides.articleId,
+          siteId: articleOverrides.siteId,
+          articleTitle: articles.title,
+          articleKbNumber: articles.kbNumber,
+          type: articleOverrides.type,
+          title: articleOverrides.title,
+          contentText: articleOverrides.contentText,
+          createdAt: articleOverrides.createdAt,
+          updatedAt: articleOverrides.updatedAt
+        })
+        .from(articleOverrides)
+        .innerJoin(articles, eq(articleOverrides.articleId, articles.id))
+        .where(eq(articleOverrides.siteId, input.siteId))
+        .orderBy(desc(articleOverrides.updatedAt));
+    }),
+
   create: authProcedure
     .input(
       z.object({
