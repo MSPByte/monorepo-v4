@@ -54,7 +54,7 @@ export const siteProfileFacts = pgTable(
     key: text('key').notNull(),
     source: siteFactSource('source').notNull(),
     origin: text('origin').notNull().default('manual'),
-    value: jsonb('value').notNull(),
+    value: jsonb('value'),
     confidence: text('confidence', { enum: ['high', 'medium', 'low'] }),
     applicable: text('applicable', { enum: ['applies', 'not_applicable', 'unknown'] }),
 
