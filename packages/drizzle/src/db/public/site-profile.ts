@@ -11,6 +11,9 @@ import {
 } from 'drizzle-orm/pg-core';
 import { integrationLinks, users } from './index.js';
 import { sites } from './sites.js';
+import { authenticatedRole, crudPolicy } from 'drizzle-orm/neon';
+
+const rls = crudPolicy({ role: authenticatedRole, read: true, modify: true });
 
 export const siteFactSource = pgEnum('e_site_fact_source', [
   'generated',
@@ -39,7 +42,7 @@ export const siteProfileFields = pgTable(
       .notNull()
       .defaultNow()
   },
-  (t) => [unique('unique_site_profile_options_key').on(t.key)]
+  (t) => [unique('unique_site_profile_options_key').on(t.key), rls]
 );
 
 export const siteProfileFacts = pgTable(
@@ -65,27 +68,35 @@ export const siteProfileFacts = pgTable(
       .notNull()
       .defaultNow()
   },
-  (t) => [unique('unique_site_key').on(t.key, t.siteId)]
+  (t) => [unique('unique_site_key').on(t.key, t.siteId), rls]
 );
 
-export const siteProfileNotes = pgTable('site_profile_notes', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  siteId: uuid('site_id')
-    .notNull()
-    .references(() => sites.id, { onDelete: 'cascade' }),
+export const siteProfileNotes = pgTable(
+  'site_profile_notes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
 
-  active: boolean('active').notNull(),
-  type: text('type', { enum: ['special', 'tribal'] }).notNull(),
-  title: text('title').notNull(),
-  description: text('description').notNull(),
-  severity: integer('severity').notNull(),
+    active: boolean('active').notNull(),
+    type: text('type', { enum: ['special', 'tribal'] }).notNull(),
+    title: text('title').notNull(),
+    description: text('description').notNull(),
+    severity: integer('severity').notNull(),
 
-  updatedBy: uuid('updated_by')
-    .notNull()
-    .references(() => users.id),
-  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
-  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
-});
+    updatedBy: uuid('updated_by')
+      .notNull()
+      .references(() => users.id),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow()
+  },
+  (t) => [rls]
+);
 
 export const siteStackCategories = pgTable(
   'site_stack_categories',
@@ -95,30 +106,52 @@ export const siteStackCategories = pgTable(
     label: text('label').notNull(),
     description: text('description').notNull(),
     required: boolean('required').notNull().default(true),
-    displayOrder: integer('display_order').notNull().default(0)
+    displayOrder: integer('display_order').notNull().default(0),
+    metadataFields: jsonb('metadata_fields')
   },
   (t) => [unique('unique_site_stack_categories_key').on(t.key)]
 );
 
-export const siteStackEntries = pgTable('site_stack_entries', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  siteId: uuid('site_id')
-    .notNull()
-    .references(() => sites.id, { onDelete: 'cascade' }),
-  categoryId: uuid('category_id').references(() => siteStackCategories.id, { onDelete: 'cascade' }),
-  canonicalId: uuid('canonical_id'),
-  linkId: uuid('link_id').references(() => integrationLinks.id, { onDelete: 'cascade' }),
-  key: text('key').notNull(),
+export const siteStackEntries = pgTable(
+  'site_stack_entries',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    categoryId: uuid('category_id').references(() => siteStackCategories.id, {
+      onDelete: 'cascade'
+    }),
+    canonicalId: uuid('canonical_id'),
+    linkId: uuid('link_id').references(() => integrationLinks.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
 
-  vendor: text('vendor'),
-  product: text('product'),
-  status: text('status', { enum: ['managed', 'third_party', 'not_used', 'unknown'] }).notNull(),
+    vendor: text('vendor'),
+    product: text('product'),
+    status: text('status', {
+      enum: [
+        'managed',
+        'third_party',
+        'not_used',
+        'unknown',
+        'msp_managed',
+        'client_managed',
+        'vendor_managed',
+        'planned'
+      ]
+    }).notNull(),
+    notes: text('notes'),
+    metadata: jsonb('metadata'),
 
-  source: text('source', { enum: ['generated', 'manual'] }).notNull(),
-  origin: text('origin').notNull(),
+    source: text('source', { enum: ['generated', 'manual'] }).notNull(),
+    origin: text('origin').notNull(),
 
-  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
-});
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow()
+  },
+  (t) => [unique('unique_site_stack_entry_site_key').on(t.siteId, t.key), rls]
+);
 
 export type SiteProfileFields = typeof siteProfileFields.$inferSelect;
 export type SiteProfileFacts = typeof siteProfileFacts.$inferSelect;

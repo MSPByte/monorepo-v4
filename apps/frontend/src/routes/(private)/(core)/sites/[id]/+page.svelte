@@ -24,6 +24,7 @@
 
   import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
   import Plus from '@lucide/svelte/icons/plus';
+  import Separator from '$lib/components/ui/separator/separator.svelte';
 
   const ctx = useSiteContext();
   const profile = $derived(ctx.profile!);
@@ -78,7 +79,13 @@
   }
 
   function hasStackValue(entry: StackEntry) {
-    return entry.status !== 'unknown';
+    return (
+      entry.status !== 'unknown' ||
+      !!entry.vendor ||
+      !!entry.product ||
+      !!entry.notes ||
+      Object.keys(entry.metadata ?? {}).length > 0
+    );
   }
 
   const executiveFacts = $derived(
@@ -104,16 +111,38 @@
 
   function stackDisplay(entry: StackEntry): string {
     if (entry.status === 'not_used') return 'Not used';
-    if (entry.status === 'unknown') return '—';
     const parts = [entry.vendor, entry.product].filter(Boolean);
-    return parts.length ? parts.join(' · ') : '—';
+    if (parts.length) return parts.join(' · ');
+    if (entry.status === 'planned') return 'Planned';
+    if (entry.status === 'unknown') return 'Unknown';
+    return relationshipLabel(entry);
   }
 
   function stackTone(entry: StackEntry): string {
-    if (entry.status === 'managed') return 'text-foreground';
-    if (entry.status === 'third_party') return 'text-foreground/80';
+    if (entry.status === 'msp_managed') return 'text-foreground';
+    if (entry.status === 'client_managed' || entry.status === 'vendor_managed')
+      return 'text-foreground/80';
+    if (entry.status === 'planned') return 'text-foreground/70 italic';
     if (entry.status === 'not_used') return 'text-muted-foreground/70 italic';
     return 'text-muted-foreground/60';
+  }
+
+  function relationshipLabel(entry: StackEntry): string {
+    const labels: Record<StackEntry['status'], string> = {
+      msp_managed: 'Managed by us',
+      client_managed: 'Managed by client',
+      vendor_managed: 'Managed by vendor',
+      not_used: 'Not used',
+      planned: 'Planned',
+      unknown: 'Unknown',
+    };
+    return labels[entry.status];
+  }
+
+  function stackHighlights(entry: StackEntry) {
+    return Object.entries(entry.metadata ?? {})
+      .filter(([, value]) => value)
+      .slice(0, 3);
   }
 
   let factOpen = $state(false);
@@ -212,7 +241,7 @@
             {#each executiveFacts as fact (fact.key)}
               <button
                 type="button"
-                class="block w-full text-left hover:bg-foreground/[0.03]"
+                class="block w-full text-left hover:bg-foreground/3"
                 onclick={() => openFactEditor(fact)}
               >
                 <FactRow label={factLabel(fact)} {fact} />
@@ -245,40 +274,57 @@
             {#each visibleStack as entry (entry.categoryKey)}
               <button
                 type="button"
-                class="grid w-full grid-cols-[108px_minmax(0,1fr)_auto] items-baseline gap-3 border-b border-border/50 py-[7px] text-left last:border-b-0 hover:bg-foreground/[0.03]"
+                class="grid w-full grid-cols-[108px_minmax(0,1fr)] items-center gap-3 border-b border-border/50 py-[7px] text-left last:border-b-0 hover:bg-foreground/3 lg:grid-cols-[108px_minmax(0,1fr)_auto]"
                 onclick={() => openStackEditor(entry)}
               >
                 <dt
-                  class="font-mono text-[10px] uppercase leading-tight tracking-wider text-muted-foreground"
+                  class="font-mono text-[10px] uppercase leading-tight tracking-wider text-muted-foreground mt-auto"
                 >
                   {entry.categoryLabel}
                   {#if entry.required}
                     <span class="ml-1 text-warning">*</span>
                   {/if}
                 </dt>
-                <dd class="flex min-w-0 items-center gap-2 text-sm">
-                  {#if entry.status === 'unknown'}
-                    <span class="size-2"></span>
-                  {:else}
-                    <SourceGlyph
-                      source={entry.source === 'generated' ? 'generated' : 'user_options'}
-                    />
-                  {/if}
-                  <span class={`truncate ${stackTone(entry)}`}>{stackDisplay(entry)}</span>
-                  {#if entry.status === 'third_party'}
-                    <span
-                      class="ml-1 rounded-[3px] border border-border px-1 py-px font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                <dd class="min-w-0 text-sm">
+                  <div class="flex min-w-0 items-center gap-2">
+                    {#if entry.status === 'unknown'}
+                      <span class="size-2"></span>
+                    {:else}
+                      <SourceGlyph
+                        source={entry.source === 'generated' ? 'generated' : 'user_options'}
+                      />
+                    {/if}
+                    <span class={`truncate ${stackTone(entry)}`}>{stackDisplay(entry)}</span>
+                    {#if entry.status === 'client_managed' || entry.status === 'vendor_managed'}
+                      <span
+                        class="ml-1 rounded-[3px] border border-border px-1 py-px font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                      >
+                        {entry.status === 'client_managed' ? 'client' : 'vendor'}
+                      </span>
+                    {/if}
+                  </div>
+                  {#if entry.notes || stackHighlights(entry).length}
+                    <div
+                      class="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground"
                     >
-                      3rd-party
-                    </span>
+                      {#each stackHighlights(entry) as [key, value] (key)}
+                        <span class="max-w-full truncate">
+                          <span class="font-mono uppercase tracking-wider text-muted-foreground/70"
+                            >{key.replace(/_/g, ' ')}</span
+                          >
+                          {value}
+                        </span>
+                      {/each}
+                      {#if entry.notes}
+                        <span class="truncate italic">{entry.notes}</span>
+                      {/if}
+                    </div>
                   {/if}
                 </dd>
                 <dd
                   class="whitespace-nowrap text-right font-mono text-[10px] text-muted-foreground/60"
                 >
-                  {#if entry.origin}
-                    <span class="hidden lg:inline">{entry.origin}</span>
-                  {/if}
+                  <span class="hidden lg:inline">{relationshipLabel(entry)}</span>
                 </dd>
               </button>
             {/each}
@@ -324,7 +370,7 @@
             {#each contextFacts as fact (fact.key)}
               <button
                 type="button"
-                class="block w-full text-left hover:bg-foreground/[0.03]"
+                class="block w-full text-left hover:bg-foreground/3"
                 onclick={() => openFactEditor(fact)}
               >
                 <FactRow label={factLabel(fact)} {fact} />
@@ -507,7 +553,7 @@
         Choose a hidden {addMode === 'stack' ? 'stack category' : 'profile field'} to add to this panel.
       </Dialog.Description>
     </Dialog.Header>
-
+    <Separator />
     <div class="grid gap-2 p-4">
       <SingleSelect
         options={addOptions}

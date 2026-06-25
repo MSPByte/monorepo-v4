@@ -23,7 +23,27 @@ const factValueSchema = z.union([
   z.null()
 ]);
 
-const stackStatusEnum = z.enum(['managed', 'third_party', 'not_used', 'unknown']);
+const stackStatusEnum = z.enum([
+  'managed',
+  'third_party',
+  'msp_managed',
+  'client_managed',
+  'vendor_managed',
+  'not_used',
+  'planned',
+  'unknown'
+]);
+const stackMetadataSchema = z.record(z.string(), z.string().trim()).default({});
+const stackMetadataFieldSchema = z.object({
+  key: z
+    .string()
+    .min(1)
+    .regex(/^[a-z0-9_]+$/, 'lowercase letters, digits, underscores'),
+  label: z.string().min(1),
+  type: z.enum(['string', 'number', 'boolean', 'url', 'ip', 'secret_ref']).default('string'),
+  required: z.boolean().default(false),
+  helpText: z.string().nullable().optional()
+});
 const noteTypeEnum = z.enum(['special', 'tribal']);
 
 const profileFieldSectionEnum = z.enum(['executive', 'context']);
@@ -50,6 +70,7 @@ type CatalogCategoryOut = {
   description: string;
   required: boolean;
   displayOrder: number;
+  metadataFields: z.infer<typeof stackMetadataFieldSchema>[];
   builtIn: boolean;
 };
 
@@ -79,9 +100,19 @@ export async function ensureCatalogDefaults(db: Context['db']) {
           label: category.label,
           description: category.description,
           required: category.required,
-          displayOrder: category.displayOrder
+          displayOrder: category.displayOrder,
+          metadataFields: normalizeStackMetadataFields(category.metadataFields)
         })
-        .onConflictDoNothing({ target: siteStackCategories.key })
+        .onConflictDoUpdate({
+          target: siteStackCategories.key,
+          set: {
+            label: category.label,
+            description: category.description,
+            required: category.required,
+            displayOrder: category.displayOrder,
+            metadataFields: normalizeStackMetadataFields(category.metadataFields)
+          }
+        })
         .catch(() => null)
     )
   ]);
@@ -89,6 +120,27 @@ export async function ensureCatalogDefaults(db: Context['db']) {
 
 function actorLabel(ctx: Context) {
   return ctx.user.name || ctx.user.email;
+}
+
+function normalizeStackStatus(status: z.infer<typeof stackStatusEnum>) {
+  if (status === 'managed') return 'msp_managed';
+  if (status === 'third_party') return 'vendor_managed';
+  return status;
+}
+
+function normalizeStackMetadataFields(
+  fields:
+    | (Array<Partial<z.infer<typeof stackMetadataFieldSchema>> & { key: string; label: string }>)
+    | null
+    | undefined
+) {
+  return (fields ?? []).map((field) => ({
+    key: field.key,
+    label: field.label,
+    type: field.type ?? 'string',
+    required: field.required ?? false,
+    helpText: field.helpText ?? null
+  }));
 }
 
 async function auditCustomerChange(
@@ -177,6 +229,9 @@ export const siteProfileRouter = t.router({
           description: c.description,
           required: c.required,
           displayOrder: c.displayOrder,
+          metadataFields: normalizeStackMetadataFields(
+            c.metadataFields as z.infer<typeof stackMetadataFieldSchema>[] | null
+          ),
           builtIn: BUILT_IN_STACK_CATEGORIES.some((builtIn) => builtIn.key === c.key)
         }
       ])
@@ -190,6 +245,7 @@ export const siteProfileRouter = t.router({
         description: c.description,
         required: c.required,
         displayOrder: c.displayOrder,
+        metadataFields: normalizeStackMetadataFields(c.metadataFields),
         builtIn: true
       });
     }
@@ -271,7 +327,8 @@ export const siteProfileRouter = t.router({
         label: z.string().min(1),
         description: z.string().default(''),
         required: z.boolean().default(false),
-        displayOrder: z.number().int().default(0)
+        displayOrder: z.number().int().default(0),
+        metadataFields: z.array(stackMetadataFieldSchema).default([])
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -283,7 +340,8 @@ export const siteProfileRouter = t.router({
             label: input.label,
             description: input.description,
             required: input.required,
-            displayOrder: input.displayOrder
+            displayOrder: input.displayOrder,
+            metadataFields: input.metadataFields
           })
           .where(eq(siteStackCategories.id, input.id))
           .returning();
@@ -297,7 +355,8 @@ export const siteProfileRouter = t.router({
           label: input.label,
           description: input.description,
           required: input.required,
-          displayOrder: input.displayOrder
+          displayOrder: input.displayOrder,
+          metadataFields: input.metadataFields
         })
         .returning();
       if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
@@ -423,6 +482,8 @@ export const siteProfileRouter = t.router({
         vendor: z.string().nullable().optional(),
         product: z.string().nullable().optional(),
         status: stackStatusEnum,
+        notes: z.string().nullable().optional(),
+        metadata: stackMetadataSchema.optional(),
         source: z.enum(['generated', 'manual']).default('manual'),
         origin: z.string().default('manual')
       })
@@ -447,6 +508,11 @@ export const siteProfileRouter = t.router({
         )
         .limit(1);
 
+      const status = normalizeStackStatus(input.status);
+      const metadata = Object.fromEntries(
+        Object.entries(input.metadata ?? {}).filter(([, value]) => value.trim().length > 0)
+      );
+
       if (existing) {
         const [row] = await ctx.db
           .update(siteStackEntries)
@@ -454,7 +520,9 @@ export const siteProfileRouter = t.router({
             categoryId: categoryRow?.id ?? null,
             vendor: input.vendor ?? null,
             product: input.product ?? null,
-            status: input.status,
+            status,
+            notes: input.notes?.trim() || null,
+            metadata,
             source: input.source,
             origin: input.origin
           })
@@ -470,11 +538,15 @@ export const siteProfileRouter = t.router({
           metadata: {
             categoryKey: input.categoryKey,
             previousStatus: existing.status,
-            newStatus: input.status,
+            newStatus: status,
             previousVendor: existing.vendor,
             newVendor: input.vendor ?? null,
             previousProduct: existing.product,
-            newProduct: input.product ?? null
+            newProduct: input.product ?? null,
+            previousNotes: existing.notes,
+            newNotes: input.notes?.trim() || null,
+            previousMetadata: existing.metadata,
+            newMetadata: metadata
           }
         });
         return row;
@@ -488,7 +560,9 @@ export const siteProfileRouter = t.router({
           categoryId: categoryRow?.id ?? null,
           vendor: input.vendor ?? null,
           product: input.product ?? null,
-          status: input.status,
+          status,
+          notes: input.notes?.trim() || null,
+          metadata,
           source: input.source,
           origin: input.origin
         })
@@ -505,7 +579,9 @@ export const siteProfileRouter = t.router({
             categoryKey: input.categoryKey,
             vendor: input.vendor ?? null,
             product: input.product ?? null,
-            status: input.status
+            status,
+            notes: input.notes?.trim() || null,
+            metadata
           }
         });
       }

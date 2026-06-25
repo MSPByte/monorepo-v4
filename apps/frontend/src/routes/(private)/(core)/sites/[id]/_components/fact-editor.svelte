@@ -17,6 +17,7 @@
 
   import type { ProfileFact } from '../_profile/client-profile.types';
   import { prettyText } from '$lib/utils/format';
+  import Separator from '$lib/components/ui/separator/separator.svelte';
 
   type CatalogField = {
     key: string;
@@ -186,7 +187,7 @@
         >Set a value, mark as not applicable, or leave it unknown.</Dialog.Description
       >
     </Dialog.Header>
-
+    <Separator />
     <div class="grid gap-3 p-4">
       <div class="grid gap-1.5">
         <Label>Applicability</Label>
@@ -320,12 +321,20 @@
     </div>
 
     <Dialog.Footer>
-      <Button variant="ghost" onclick={() => clear.mutate()} disabled={clear.isPending}>
-        Clear
-      </Button>
+      {#if fact.updatedAt !== null}
+        <Button
+          variant="destructive"
+          onclick={() => clear.mutate()}
+          disabled={clear.isPending || save.isPending}
+        >
+          Clear
+        </Button>
+      {/if}
       <div class="flex-1"></div>
       <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
-      <Button onclick={() => save.mutate()} disabled={save.isPending}>Save</Button>
+      <Button onclick={() => save.mutate()} disabled={save.isPending || clear.isPending}
+        >Save</Button
+      >
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

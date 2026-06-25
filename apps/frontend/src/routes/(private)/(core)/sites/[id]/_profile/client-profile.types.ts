@@ -30,11 +30,22 @@ export type StackEntry = {
   categoryKey: string;
   categoryLabel: string;
   required: boolean;
+  metadataFields: StackMetadataField[];
   vendor: string | null;
   product: string | null;
-  status: 'managed' | 'third_party' | 'not_used' | 'unknown';
+  status: 'msp_managed' | 'client_managed' | 'vendor_managed' | 'not_used' | 'planned' | 'unknown';
+  notes: string | null;
+  metadata: Record<string, string> | null;
   source: 'generated' | 'manual';
   origin: string | null;
+};
+
+export type StackMetadataField = {
+  key: string;
+  label: string;
+  type: 'string' | 'number' | 'boolean' | 'url' | 'ip' | 'secret_ref';
+  required?: boolean;
+  helpText?: string | null;
 };
 
 export type ProfileNote = {

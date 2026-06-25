@@ -345,6 +345,13 @@ export const sitesRouter = t.router({
         label: string;
         required: boolean;
         displayOrder: number;
+        metadataFields: Array<{
+          key: string;
+          label: string;
+          type: 'string' | 'number' | 'boolean' | 'url' | 'ip' | 'secret_ref';
+          required?: boolean;
+          helpText?: string | null;
+        }>;
       };
       const categoryByKey = new Map<string, MergedCategory>();
       for (const c of BUILT_IN_STACK_CATEGORIES) {
@@ -352,7 +359,8 @@ export const sitesRouter = t.router({
           key: c.key,
           label: c.label,
           required: c.required,
-          displayOrder: c.displayOrder
+          displayOrder: c.displayOrder,
+          metadataFields: c.metadataFields ?? []
         });
       }
       for (const c of stackCategoryRows) {
@@ -360,10 +368,16 @@ export const sitesRouter = t.router({
           key: c.key,
           label: c.label,
           required: c.required,
-          displayOrder: c.displayOrder
+          displayOrder: c.displayOrder,
+          metadataFields: (c.metadataFields ?? []) as MergedCategory['metadataFields']
         });
       }
 
+      const normalizeStackStatus = (status: string | null | undefined) => {
+        if (status === 'managed') return 'msp_managed';
+        if (status === 'third_party') return 'vendor_managed';
+        return status ?? 'unknown';
+      };
       const stackEntryByKey = new Map(stackEntryRows.map((e) => [e.key, e]));
       const stack = [...categoryByKey.values()]
         .sort((a, b) => a.displayOrder - b.displayOrder)
@@ -373,13 +387,18 @@ export const sitesRouter = t.router({
             categoryKey: cat.key,
             categoryLabel: cat.label,
             required: cat.required,
+            metadataFields: cat.metadataFields,
             vendor: entry?.vendor ?? null,
             product: entry?.product ?? null,
-            status: (entry?.status ?? 'unknown') as
-              | 'managed'
-              | 'third_party'
+            status: normalizeStackStatus(entry?.status) as
+              | 'msp_managed'
+              | 'client_managed'
+              | 'vendor_managed'
               | 'not_used'
+              | 'planned'
               | 'unknown',
+            notes: entry?.notes ?? null,
+            metadata: (entry?.metadata ?? null) as Record<string, string> | null,
             source: (entry?.source ?? 'manual') as 'generated' | 'manual',
             origin: entry?.origin ?? null
           };

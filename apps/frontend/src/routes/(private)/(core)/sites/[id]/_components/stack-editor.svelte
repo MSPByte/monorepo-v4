@@ -10,8 +10,9 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
+  import { Textarea } from '$lib/components/ui/textarea';
 
-  import type { StackEntry } from '../_profile/client-profile.types';
+  import type { StackEntry, StackMetadataField } from '../_profile/client-profile.types';
 
   let {
     siteId,
@@ -26,18 +27,94 @@
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const qc = useQueryClient();
 
-  type Status = 'managed' | 'third_party' | 'not_used' | 'unknown';
+  type Status =
+    | 'msp_managed'
+    | 'client_managed'
+    | 'vendor_managed'
+    | 'not_used'
+    | 'planned'
+    | 'unknown';
+  type MetadataRow = StackMetadataField & { value: string };
+
+  const relationshipLabels: Record<Status, string> = {
+    msp_managed: 'Managed by us',
+    client_managed: 'Managed by client',
+    vendor_managed: 'Managed by vendor',
+    not_used: 'Not used',
+    planned: 'Planned',
+    unknown: 'Unknown',
+  };
+
   let status = $state<Status>(entry.status);
   let vendor = $state(entry.vendor ?? '');
   let product = $state(entry.product ?? '');
+  let notes = $state(entry.notes ?? '');
+  let metadataRows = $state<MetadataRow[]>([]);
+
+  function defaultRowsFor(fields: StackMetadataField[], values: Record<string, string> | null) {
+    const defaults = fields.length
+      ? fields
+      : [
+          { key: 'account_number', label: 'Account #', type: 'string' as const },
+          { key: 'admin_url', label: 'Admin URL', type: 'url' as const },
+          { key: 'support_contact', label: 'Support contact', type: 'string' as const },
+        ];
+    const used = new Set<string>();
+    const rows: MetadataRow[] = defaults.map((row) => {
+      used.add(row.key);
+      return { required: false, helpText: null, ...row, value: values?.[row.key] ?? '' };
+    });
+    for (const [key, value] of Object.entries(values ?? {})) {
+      if (!used.has(key))
+        rows.push({
+          key,
+          label: key.replace(/_/g, ' '),
+          type: 'string',
+          required: false,
+          helpText: null,
+          value,
+        });
+    }
+    return rows;
+  }
 
   $effect(() => {
     if (open) {
       status = entry.status;
       vendor = entry.vendor ?? '';
       product = entry.product ?? '';
+      notes = entry.notes ?? '';
+      metadataRows = defaultRowsFor(entry.metadataFields, entry.metadata);
     }
   });
+
+  function metadataPayload() {
+    return Object.fromEntries(
+      metadataRows
+        .map((row) => [row.key.trim(), row.value.trim()] as const)
+        .filter(([key, value]) => key && value)
+    );
+  }
+
+  function addMetadataField() {
+    metadataRows = [
+      ...metadataRows,
+      {
+        key: '',
+        label: 'Custom field',
+        type: 'string',
+        required: false,
+        helpText: null,
+        value: '',
+      },
+    ];
+  }
+
+  const missingRequiredDetails = $derived(
+    status === 'not_used'
+      ? []
+      : metadataRows.filter((row) => row.required && !row.value.trim()).map((row) => row.label)
+  );
 
   const save = createMutation(() => ({
     mutationFn: () =>
@@ -47,8 +124,10 @@
         vendor: status === 'not_used' ? null : vendor || null,
         product: status === 'not_used' ? null : product || null,
         status,
+        notes: notes || null,
+        metadata: metadataPayload(),
         source: 'manual',
-        origin: 'manual',
+        origin: 'user',
       }),
     onSuccess: () => {
       open = false;
@@ -71,33 +150,35 @@
 </script>
 
 <Dialog.Root bind:open>
-  <Dialog.Content class="sm:max-w-[440px]">
+  <Dialog.Content class="sm:max-w-[640px]">
     <Dialog.Header>
       <Dialog.Title>{entry.categoryLabel}</Dialog.Title>
       <Dialog.Description>
-        Record what platform this site uses for {entry.categoryLabel}.
+        Document the vendor, ownership, caveats, and operational details for this service.
       </Dialog.Description>
     </Dialog.Header>
 
-    <div class="grid gap-3 p-4">
+    <div class="grid max-h-[70vh] gap-4 overflow-y-auto p-4">
       <div class="grid gap-1.5">
-        <Label>Status</Label>
+        <Label>Relationship</Label>
         <Select.Root
           type="single"
           value={status}
           onValueChange={(v) => v && (status = v as Status)}
         >
-          <Select.Trigger>{status.replace('_', ' ')}</Select.Trigger>
+          <Select.Trigger>{relationshipLabels[status]}</Select.Trigger>
           <Select.Content>
-            <Select.Item value="managed">managed</Select.Item>
-            <Select.Item value="third_party">third-party</Select.Item>
-            <Select.Item value="not_used">not used</Select.Item>
-            <Select.Item value="unknown">unknown</Select.Item>
+            <Select.Item value="msp_managed">Managed by us</Select.Item>
+            <Select.Item value="client_managed">Managed by client</Select.Item>
+            <Select.Item value="vendor_managed">Managed by vendor</Select.Item>
+            <Select.Item value="planned">Planned</Select.Item>
+            <Select.Item value="not_used">Not used</Select.Item>
+            <Select.Item value="unknown">Unknown</Select.Item>
           </Select.Content>
         </Select.Root>
       </div>
 
-      {#if status === 'managed' || status === 'third_party' || status === 'unknown'}
+      {#if status !== 'not_used'}
         <div class="grid grid-cols-2 gap-3">
           <div class="grid gap-1.5">
             <Label for="stack-vendor">Vendor</Label>
@@ -109,6 +190,67 @@
           </div>
         </div>
       {/if}
+
+      <div class="grid gap-1.5">
+        <Label for="stack-notes">Caveats / notes</Label>
+        <Textarea
+          id="stack-notes"
+          bind:value={notes}
+          rows={3}
+          placeholder="Contract notes, exceptions, escalation path, or site-specific caveats"
+        />
+      </div>
+
+      {#if status !== 'not_used'}
+        <div class="grid gap-2">
+          <div class="flex items-center justify-between gap-2">
+            <Label>Details</Label>
+            <button
+              type="button"
+              class="text-xs text-muted-foreground hover:text-foreground"
+              onclick={addMetadataField}
+            >
+              Add field
+            </button>
+          </div>
+          <div class="grid gap-2">
+            {#each metadataRows as row, i (`${row.key}-${i}`)}
+              <div class="grid grid-cols-[minmax(120px,0.45fr)_minmax(0,1fr)] gap-2">
+                <div class="grid gap-1">
+                  <Input
+                    bind:value={row.label}
+                    placeholder="Label"
+                    readonly={entry.metadataFields.some((field) => field.key === row.key)}
+                    oninput={() => {
+                      if (!row.key) row.key = row.label.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+                    }}
+                  />
+                  {#if entry.metadataFields.find((field) => field.key === row.key)?.required}
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-warning">
+                      required
+                    </span>
+                  {/if}
+                </div>
+                <div class="grid gap-1">
+                  <Input
+                    bind:value={row.value}
+                    type={row.type === 'number' ? 'number' : row.type === 'url' ? 'url' : 'text'}
+                    placeholder={row.helpText || row.label || 'Value'}
+                  />
+                  {#if row.helpText}
+                    <span class="text-[11px] text-muted-foreground">{row.helpText}</span>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+          {#if missingRequiredDetails.length}
+            <p class="text-xs text-warning">
+              Missing required details: {missingRequiredDetails.join(', ')}
+            </p>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     <Dialog.Footer>
@@ -117,7 +259,12 @@
       </Button>
       <div class="flex-1"></div>
       <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
-      <Button onclick={() => save.mutate()} disabled={save.isPending}>Save</Button>
+      <Button
+        onclick={() => save.mutate()}
+        disabled={save.isPending || !!missingRequiredDetails.length}
+      >
+        Save
+      </Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

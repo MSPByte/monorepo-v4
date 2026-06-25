@@ -18,6 +18,15 @@ export type StackCategoryDef = {
   description: string;
   required: boolean;
   displayOrder: number;
+  metadataFields?: StackMetadataFieldDef[];
+};
+
+export type StackMetadataFieldDef = {
+  key: string;
+  label: string;
+  type: 'string' | 'number' | 'boolean' | 'url' | 'ip' | 'secret_ref';
+  required?: boolean;
+  helpText?: string;
 };
 
 export type RibbonMetricKey =
@@ -249,15 +258,38 @@ export const BUILT_IN_STACK_CATEGORIES: StackCategoryDef[] = [
     label: 'Firewall',
     description: 'Network firewall vendor',
     required: false,
-    displayOrder: 70
+    displayOrder: 70,
+    metadataFields: [
+      { key: 'management_url', label: 'Management URL', type: 'url' },
+      { key: 'lan_gateway', label: 'LAN Gateway', type: 'ip' },
+      { key: 'wan_ip', label: 'WAN IP', type: 'ip' },
+      { key: 'serial_number', label: 'Serial Number', type: 'string' },
+      { key: 'support_contract', label: 'Support Contract', type: 'string' }
+    ]
   },
-  { key: 'dns', label: 'DNS', description: 'DNS provider', required: false, displayOrder: 80 },
+  {
+    key: 'dns',
+    label: 'DNS',
+    description: 'DNS provider',
+    required: false,
+    displayOrder: 80,
+    metadataFields: [
+      { key: 'authoritative_zones', label: 'Authoritative Zones', type: 'string' },
+      { key: 'registrar', label: 'Registrar', type: 'string' },
+      { key: 'forwarders', label: 'Forwarders', type: 'string' }
+    ]
+  },
   {
     key: 'password_manager',
     label: 'Password Mgr',
     description: 'Password management platform',
     required: false,
-    displayOrder: 90
+    displayOrder: 90,
+    metadataFields: [
+      { key: 'tenant_url', label: 'Tenant URL', type: 'url' },
+      { key: 'admin_group', label: 'Admin Group', type: 'string' },
+      { key: 'exceptions', label: 'Exceptions', type: 'string' }
+    ]
   },
   {
     key: 'remote_access',
@@ -279,14 +311,30 @@ export const BUILT_IN_STACK_CATEGORIES: StackCategoryDef[] = [
     label: 'Primary ISP',
     description: 'Primary internet provider',
     required: false,
-    displayOrder: 130
+    displayOrder: 130,
+    metadataFields: [
+      { key: 'wan_ip', label: 'WAN IP', type: 'ip', required: true },
+      { key: 'gateway_ip', label: 'Gateway IP', type: 'ip' },
+      { key: 'dns_servers', label: 'DNS Servers', type: 'string' },
+      { key: 'circuit_id', label: 'Circuit ID', type: 'string' },
+      { key: 'account_number', label: 'Account Number', type: 'string' },
+      { key: 'support_phone', label: 'Support Phone', type: 'string' }
+    ]
   },
   {
     key: 'isp_secondary',
     label: 'Secondary ISP',
     description: 'Failover internet provider',
     required: false,
-    displayOrder: 140
+    displayOrder: 140,
+    metadataFields: [
+      { key: 'wan_ip', label: 'WAN IP', type: 'ip' },
+      { key: 'gateway_ip', label: 'Gateway IP', type: 'ip' },
+      { key: 'dns_servers', label: 'DNS Servers', type: 'string' },
+      { key: 'circuit_id', label: 'Circuit ID', type: 'string' },
+      { key: 'account_number', label: 'Account Number', type: 'string' },
+      { key: 'support_phone', label: 'Support Phone', type: 'string' }
+    ]
   }
 ];
 

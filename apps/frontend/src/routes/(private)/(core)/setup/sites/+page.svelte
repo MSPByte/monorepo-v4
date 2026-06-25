@@ -166,6 +166,15 @@
     description: string;
     required: boolean;
     displayOrder: number;
+    metadataFields: StackMetadataFieldDraft[];
+  };
+
+  type StackMetadataFieldDraft = {
+    key: string;
+    label: string;
+    type: 'string' | 'number' | 'boolean' | 'url' | 'ip' | 'secret_ref';
+    required: boolean;
+    helpText: string;
   };
 
   const emptyCategory: CategoryDraft = {
@@ -174,6 +183,7 @@
     description: '',
     required: false,
     displayOrder: 100,
+    metadataFields: [],
   };
 
   let catOpen = $state(false);
@@ -192,8 +202,26 @@
       description: row.description,
       required: row.required,
       displayOrder: row.displayOrder,
+      metadataFields: (row.metadataFields ?? []).map((field) => ({
+        key: field.key,
+        label: field.label,
+        type: field.type,
+        required: field.required ?? false,
+        helpText: field.helpText ?? '',
+      })),
     };
     catOpen = true;
+  }
+
+  function addCategoryMetadataField() {
+    catDraft.metadataFields = [
+      ...catDraft.metadataFields,
+      { key: '', label: '', type: 'string', required: false, helpText: '' },
+    ];
+  }
+
+  function removeCategoryMetadataField(index: number) {
+    catDraft.metadataFields = catDraft.metadataFields.filter((_, i) => i !== index);
   }
 
   const saveCategory = createMutation(() => ({
@@ -205,6 +233,12 @@
         description: input.description,
         required: input.required,
         displayOrder: input.displayOrder,
+        metadataFields: input.metadataFields
+          .filter((field) => field.key && field.label)
+          .map((field) => ({
+            ...field,
+            helpText: field.helpText || null,
+          })),
       }),
     onSuccess: () => {
       catOpen = false;
@@ -344,6 +378,7 @@
             <th class="px-2 py-1.5">Key</th>
             <th class="px-2 py-1.5">Label</th>
             <th class="px-2 py-1.5">Description</th>
+            <th class="px-2 py-1.5">Details</th>
             <th class="px-2 py-1.5">Required</th>
             <th class="px-2 py-1.5">Order</th>
             <th class="px-2 py-1.5">Origin</th>
@@ -356,6 +391,9 @@
               <td class="px-2 py-1.5 font-mono text-[12px]">{c.key}</td>
               <td class="px-2 py-1.5">{c.label}</td>
               <td class="px-2 py-1.5 text-muted-foreground">{c.description || '—'}</td>
+              <td class="px-2 py-1.5 font-mono text-[11px] text-muted-foreground">
+                {c.metadataFields?.length ?? 0}
+              </td>
               <td class="px-2 py-1.5 font-mono text-[11px] uppercase tracking-wider">
                 {c.required ? 'yes' : 'no'}
               </td>
@@ -553,14 +591,14 @@
 </Dialog.Root>
 
 <Dialog.Root bind:open={catOpen}>
-  <Dialog.Content class="sm:max-w-[480px]">
+  <Dialog.Content class="sm:max-w-[760px]">
     <Dialog.Header>
       <Dialog.Title>{catDraft.id ? 'Edit category' : 'New stack category'}</Dialog.Title>
       <Dialog.Description>
         Stack categories define what platforms every site is expected to have an answer for.
       </Dialog.Description>
     </Dialog.Header>
-    <div class="grid gap-3 p-4">
+    <div class="grid max-h-[72vh] gap-4 overflow-y-auto p-4">
       <div class="grid gap-1.5">
         <Label for="cat-key">Key</Label>
         <Input
@@ -597,6 +635,90 @@
           <Label for="cat-order">Display Order</Label>
           <Input id="cat-order" type="number" bind:value={catDraft.displayOrder} />
         </div>
+      </div>
+      <div class="grid gap-2">
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <Label>Expected Details</Label>
+            <p class="text-xs text-muted-foreground">
+              These fields appear when documenting this category on a site.
+            </p>
+          </div>
+          <Button type="button" variant="outline" size="sm" onclick={addCategoryMetadataField}>
+            <Plus class="size-3.5" />
+            Add Detail
+          </Button>
+        </div>
+        {#if catDraft.metadataFields.length}
+          <div class="grid gap-2">
+            {#each catDraft.metadataFields as field, i (`${field.key}-${i}`)}
+              <div class="grid gap-2 rounded-md border border-border p-2">
+                <div
+                  class="grid gap-2 md:grid-cols-[minmax(120px,0.7fr)_minmax(140px,1fr)_120px_96px_auto]"
+                >
+                  <Input
+                    bind:value={field.key}
+                    placeholder="field_key"
+                    oninput={() => {
+                      field.key = field.key.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+                    }}
+                  />
+                  <Input bind:value={field.label} placeholder="Label" />
+                  <Select.Root
+                    type="single"
+                    value={field.type}
+                    onValueChange={(v) =>
+                      v &&
+                      (field.type = v as
+                        | 'string'
+                        | 'number'
+                        | 'boolean'
+                        | 'url'
+                        | 'ip'
+                        | 'secret_ref')}
+                  >
+                    <Select.Trigger>{field.type}</Select.Trigger>
+                    <Select.Content>
+                      <Select.Item value="string">string</Select.Item>
+                      <Select.Item value="number">number</Select.Item>
+                      <Select.Item value="boolean">boolean</Select.Item>
+                      <Select.Item value="url">url</Select.Item>
+                      <Select.Item value="ip">ip</Select.Item>
+                      <Select.Item value="secret_ref">secret ref</Select.Item>
+                    </Select.Content>
+                  </Select.Root>
+                  <Select.Root
+                    type="single"
+                    value={field.required ? 'yes' : 'no'}
+                    onValueChange={(v) => (field.required = v === 'yes')}
+                  >
+                    <Select.Trigger>{field.required ? 'required' : 'optional'}</Select.Trigger>
+                    <Select.Content>
+                      <Select.Item value="no">optional</Select.Item>
+                      <Select.Item value="yes">required</Select.Item>
+                    </Select.Content>
+                  </Select.Root>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    class="size-8 text-muted-foreground hover:text-destructive"
+                    onclick={() => removeCategoryMetadataField(i)}
+                  >
+                    <Trash class="size-3.5" />
+                  </Button>
+                </div>
+                <Input bind:value={field.helpText} placeholder="Help text or data entry guidance" />
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <div
+            class="rounded-md border border-dashed border-border px-3 py-6 text-center text-xs text-muted-foreground"
+          >
+            No structured detail fields defined.
+          </div>
+        {/if}
       </div>
     </div>
     <Dialog.Footer>
