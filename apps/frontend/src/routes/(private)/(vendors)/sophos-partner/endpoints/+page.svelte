@@ -27,7 +27,6 @@
   const queryClient = useQueryClient();
 
   type EndpointRow = typeof sophosEndpointsWithSite.$inferSelect & Record<string, unknown>;
-  const STALE_ENDPOINT_DAYS = 60;
 
   const siteLinkQuery = createQuery(() => ({
     queryKey: ['integrationLinks.list', 'sophos-partner', scopeStore.currentSite],
@@ -44,23 +43,22 @@
   );
 
   const NOW = Date.now();
-  const staleCutoff = new Date(NOW - STALE_ENDPOINT_DAYS * 86_400_000).toISOString();
 
   const columns: DataTableColumn<EndpointRow>[] = $derived([
     ...(!currentLinkId
       ? [
-          textColumn<EndpointRow>('siteName', 'Site', undefined, {
+          textColumn<EndpointRow>('siteName', 'Site', undefined, undefined, {
             width: '180px',
           }),
         ]
       : []),
     textColumn<EndpointRow>('hostname', 'Hostname'),
-    nullableTextColumn<EndpointRow>('platform', 'Platform', {
+    nullableTextColumn<EndpointRow>('platform', 'Platform', undefined, {
       width: '120px',
       sortable: true,
     }),
     {
-      ...nullableTextColumn<EndpointRow>('type', 'Type', {
+      ...nullableTextColumn<EndpointRow>('type', 'Type', undefined, {
         width: '110px',
         sortable: true,
       }),
@@ -139,15 +137,6 @@
   ] as DataTableColumn<EndpointRow>[]);
 
   let drawerEndpoint = $state<EndpointRow | null>(null);
-
-  const views: TableView<EndpointRow>[] = [
-    {
-      id: 'stale',
-      label: 'Stale',
-      filters: [{ field: 'lastHeartbeatAt', operator: 'lt', value: staleCutoff }],
-      sort: { field: 'lastHeartbeatAt', dir: 'asc' },
-    },
-  ];
 
   const canWriteAssets = $derived(authStore.isAllowed('Assets.Write'));
   const canDeleteAssets = $derived(authStore.isAllowed('Assets.Delete'));
@@ -270,7 +259,6 @@
     integrationId="sophos-partner"
     scopeColumn={false}
     {columns}
-    {views}
     enableRowSelection={canWriteAssets || canDeleteAssets}
     {rowActions}
     onrowclick={(row) => (drawerEndpoint = row)}

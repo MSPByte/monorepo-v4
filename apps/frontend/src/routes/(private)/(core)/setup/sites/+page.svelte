@@ -10,6 +10,7 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
+  import { authStore } from '$lib/stores/auth.store.svelte';
   import Plus from '@lucide/svelte/icons/plus';
   import Pencil from '@lucide/svelte/icons/pencil';
   import Search from '@lucide/svelte/icons/search';
@@ -17,6 +18,8 @@
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const qc = useQueryClient();
+  const canWriteSites = $derived(authStore.isAllowed('Sites.Write'));
+  const canDeleteSites = $derived(authStore.isAllowed('Sites.Delete'));
 
   const catalogQuery = createQuery(() => ({
     queryKey: ['siteProfile.catalog'],
@@ -275,10 +278,12 @@
           Executive identity and Business Context entries that show up on every site profile.
         </p>
       </div>
-      <Button size="sm" onclick={openNewField}>
-        <Plus class="size-3.5" />
-        New Field
-      </Button>
+      {#if canWriteSites}
+        <Button size="sm" onclick={openNewField}>
+          <Plus class="size-3.5" />
+          New Field
+        </Button>
+      {/if}
     </div>
 
     <div class="overflow-x-auto border border-border">
@@ -327,15 +332,17 @@
               </td>
               <td class="px-2 py-1.5 text-right">
                 <div class="flex justify-end gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="size-7"
-                    onclick={() => openEditField(f)}
-                  >
-                    <Pencil class="size-3.5" />
-                  </Button>
-                  {#if !f.builtIn}
+                  {#if canWriteSites}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="size-7"
+                      onclick={() => openEditField(f)}
+                    >
+                      <Pencil class="size-3.5" />
+                    </Button>
+                  {/if}
+                  {#if !f.builtIn && canDeleteSites}
                     <Button
                       variant="ghost"
                       size="icon"
@@ -363,10 +370,12 @@
           even when no integration is linked.
         </p>
       </div>
-      <Button size="sm" onclick={openNewCategory}>
-        <Plus class="size-3.5" />
-        New Category
-      </Button>
+      {#if canWriteSites}
+        <Button size="sm" onclick={openNewCategory}>
+          <Plus class="size-3.5" />
+          New Category
+        </Button>
+      {/if}
     </div>
 
     <div class="overflow-x-auto border border-border">
@@ -411,15 +420,17 @@
               </td>
               <td class="px-2 py-1.5 text-right">
                 <div class="flex justify-end gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="size-7"
-                    onclick={() => openEditCategory(c)}
-                  >
-                    <Pencil class="size-3.5" />
-                  </Button>
-                  {#if !c.builtIn}
+                  {#if canWriteSites}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="size-7"
+                      onclick={() => openEditCategory(c)}
+                    >
+                      <Pencil class="size-3.5" />
+                    </Button>
+                  {/if}
+                  {#if !c.builtIn && canDeleteSites}
                     <Button
                       variant="ghost"
                       size="icon"
@@ -581,7 +592,7 @@
     <Dialog.Footer>
       <Button variant="ghost" onclick={() => (fieldOpen = false)}>Cancel</Button>
       <Button
-        disabled={saveField.isPending || !fieldDraft.key || !fieldDraft.label}
+        disabled={saveField.isPending || !fieldDraft.key || !fieldDraft.label || !canWriteSites}
         onclick={() => saveField.mutate(fieldDraft)}
       >
         Save
@@ -644,10 +655,12 @@
               These fields appear when documenting this category on a site.
             </p>
           </div>
-          <Button type="button" variant="outline" size="sm" onclick={addCategoryMetadataField}>
-            <Plus class="size-3.5" />
-            Add Detail
-          </Button>
+          {#if canWriteSites}
+            <Button type="button" variant="outline" size="sm" onclick={addCategoryMetadataField}>
+              <Plus class="size-3.5" />
+              Add Detail
+            </Button>
+          {/if}
         </div>
         {#if catDraft.metadataFields.length}
           <div class="grid gap-2">
@@ -698,15 +711,17 @@
                       <Select.Item value="yes">required</Select.Item>
                     </Select.Content>
                   </Select.Root>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    class="size-8 text-muted-foreground hover:text-destructive"
-                    onclick={() => removeCategoryMetadataField(i)}
-                  >
-                    <Trash class="size-3.5" />
-                  </Button>
+                  {#if canWriteSites}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      class="size-8 text-muted-foreground hover:text-destructive"
+                      onclick={() => removeCategoryMetadataField(i)}
+                    >
+                      <Trash class="size-3.5" />
+                    </Button>
+                  {/if}
                 </div>
                 <Input bind:value={field.helpText} placeholder="Help text or data entry guidance" />
               </div>
@@ -724,7 +739,7 @@
     <Dialog.Footer>
       <Button variant="ghost" onclick={() => (catOpen = false)}>Cancel</Button>
       <Button
-        disabled={saveCategory.isPending || !catDraft.key || !catDraft.label}
+        disabled={saveCategory.isPending || !catDraft.key || !catDraft.label || !canWriteSites}
         onclick={() => saveCategory.mutate(catDraft)}
       >
         Save

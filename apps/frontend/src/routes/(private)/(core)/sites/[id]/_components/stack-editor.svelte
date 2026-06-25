@@ -13,14 +13,21 @@
   import { Textarea } from '$lib/components/ui/textarea';
 
   import type { StackEntry, StackMetadataField } from '../_profile/client-profile.types';
+  import Separator from '$lib/components/ui/separator/separator.svelte';
 
   let {
     siteId,
     entry,
+    canWrite = false,
+    canDelete = false,
+    initialEditing = false,
     open = $bindable(),
   }: {
     siteId: string;
     entry: StackEntry;
+    canWrite?: boolean;
+    canDelete?: boolean;
+    initialEditing?: boolean;
     open: boolean;
   } = $props();
 
@@ -50,6 +57,7 @@
   let product = $state(entry.product ?? '');
   let notes = $state(entry.notes ?? '');
   let metadataRows = $state<MetadataRow[]>([]);
+  let editing = $state(false);
 
   function defaultRowsFor(fields: StackMetadataField[], values: Record<string, string> | null) {
     const defaults = fields.length
@@ -80,6 +88,7 @@
 
   $effect(() => {
     if (open) {
+      editing = canWrite && initialEditing;
       status = entry.status;
       vendor = entry.vendor ?? '';
       product = entry.product ?? '';
@@ -116,6 +125,17 @@
       : metadataRows.filter((row) => row.required && !row.value.trim()).map((row) => row.label)
   );
 
+  const stackDisplay = $derived.by(() => {
+    if (entry.status === 'not_used') return 'Not used';
+    const parts = [entry.vendor, entry.product].filter(Boolean);
+    if (parts.length) return parts.join(' · ');
+    return relationshipLabels[entry.status];
+  });
+
+  const visibleMetadata = $derived(
+    Object.entries(entry.metadata ?? {}).filter(([, value]) => value)
+  );
+
   const save = createMutation(() => ({
     mutationFn: () =>
       trpc.siteProfile.upsertStackEntry.mutate({
@@ -130,6 +150,7 @@
         origin: 'user',
       }),
     onSuccess: () => {
+      editing = false;
       open = false;
       toast.success('Stack entry saved');
       qc.invalidateQueries({ queryKey: ['sites.profileById', siteId] });
@@ -141,6 +162,7 @@
     mutationFn: () =>
       trpc.siteProfile.deleteStackEntry.mutate({ siteId, categoryKey: entry.categoryKey }),
     onSuccess: () => {
+      editing = false;
       open = false;
       toast.success('Cleared');
       qc.invalidateQueries({ queryKey: ['sites.profileById', siteId] });
@@ -154,117 +176,171 @@
     <Dialog.Header>
       <Dialog.Title>{entry.categoryLabel}</Dialog.Title>
       <Dialog.Description>
-        Document the vendor, ownership, caveats, and operational details for this service.
+        {editing
+          ? 'Document the vendor, ownership, caveats, and operational details for this service.'
+          : 'Review the documented vendor, ownership, caveats, and operational details.'}
       </Dialog.Description>
     </Dialog.Header>
-
-    <div class="grid max-h-[70vh] gap-4 overflow-y-auto p-4">
-      <div class="grid gap-1.5">
-        <Label>Relationship</Label>
-        <Select.Root
-          type="single"
-          value={status}
-          onValueChange={(v) => v && (status = v as Status)}
-        >
-          <Select.Trigger>{relationshipLabels[status]}</Select.Trigger>
-          <Select.Content>
-            <Select.Item value="msp_managed">Managed by us</Select.Item>
-            <Select.Item value="client_managed">Managed by client</Select.Item>
-            <Select.Item value="vendor_managed">Managed by vendor</Select.Item>
-            <Select.Item value="planned">Planned</Select.Item>
-            <Select.Item value="not_used">Not used</Select.Item>
-            <Select.Item value="unknown">Unknown</Select.Item>
-          </Select.Content>
-        </Select.Root>
-      </div>
-
-      {#if status !== 'not_used'}
-        <div class="grid grid-cols-2 gap-3">
-          <div class="grid gap-1.5">
-            <Label for="stack-vendor">Vendor</Label>
-            <Input id="stack-vendor" bind:value={vendor} placeholder="Vendor name" />
+    <Separator />
+    {#if !editing}
+      <div class="grid max-h-[70vh] gap-4 overflow-y-auto p-4">
+        <div class="grid gap-1">
+          <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Relationship
           </div>
-          <div class="grid gap-1.5">
-            <Label for="stack-product">Product</Label>
-            <Input id="stack-product" bind:value={product} placeholder="Product name" />
-          </div>
+          <div class="text-sm">{relationshipLabels[entry.status]}</div>
         </div>
-      {/if}
-
-      <div class="grid gap-1.5">
-        <Label for="stack-notes">Caveats / notes</Label>
-        <Textarea
-          id="stack-notes"
-          bind:value={notes}
-          rows={3}
-          placeholder="Contract notes, exceptions, escalation path, or site-specific caveats"
-        />
-      </div>
-
-      {#if status !== 'not_used'}
-        <div class="grid gap-2">
-          <div class="flex items-center justify-between gap-2">
-            <Label>Details</Label>
-            <button
-              type="button"
-              class="text-xs text-muted-foreground hover:text-foreground"
-              onclick={addMetadataField}
-            >
-              Add field
-            </button>
+        <div class="grid gap-1">
+          <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Platform
           </div>
+          <div class="text-sm">{stackDisplay}</div>
+        </div>
+        {#if entry.notes}
+          <div class="grid gap-1">
+            <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Caveats / notes
+            </div>
+            <div class="whitespace-pre-wrap text-sm">{entry.notes}</div>
+          </div>
+        {/if}
+        {#if visibleMetadata.length}
           <div class="grid gap-2">
-            {#each metadataRows as row, i (`${row.key}-${i}`)}
-              <div class="grid grid-cols-[minmax(120px,0.45fr)_minmax(0,1fr)] gap-2">
-                <div class="grid gap-1">
-                  <Input
-                    bind:value={row.label}
-                    placeholder="Label"
-                    readonly={entry.metadataFields.some((field) => field.key === row.key)}
-                    oninput={() => {
-                      if (!row.key) row.key = row.label.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-                    }}
-                  />
-                  {#if entry.metadataFields.find((field) => field.key === row.key)?.required}
-                    <span class="font-mono text-[10px] uppercase tracking-wider text-warning">
-                      required
-                    </span>
-                  {/if}
+            <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Details
+            </div>
+            <dl class="grid gap-2">
+              {#each visibleMetadata as [key, value] (key)}
+                <div class="grid grid-cols-[140px_minmax(0,1fr)] gap-3 text-sm">
+                  <dt class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {entry.metadataFields.find((field) => field.key === key)?.label ??
+                      key.replace(/_/g, ' ')}
+                  </dt>
+                  <dd class="min-w-0 break-words">{value}</dd>
                 </div>
-                <div class="grid gap-1">
-                  <Input
-                    bind:value={row.value}
-                    type={row.type === 'number' ? 'number' : row.type === 'url' ? 'url' : 'text'}
-                    placeholder={row.helpText || row.label || 'Value'}
-                  />
-                  {#if row.helpText}
-                    <span class="text-[11px] text-muted-foreground">{row.helpText}</span>
-                  {/if}
-                </div>
-              </div>
-            {/each}
+              {/each}
+            </dl>
           </div>
-          {#if missingRequiredDetails.length}
-            <p class="text-xs text-warning">
-              Missing required details: {missingRequiredDetails.join(', ')}
-            </p>
-          {/if}
+        {/if}
+      </div>
+    {:else}
+      <div class="grid max-h-[70vh] gap-4 overflow-y-auto p-4">
+        <div class="grid gap-1.5">
+          <Label>Relationship</Label>
+          <Select.Root
+            type="single"
+            value={status}
+            onValueChange={(v) => v && (status = v as Status)}
+          >
+            <Select.Trigger>{relationshipLabels[status]}</Select.Trigger>
+            <Select.Content>
+              <Select.Item value="msp_managed">Managed by us</Select.Item>
+              <Select.Item value="client_managed">Managed by client</Select.Item>
+              <Select.Item value="vendor_managed">Managed by vendor</Select.Item>
+              <Select.Item value="planned">Planned</Select.Item>
+              <Select.Item value="not_used">Not used</Select.Item>
+              <Select.Item value="unknown">Unknown</Select.Item>
+            </Select.Content>
+          </Select.Root>
         </div>
-      {/if}
-    </div>
+
+        {#if status !== 'not_used'}
+          <div class="grid grid-cols-2 gap-3">
+            <div class="grid gap-1.5">
+              <Label for="stack-vendor">Vendor</Label>
+              <Input id="stack-vendor" bind:value={vendor} placeholder="Vendor name" />
+            </div>
+            <div class="grid gap-1.5">
+              <Label for="stack-product">Product</Label>
+              <Input id="stack-product" bind:value={product} placeholder="Product name" />
+            </div>
+          </div>
+        {/if}
+
+        <div class="grid gap-1.5">
+          <Label for="stack-notes">Caveats / notes</Label>
+          <Textarea
+            id="stack-notes"
+            bind:value={notes}
+            rows={3}
+            placeholder="Contract notes, exceptions, escalation path, or site-specific caveats"
+          />
+        </div>
+
+        {#if status !== 'not_used'}
+          <div class="grid gap-2">
+            <div class="flex items-center justify-between gap-2">
+              <Label>Details</Label>
+              <button
+                type="button"
+                class="text-xs text-muted-foreground hover:text-foreground"
+                onclick={addMetadataField}
+              >
+                Add field
+              </button>
+            </div>
+            <div class="grid gap-2">
+              {#each metadataRows as row, i (`${row.key}-${i}`)}
+                <div class="grid grid-cols-[minmax(120px,0.45fr)_minmax(0,1fr)] gap-2">
+                  <div class="grid gap-1">
+                    <Input
+                      bind:value={row.label}
+                      placeholder="Label"
+                      readonly={entry.metadataFields.some((field) => field.key === row.key)}
+                      oninput={() => {
+                        if (!row.key) row.key = row.label.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+                      }}
+                    />
+                    {#if entry.metadataFields.find((field) => field.key === row.key)?.required}
+                      <span class="font-mono text-[10px] uppercase tracking-wider text-warning">
+                        required
+                      </span>
+                    {/if}
+                  </div>
+                  <div class="grid gap-1">
+                    <Input
+                      bind:value={row.value}
+                      type={row.type === 'number' ? 'number' : row.type === 'url' ? 'url' : 'text'}
+                      placeholder={row.helpText || row.label || 'Value'}
+                    />
+                    {#if row.helpText}
+                      <span class="text-[11px] text-muted-foreground">{row.helpText}</span>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+            {#if missingRequiredDetails.length}
+              <p class="text-xs text-warning">
+                Missing required details: {missingRequiredDetails.join(', ')}
+              </p>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     <Dialog.Footer>
-      <Button variant="ghost" onclick={() => clear.mutate()} disabled={clear.isPending}>
-        Clear
-      </Button>
+      {#if canDelete}
+        <Button variant="destructive" onclick={() => clear.mutate()} disabled={clear.isPending}>
+          Clear
+        </Button>
+      {/if}
       <div class="flex-1"></div>
-      <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
-      <Button
-        onclick={() => save.mutate()}
-        disabled={save.isPending || !!missingRequiredDetails.length}
-      >
-        Save
-      </Button>
+      {#if editing}
+        <Button variant="ghost" onclick={() => (editing = false)}>Cancel</Button>
+        <Button
+          onclick={() => save.mutate()}
+          disabled={save.isPending || !!missingRequiredDetails.length || !canWrite}
+        >
+          Save
+        </Button>
+      {:else}
+        <Button variant="ghost" onclick={() => (open = false)}>Close</Button>
+        {#if canWrite}
+          <Button onclick={() => (editing = true)}>Edit</Button>
+        {/if}
+      {/if}
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

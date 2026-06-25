@@ -18,6 +18,7 @@
   import StackEditor from './_components/stack-editor.svelte';
   import NoteEditor from './_components/note-editor.svelte';
   import SingleSelect from '$lib/components/single-select.svelte';
+  import { authStore } from '$lib/stores/auth.store.svelte';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
   import { useSiteContext } from './_components/site-context';
   import type { ProfileFact, ProfileNote, StackEntry } from './_profile/client-profile.types';
@@ -31,6 +32,8 @@
   const site = $derived(ctx.site!);
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
+  const canWriteSites = $derived(authStore.isAllowed('Sites.Write'));
+  const canDeleteSites = $derived(authStore.isAllowed('Sites.Delete'));
 
   const parentQuery = createQuery(() => ({
     queryKey: ['sites.byId', site?.parentSiteId],
@@ -147,15 +150,19 @@
 
   let factOpen = $state(false);
   let factTarget = $state<ProfileFact | null>(null);
-  function openFactEditor(fact: ProfileFact) {
+  let factInitialEditing = $state(false);
+  function openFactEditor(fact: ProfileFact, edit = false) {
     factTarget = fact;
+    factInitialEditing = edit && canWriteSites;
     factOpen = true;
   }
 
   let stackOpen = $state(false);
   let stackTarget = $state<StackEntry | null>(null);
-  function openStackEditor(entry: StackEntry) {
+  let stackInitialEditing = $state(false);
+  function openStackEditor(entry: StackEntry, edit = false) {
     stackTarget = entry;
+    stackInitialEditing = edit && canWriteSites;
     stackOpen = true;
   }
 
@@ -184,12 +191,12 @@
     if (!addSelection) return;
     if (addMode === 'stack') {
       const entry = hiddenStack.find((row) => row.categoryKey === addSelection);
-      if (entry) openStackEditor(entry);
+      if (entry) openStackEditor(entry, true);
     } else {
       const fact = [...hiddenExecutiveFacts, ...hiddenContextFacts].find(
         (row) => row.key === addSelection
       );
-      if (fact) openFactEditor(fact);
+      if (fact) openFactEditor(fact, true);
     }
     addOpen = false;
     addSelection = '';
@@ -224,7 +231,7 @@
     <div class="space-y-4">
       <SectionPanel code="01" title="EXECUTIVE">
         {#snippet aside()}
-          {#if hiddenExecutiveFacts.length}
+          {#if hiddenExecutiveFacts.length && canWriteSites}
             <button
               type="button"
               class="inline-flex size-5 items-center justify-center border border-border bg-background text-foreground hover:border-primary hover:text-primary"
@@ -257,7 +264,7 @@
 
       <SectionPanel code="02" title="TECHNOLOGY STACK">
         {#snippet aside()}
-          {#if hiddenStack.length}
+          {#if hiddenStack.length && canWriteSites}
             <button
               type="button"
               class="inline-flex size-5 items-center justify-center border border-border bg-background text-foreground hover:border-primary hover:text-primary"
@@ -278,7 +285,7 @@
                 onclick={() => openStackEditor(entry)}
               >
                 <dt
-                  class="font-mono text-[10px] uppercase leading-tight tracking-wider text-muted-foreground mt-auto"
+                  class="font-mono text-[10px] uppercase leading-tight tracking-wider text-muted-foreground"
                 >
                   {entry.categoryLabel}
                   {#if entry.required}
@@ -353,7 +360,7 @@
 
       <SectionPanel code="04" title="BUSINESS CONTEXT">
         {#snippet aside()}
-          {#if hiddenContextFacts.length}
+          {#if hiddenContextFacts.length && canWriteSites}
             <button
               type="button"
               class="inline-flex size-5 items-center justify-center border border-border bg-background text-foreground hover:border-primary hover:text-primary"
@@ -396,12 +403,14 @@
 
       <SectionPanel code="!" title="SPECIAL HANDLING">
         {#snippet aside()}
-          <button
-            class="inline-flex items-center gap-1 hover:text-foreground"
-            onclick={() => openNoteEditor('special', null)}
-          >
-            <Plus class="size-3" /> Note
-          </button>
+          {#if canWriteSites}
+            <button
+              class="inline-flex items-center gap-1 hover:text-foreground"
+              onclick={() => openNoteEditor('special', null)}
+            >
+              <Plus class="size-3" /> Note
+            </button>
+          {/if}
         {/snippet}
         {#if specialNotes.length}
           <div class="space-y-2">
@@ -424,12 +433,14 @@
 
       <SectionPanel code="~" title="TRIBAL KNOWLEDGE">
         {#snippet aside()}
-          <button
-            class="inline-flex items-center gap-1 hover:text-foreground"
-            onclick={() => openNoteEditor('tribal', null)}
-          >
-            <Plus class="size-3" /> Note
-          </button>
+          {#if canWriteSites}
+            <button
+              class="inline-flex items-center gap-1 hover:text-foreground"
+              onclick={() => openNoteEditor('tribal', null)}
+            >
+              <Plus class="size-3" /> Note
+            </button>
+          {/if}
         {/snippet}
         {#if tribalNotes.length}
           <div class="space-y-2">
@@ -533,15 +544,32 @@
     siteId={site.id}
     fact={factTarget}
     field={catalogFieldByKey.get(factTarget.key) ?? null}
+    canWrite={canWriteSites}
+    canDelete={canDeleteSites}
+    initialEditing={factInitialEditing}
     bind:open={factOpen}
   />
 {/if}
 
 {#if stackTarget}
-  <StackEditor siteId={site.id} entry={stackTarget} bind:open={stackOpen} />
+  <StackEditor
+    siteId={site.id}
+    entry={stackTarget}
+    canWrite={canWriteSites}
+    canDelete={canDeleteSites}
+    initialEditing={stackInitialEditing}
+    bind:open={stackOpen}
+  />
 {/if}
 
-<NoteEditor siteId={site.id} type={noteType} note={noteTarget} bind:open={noteOpen} />
+<NoteEditor
+  siteId={site.id}
+  type={noteType}
+  note={noteTarget}
+  canWrite={canWriteSites}
+  canDelete={canDeleteSites}
+  bind:open={noteOpen}
+/>
 
 <Dialog.Root bind:open={addOpen}>
   <Dialog.Content class="sm:max-w-[420px]">

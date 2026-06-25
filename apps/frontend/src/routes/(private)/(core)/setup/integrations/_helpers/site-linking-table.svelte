@@ -23,6 +23,7 @@
   import FadeIn from '$lib/components/transition/fade-in.svelte';
   import Loader from '$lib/components/transition/loader.svelte';
   import SingleSelect from '$lib/components/single-select.svelte';
+  import { authStore } from '$lib/stores/auth.store.svelte';
 
   export type ExternalOption = {
     id: string;
@@ -51,6 +52,7 @@
 
   const trpc = getContext<ReturnType<typeof createTrpcClient>>('trpc');
   const queryClient = useQueryClient();
+  const canWriteSites = $derived(authStore.isAllowed('Sites.Write'));
 
   const linksQuery = createQuery(() => ({
     queryKey: ['integrationLinks.list', integration],
@@ -268,6 +270,10 @@
   }
 
   async function createSiteFromVendor(opt: ExternalOption) {
+    if (!canWriteSites) {
+      toast.error('Sites.Write permission required');
+      return;
+    }
     creatingFromVendor = opt.id;
     try {
       const site = await trpc.sites.create.mutate({ name: opt.name });
@@ -531,7 +537,7 @@
             <span class="text-sm font-medium truncate">{opt.name}</span>
             <span class="text-xs text-muted-foreground font-mono truncate">{opt.id}</span>
           </div>
-          {#if canWrite}
+          {#if canWrite && canWriteSites}
             <Button
               variant="outline"
               size="sm"

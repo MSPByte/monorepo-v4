@@ -16,13 +16,26 @@ import {
   sitesWithCounts,
   sophosFirewallsWithSite
 } from '@mspbyte/drizzle';
-import { BUILT_IN_PROFILE_FIELDS, BUILT_IN_STACK_CATEGORIES } from '@mspbyte/shared';
+import {
+  BUILT_IN_PROFILE_FIELDS,
+  BUILT_IN_STACK_CATEGORIES,
+  hasPermission,
+  type Permission
+} from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
 import { queryTableData, tableDataInputSchema } from './table-data.js';
 import { ensureCatalogDefaults } from './site-profile.js';
+import type { Context } from '../context.js';
 
 type SiteRow = typeof sites.$inferSelect;
+
+function requireSitePermission(ctx: Context, permission: Permission) {
+  const attrs = (ctx.role.attributes as Record<string, boolean> | null) ?? null;
+  if (!hasPermission(attrs, permission)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: `${permission} permission required` });
+  }
+}
 
 const SUPPORTED_METRIC_KEYS = [
   'totalAssets',
@@ -502,6 +515,7 @@ export const sitesRouter = t.router({
       })
     )
     .mutation(async ({ ctx, input }): Promise<SiteRow> => {
+      requireSitePermission(ctx, 'Sites.Write');
       const [site] = await ctx.db
         .insert(sites)
         .values({ name: input.name, description: input.description })

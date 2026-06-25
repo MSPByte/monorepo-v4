@@ -18,20 +18,26 @@
     siteId,
     type,
     note,
+    canWrite = false,
+    canDelete = false,
     open = $bindable(),
   }: {
     siteId: string;
     type: 'special' | 'tribal';
     note: ProfileNote | null;
+    canWrite?: boolean;
+    canDelete?: boolean;
     open: boolean;
   } = $props();
 
   let title = $state('');
   let description = $state('');
   let severity = $state(0);
+  let editing = $state(false);
 
   $effect(() => {
     if (open) {
+      editing = canWrite && !note;
       title = note?.title ?? '';
       description = note?.description ?? '';
       severity = note?.severity ?? (type === 'special' ? 2 : 0);
@@ -53,6 +59,7 @@
         active: true,
       }),
     onSuccess: () => {
+      editing = false;
       open = false;
       toast.success('Note saved');
       qc.invalidateQueries({ queryKey: ['sites.profileById', siteId] });
@@ -66,6 +73,7 @@
       return trpc.siteProfile.deleteNote.mutate({ id: note.id });
     },
     onSuccess: () => {
+      editing = false;
       open = false;
       toast.success('Note deleted');
       qc.invalidateQueries({ queryKey: ['sites.profileById', siteId] });
@@ -79,7 +87,7 @@
 <Dialog.Root bind:open>
   <Dialog.Content class="sm:max-w-[480px]">
     <Dialog.Header>
-      <Dialog.Title>{note ? `Edit ${title_label}` : `New ${title_label} note`}</Dialog.Title>
+      <Dialog.Title>{note ? title_label : `New ${title_label} note`}</Dialog.Title>
       <Dialog.Description>
         {#if type === 'special'}
           Operational rules every technician should respect when touching this site.
@@ -89,38 +97,63 @@
       </Dialog.Description>
     </Dialog.Header>
 
-    <div class="grid gap-3 p-4">
-      <div class="grid gap-1.5">
-        <Label for="note-title">Title</Label>
-        <Input id="note-title" bind:value={title} placeholder="Short headline" />
-      </div>
-      <div class="grid gap-1.5">
-        <Label for="note-desc">Description</Label>
-        <Textarea id="note-desc" bind:value={description} rows={4} placeholder="Details" />
-      </div>
-      {#if type === 'special'}
-        <div class="grid gap-1.5">
-          <Label>Severity</Label>
-          <Select.Root
-            type="single"
-            value={String(severity)}
-            onValueChange={(v) => v && (severity = Number(v))}
-          >
-            <Select.Trigger>
-              {severity >= 3 ? 'High' : severity >= 2 ? 'Medium' : 'Low'}
-            </Select.Trigger>
-            <Select.Content>
-              <Select.Item value="1">Low</Select.Item>
-              <Select.Item value="2">Medium</Select.Item>
-              <Select.Item value="3">High</Select.Item>
-            </Select.Content>
-          </Select.Root>
+    {#if !editing}
+      <div class="grid gap-3 p-4">
+        <div class="grid gap-1">
+          <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Title
+          </div>
+          <div class="text-sm">{title || 'Untitled'}</div>
         </div>
-      {/if}
-    </div>
+        <div class="grid gap-1">
+          <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Description
+          </div>
+          <div class="whitespace-pre-wrap text-sm">{description || '—'}</div>
+        </div>
+        {#if type === 'special'}
+          <div class="grid gap-1">
+            <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Severity
+            </div>
+            <div class="text-sm">{severity >= 3 ? 'High' : severity >= 2 ? 'Medium' : 'Low'}</div>
+          </div>
+        {/if}
+      </div>
+    {:else}
+      <div class="grid gap-3 p-4">
+        <div class="grid gap-1.5">
+          <Label for="note-title">Title</Label>
+          <Input id="note-title" bind:value={title} placeholder="Short headline" />
+        </div>
+        <div class="grid gap-1.5">
+          <Label for="note-desc">Description</Label>
+          <Textarea id="note-desc" bind:value={description} rows={4} placeholder="Details" />
+        </div>
+        {#if type === 'special'}
+          <div class="grid gap-1.5">
+            <Label>Severity</Label>
+            <Select.Root
+              type="single"
+              value={String(severity)}
+              onValueChange={(v) => v && (severity = Number(v))}
+            >
+              <Select.Trigger>
+                {severity >= 3 ? 'High' : severity >= 2 ? 'Medium' : 'Low'}
+              </Select.Trigger>
+              <Select.Content>
+                <Select.Item value="1">Low</Select.Item>
+                <Select.Item value="2">Medium</Select.Item>
+                <Select.Item value="3">High</Select.Item>
+              </Select.Content>
+            </Select.Root>
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     <Dialog.Footer>
-      {#if note?.id}
+      {#if note?.id && canDelete}
         <Button
           variant="ghost"
           class="text-destructive"
@@ -131,8 +164,19 @@
         </Button>
       {/if}
       <div class="flex-1"></div>
-      <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
-      <Button onclick={() => save.mutate()} disabled={save.isPending || !title}>Save</Button>
+      {#if editing}
+        <Button variant="ghost" onclick={() => (note ? (editing = false) : (open = false))}
+          >Cancel</Button
+        >
+        <Button onclick={() => save.mutate()} disabled={save.isPending || !title || !canWrite}
+          >Save</Button
+        >
+      {:else}
+        <Button variant="ghost" onclick={() => (open = false)}>Close</Button>
+        {#if canWrite}
+          <Button onclick={() => (editing = true)}>Edit</Button>
+        {/if}
+      {/if}
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

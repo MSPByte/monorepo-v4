@@ -31,11 +31,17 @@
     siteId,
     fact,
     field,
+    canWrite = false,
+    canDelete = false,
+    initialEditing = false,
     open = $bindable(),
   }: {
     siteId: string;
     fact: ProfileFact;
     field: CatalogField | null;
+    canWrite?: boolean;
+    canDelete?: boolean;
+    initialEditing?: boolean;
     open: boolean;
   } = $props();
 
@@ -53,9 +59,11 @@
   let supportHoursMode = $state<'range' | '24x7'>('range');
   let supportStart = $state('08:00');
   let supportEnd = $state('17:00');
+  let editing = $state(false);
 
   $effect(() => {
     if (open) {
+      editing = canWrite && initialEditing;
       applicable = fact.applicable === 'unknown' ? 'applies' : fact.applicable;
       const v = fact.value;
       if (field?.valueMode === 'multiple') {
@@ -127,6 +135,23 @@
     (field?.values ?? []).map((value) => ({ value, label: labelForValue(value) }))
   );
 
+  const factDisplay = $derived.by(() => {
+    if (fact.applicable === 'not_applicable') return 'Not applicable';
+    if (
+      fact.applicable === 'unknown' ||
+      fact.value === null ||
+      fact.value === undefined ||
+      fact.value === '' ||
+      (Array.isArray(fact.value) && fact.value.length === 0)
+    ) {
+      return 'Unknown';
+    }
+    if (Array.isArray(fact.value)) return fact.value.map(labelForValue).join(', ');
+    if (typeof fact.value === 'boolean') return fact.value ? 'Yes' : 'No';
+    if (typeof fact.value === 'number') return fact.value.toLocaleString();
+    return labelForValue(String(fact.value));
+  });
+
   const save = createMutation(() => ({
     mutationFn: () => {
       let value: string | number | boolean | string[] | null = null;
@@ -161,6 +186,7 @@
       });
     },
     onSuccess: () => {
+      editing = false;
       open = false;
       toast.success('Fact saved');
       qc.invalidateQueries({ queryKey: ['sites.profileById', siteId] });
@@ -171,6 +197,7 @@
   const clear = createMutation(() => ({
     mutationFn: () => trpc.siteProfile.deleteFact.mutate({ siteId, key: fact.key }),
     onSuccess: () => {
+      editing = false;
       open = false;
       toast.success('Cleared');
       qc.invalidateQueries({ queryKey: ['sites.profileById', siteId] });
@@ -184,144 +211,173 @@
     <Dialog.Header>
       <Dialog.Title>{fact.label}</Dialog.Title>
       <Dialog.Description
-        >Set a value, mark as not applicable, or leave it unknown.</Dialog.Description
+        >{editing
+          ? 'Set a value, mark as not applicable, or leave it unknown.'
+          : 'Review the recorded value and source context.'}</Dialog.Description
       >
     </Dialog.Header>
     <Separator />
-    <div class="grid gap-3 p-4">
-      <div class="grid gap-1.5">
-        <Label>Applicability</Label>
-        <Select.Root
-          type="single"
-          value={applicable}
-          onValueChange={(v) => v && (applicable = v as ApplicableState)}
-        >
-          <Select.Trigger>
-            {prettyText(applicable)}
-          </Select.Trigger>
-          <Select.Content>
-            <Select.Item value="applies">Applies</Select.Item>
-            <Select.Item value="not_applicable">Not Applicable</Select.Item>
-          </Select.Content>
-        </Select.Root>
+    {#if !editing}
+      <div class="grid gap-3 p-4">
+        <div class="grid gap-1">
+          <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Applicability
+          </div>
+          <div class="text-sm">{prettyText(fact.applicable)}</div>
+        </div>
+        <div class="grid gap-1">
+          <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Value
+          </div>
+          <div class="text-sm">{factDisplay}</div>
+        </div>
+        {#if fact.origin || fact.updatedAt}
+          <div class="grid gap-1">
+            <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Source
+            </div>
+            <div class="text-sm text-muted-foreground">
+              {fact.origin ?? 'manual'}{fact.updatedAt ? ` · ${fact.updatedAt}` : ''}
+            </div>
+          </div>
+        {/if}
       </div>
-
-      {#if applicable === 'applies'}
+    {:else}
+      <div class="grid gap-3 p-4">
         <div class="grid gap-1.5">
-          <Label>Value</Label>
-          {#if fact.key === 'support_hours'}
-            <div class="grid gap-3 rounded-md border border-border bg-muted/20 p-3">
+          <Label>Applicability</Label>
+          <Select.Root
+            type="single"
+            value={applicable}
+            onValueChange={(v) => v && (applicable = v as ApplicableState)}
+          >
+            <Select.Trigger>
+              {prettyText(applicable)}
+            </Select.Trigger>
+            <Select.Content>
+              <Select.Item value="applies">Applies</Select.Item>
+              <Select.Item value="not_applicable">Not Applicable</Select.Item>
+            </Select.Content>
+          </Select.Root>
+        </div>
+
+        {#if applicable === 'applies'}
+          <div class="grid gap-1.5">
+            <Label>Value</Label>
+            {#if fact.key === 'support_hours'}
+              <div class="grid gap-3 rounded-md border border-border bg-muted/20 p-3">
+                <Select.Root
+                  type="single"
+                  value={supportHoursMode}
+                  onValueChange={(v) => v && (supportHoursMode = v as 'range' | '24x7')}
+                >
+                  <Select.Trigger>
+                    {supportHoursMode === '24x7' ? '24/7' : 'Time range'}
+                  </Select.Trigger>
+                  <Select.Content>
+                    <Select.Item value="range">Time range</Select.Item>
+                    <Select.Item value="24x7">24/7</Select.Item>
+                  </Select.Content>
+                </Select.Root>
+
+                {#if supportHoursMode === 'range'}
+                  <div class="grid grid-cols-[1fr_auto_1fr] items-end gap-2">
+                    <div class="grid gap-1.5">
+                      <Label for="support-start">Start</Label>
+                      <Input id="support-start" type="time" bind:value={supportStart} />
+                    </div>
+                    <span class="pb-2 text-xs text-muted-foreground">to</span>
+                    <div class="grid gap-1.5">
+                      <Label for="support-end">Stop</Label>
+                      <Input id="support-end" type="time" bind:value={supportEnd} />
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            {:else if field?.valueMode === 'multiple'}
+              <div class="space-y-2">
+                {#if field.values && field.values.length}
+                  <MultiSelect
+                    options={optionItems}
+                    bind:selected={listValue}
+                    placeholder="Select values..."
+                    searchPlaceholder="Search values..."
+                    maxDisplay={2}
+                  />
+                {:else}
+                  <div class="flex gap-2">
+                    <Input
+                      bind:value={newListValue}
+                      placeholder="Add a value"
+                      onkeydown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          addListValue();
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      onclick={() => addListValue()}
+                    >
+                      <Plus class="size-4" />
+                    </Button>
+                  </div>
+                {/if}
+                {#if listValue.length}
+                  <div class="flex flex-wrap gap-1.5">
+                    {#each listValue as item, index (item)}
+                      <span
+                        class="inline-flex items-center gap-1 rounded-[3px] border border-border px-1.5 py-0.5 text-xs"
+                      >
+                        {labelForValue(item)}
+                        <button
+                          type="button"
+                          class="text-muted-foreground hover:text-destructive"
+                          onclick={() => removeListValue(index)}
+                        >
+                          <Trash class="size-3" />
+                        </button>
+                      </span>
+                    {/each}
+                  </div>
+                {:else if !listValue.length}
+                  <p class="text-[11px] text-muted-foreground">No values added.</p>
+                {/if}
+              </div>
+            {:else if field?.type === 'number'}
+              <Input type="number" bind:value={numberValue} />
+            {:else if field?.type === 'boolean'}
               <Select.Root
                 type="single"
-                value={supportHoursMode}
-                onValueChange={(v) => v && (supportHoursMode = v as 'range' | '24x7')}
+                value={boolValue}
+                onValueChange={(v) => v && (boolValue = v as 'true' | 'false')}
               >
-                <Select.Trigger>
-                  {supportHoursMode === '24x7' ? '24/7' : 'Time range'}
-                </Select.Trigger>
+                <Select.Trigger>{boolValue}</Select.Trigger>
                 <Select.Content>
-                  <Select.Item value="range">Time range</Select.Item>
-                  <Select.Item value="24x7">24/7</Select.Item>
+                  <Select.Item value="true">True</Select.Item>
+                  <Select.Item value="false">False</Select.Item>
                 </Select.Content>
               </Select.Root>
-
-              {#if supportHoursMode === 'range'}
-                <div class="grid grid-cols-[1fr_auto_1fr] items-end gap-2">
-                  <div class="grid gap-1.5">
-                    <Label for="support-start">Start</Label>
-                    <Input id="support-start" type="time" bind:value={supportStart} />
-                  </div>
-                  <span class="pb-2 text-xs text-muted-foreground">to</span>
-                  <div class="grid gap-1.5">
-                    <Label for="support-end">Stop</Label>
-                    <Input id="support-end" type="time" bind:value={supportEnd} />
-                  </div>
-                </div>
-              {/if}
-            </div>
-          {:else if field?.valueMode === 'multiple'}
-            <div class="space-y-2">
-              {#if field.values && field.values.length}
-                <MultiSelect
-                  options={optionItems}
-                  bind:selected={listValue}
-                  placeholder="Select values..."
-                  searchPlaceholder="Search values..."
-                  maxDisplay={2}
-                />
-              {:else}
-                <div class="flex gap-2">
-                  <Input
-                    bind:value={newListValue}
-                    placeholder="Add a value"
-                    onkeydown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        addListValue();
-                      }
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    onclick={() => addListValue()}
-                  >
-                    <Plus class="size-4" />
-                  </Button>
-                </div>
-              {/if}
-              {#if listValue.length}
-                <div class="flex flex-wrap gap-1.5">
-                  {#each listValue as item, index (item)}
-                    <span
-                      class="inline-flex items-center gap-1 rounded-[3px] border border-border px-1.5 py-0.5 text-xs"
-                    >
-                      {labelForValue(item)}
-                      <button
-                        type="button"
-                        class="text-muted-foreground hover:text-destructive"
-                        onclick={() => removeListValue(index)}
-                      >
-                        <Trash class="size-3" />
-                      </button>
-                    </span>
-                  {/each}
-                </div>
-              {:else if !listValue.length}
-                <p class="text-[11px] text-muted-foreground">No values added.</p>
-              {/if}
-            </div>
-          {:else if field?.type === 'number'}
-            <Input type="number" bind:value={numberValue} />
-          {:else if field?.type === 'boolean'}
-            <Select.Root
-              type="single"
-              value={boolValue}
-              onValueChange={(v) => v && (boolValue = v as 'true' | 'false')}
-            >
-              <Select.Trigger>{boolValue}</Select.Trigger>
-              <Select.Content>
-                <Select.Item value="true">True</Select.Item>
-                <Select.Item value="false">False</Select.Item>
-              </Select.Content>
-            </Select.Root>
-          {:else if field?.values && field.values.length}
-            <SingleSelect
-              options={optionItems}
-              bind:selected={stringValue}
-              placeholder="Select value..."
-              searchPlaceholder="Search values..."
-            />
-          {:else}
-            <Input bind:value={stringValue} placeholder="Type a value" />
-          {/if}
-        </div>
-      {/if}
-    </div>
+            {:else if field?.values && field.values.length}
+              <SingleSelect
+                options={optionItems}
+                bind:selected={stringValue}
+                placeholder="Select value..."
+                searchPlaceholder="Search values..."
+              />
+            {:else}
+              <Input bind:value={stringValue} placeholder="Type a value" />
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     <Dialog.Footer>
-      {#if fact.updatedAt !== null}
+      {#if fact.updatedAt !== null && canDelete}
         <Button
           variant="destructive"
           onclick={() => clear.mutate()}
@@ -331,10 +387,18 @@
         </Button>
       {/if}
       <div class="flex-1"></div>
-      <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
-      <Button onclick={() => save.mutate()} disabled={save.isPending || clear.isPending}
-        >Save</Button
-      >
+      {#if editing}
+        <Button variant="ghost" onclick={() => (editing = false)}>Cancel</Button>
+        <Button
+          onclick={() => save.mutate()}
+          disabled={save.isPending || clear.isPending || !canWrite}>Save</Button
+        >
+      {:else}
+        <Button variant="ghost" onclick={() => (open = false)}>Close</Button>
+        {#if canWrite}
+          <Button onclick={() => (editing = true)}>Edit</Button>
+        {/if}
+      {/if}
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

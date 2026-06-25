@@ -157,21 +157,26 @@
       <Sheet.Header class="border-b p-4">
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
-            <Sheet.Title class="leading-snug">{finding.title}</Sheet.Title>
-            <Sheet.Description class="mt-1 flex flex-wrap gap-2">
+            <Sheet.Title class="leading-snug flex gap-1">
               <FindingStatusBadge status={finding.status} />
+            </Sheet.Title>
+            <Sheet.Description class="mt-1 flex flex-col flex-wrap gap-2">
+              {finding.title}
+              <div>
+                <Button
+                  variant="link"
+                  size="sm"
+                  href={`/findings/${finding.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  class="gap-1"
+                >
+                  <ExternalLinkIcon data-icon="inline-start" />
+                  Open Finding
+                </Button>
+              </div>
             </Sheet.Description>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            href={`/findings/${finding.id}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <ExternalLinkIcon data-icon="inline-start" />
-            Open
-          </Button>
         </div>
       </Sheet.Header>
 

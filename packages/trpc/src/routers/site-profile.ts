@@ -8,7 +8,13 @@ import {
   siteStackCategories,
   siteStackEntries
 } from '@mspbyte/drizzle';
-import { ActionLabels, BUILT_IN_PROFILE_FIELDS, BUILT_IN_STACK_CATEGORIES } from '@mspbyte/shared';
+import {
+  ActionLabels,
+  BUILT_IN_PROFILE_FIELDS,
+  BUILT_IN_STACK_CATEGORIES,
+  hasPermission,
+  type Permission
+} from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
 import type { Context } from '../context.js';
@@ -122,6 +128,13 @@ function actorLabel(ctx: Context) {
   return ctx.user.name || ctx.user.email;
 }
 
+function requireSitePermission(ctx: Context, permission: Permission) {
+  const attrs = (ctx.role.attributes as Record<string, boolean> | null) ?? null;
+  if (!hasPermission(attrs, permission)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: `${permission} permission required` });
+  }
+}
+
 function normalizeStackStatus(status: z.infer<typeof stackStatusEnum>) {
   if (status === 'managed') return 'msp_managed';
   if (status === 'third_party') return 'vendor_managed';
@@ -130,7 +143,7 @@ function normalizeStackStatus(status: z.infer<typeof stackStatusEnum>) {
 
 function normalizeStackMetadataFields(
   fields:
-    | (Array<Partial<z.infer<typeof stackMetadataFieldSchema>> & { key: string; label: string }>)
+    | Array<Partial<z.infer<typeof stackMetadataFieldSchema>> & { key: string; label: string }>
     | null
     | undefined
 ) {
@@ -274,6 +287,7 @@ export const siteProfileRouter = t.router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      requireSitePermission(ctx, 'Sites.Write');
       await ensureCatalogDefaults(ctx.db);
       if (input.id) {
         const [row] = await ctx.db
@@ -312,6 +326,7 @@ export const siteProfileRouter = t.router({
   deleteField: authProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      requireSitePermission(ctx, 'Sites.Delete');
       await ctx.db.delete(siteProfileFields).where(eq(siteProfileFields.id, input.id));
       return { ok: true };
     }),
@@ -332,6 +347,7 @@ export const siteProfileRouter = t.router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      requireSitePermission(ctx, 'Sites.Write');
       await ensureCatalogDefaults(ctx.db);
       if (input.id) {
         const [row] = await ctx.db
@@ -366,6 +382,7 @@ export const siteProfileRouter = t.router({
   deleteCategory: authProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      requireSitePermission(ctx, 'Sites.Delete');
       await ctx.db.delete(siteStackCategories).where(eq(siteStackCategories.id, input.id));
       return { ok: true };
     }),
@@ -383,6 +400,7 @@ export const siteProfileRouter = t.router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      requireSitePermission(ctx, 'Sites.Write');
       const now = new Date().toISOString();
       const [existing] = await ctx.db
         .select()
@@ -452,6 +470,7 @@ export const siteProfileRouter = t.router({
   deleteFact: authProcedure
     .input(z.object({ siteId: z.string().uuid(), key: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
+      requireSitePermission(ctx, 'Sites.Delete');
       const [existing] = await ctx.db
         .select()
         .from(siteProfileFacts)
@@ -489,6 +508,7 @@ export const siteProfileRouter = t.router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      requireSitePermission(ctx, 'Sites.Write');
       const categoryRow = await ctx.db
         .select()
         .from(siteStackCategories)
@@ -591,6 +611,7 @@ export const siteProfileRouter = t.router({
   deleteStackEntry: authProcedure
     .input(z.object({ siteId: z.string().uuid(), categoryKey: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
+      requireSitePermission(ctx, 'Sites.Delete');
       const [existing] = await ctx.db
         .select()
         .from(siteStackEntries)
@@ -641,6 +662,7 @@ export const siteProfileRouter = t.router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      requireSitePermission(ctx, 'Sites.Write');
       const now = new Date().toISOString();
       if (input.id) {
         const [row] = await ctx.db
@@ -706,6 +728,7 @@ export const siteProfileRouter = t.router({
   deleteNote: authProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      requireSitePermission(ctx, 'Sites.Delete');
       const [existing] = await ctx.db
         .select()
         .from(siteProfileNotes)
