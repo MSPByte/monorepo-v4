@@ -38,7 +38,16 @@ export const syncRuns = ingestorSchema.table(
       .notNull()
       .defaultNow(),
   },
-  () => [check("valid_mode", sql`mode in ('full', 'incremental')`), rls],
+  (t) => [
+    check("valid_mode", sql`mode in ('full', 'incremental')`),
+    index("sync_runs_active_lookup_idx").on(
+      t.linkId,
+      t.type,
+      t.status,
+      t.createdAt,
+    ),
+    rls,
+  ],
 );
 
 export const syncRunStages = ingestorSchema.table(

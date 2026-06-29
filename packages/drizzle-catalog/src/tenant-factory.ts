@@ -12,6 +12,7 @@ let _catalogDb:
       $client: NeonQueryFunction<false, false>;
     })
   | undefined = undefined;
+const tenantDbs = new Map<string, ReturnType<typeof createTenantDb>>();
 
 export const getCatalogDb = (connectionString?: string) => {
   if (!_catalogDb) {
@@ -46,8 +47,15 @@ export async function getTenantServiceDbByOrgId(
     .limit(1);
   if (!org) throw new Error(`Org not found: ${orgId}`);
 
+  const cacheKey = `${org.id}:${org.serviceConnectionString}`;
+  let db = tenantDbs.get(cacheKey);
+  if (!db) {
+    db = createTenantDb(org.serviceConnectionString, encryptionKey);
+    tenantDbs.set(cacheKey, db);
+  }
+
   return {
     org,
-    db: createTenantDb(org.serviceConnectionString, encryptionKey)
+    db
   };
 }

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, integer, jsonb, uuid, unique } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, integer, jsonb, uuid, unique, index } from 'drizzle-orm/pg-core';
 import { crudPolicy, authenticatedRole } from 'drizzle-orm/neon';
 import { sites } from './sites.js';
 
@@ -87,6 +87,7 @@ export const integrationLinks = pgTable(
   },
   (t) => [
     unique().on(t.integrationId, t.externalId),
+    index('integration_links_status_idx').on(t.status),
     crudPolicy({ role: authenticatedRole, read: true, modify: true })
   ]
 );

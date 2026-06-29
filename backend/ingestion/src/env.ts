@@ -19,13 +19,18 @@ function boolean(name: string, fallback: boolean): boolean {
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
 
+function stringList(name: string, fallback?: string): string[] {
+  const value = process.env[name] ?? fallback;
+  if (!value) return [];
+
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function runtimeEnvironment(): string {
-  return (
-    process.env.INGESTION_ENV ??
-    process.env.APP_ENV ??
-    process.env.NODE_ENV ??
-    "development"
-  );
+  return process.env.INGESTION_ENV ?? process.env.APP_ENV ?? process.env.NODE_ENV ?? "development";
 }
 
 const RUNTIME_ENVIRONMENT = runtimeEnvironment();
@@ -41,7 +46,7 @@ export const env = {
   MICROSOFT_CLIENT_SECRET: process.env.MICROSOFT_CLIENT_SECRET,
   MICROSOFT_CERT_PEM: process.env.MICROSOFT_CERT_PEM,
   LOG_LEVEL: process.env.LOG_LEVEL ?? "info",
-  SCHEDULER_ENABLED: boolean("INGESTION_SCHEDULER_ENABLED", true),
+  SCHEDULER_ENABLED: boolean("INGESTION_SCHEDULER_ENABLED", IS_PRODUCTION),
   SCHEDULE_INTERVAL_MS: integer("INGESTION_SCHEDULE_INTERVAL_MS", 60_000),
   WORKER_CONCURRENCY: integer("INGESTION_WORKER_CONCURRENCY", 4),
   WORKER_REFRESH_INTERVAL_MS: integer("INGESTION_WORKER_REFRESH_INTERVAL_MS", 60_000),
@@ -51,6 +56,7 @@ export const env = {
   RAW_BATCH_SIZE: integer("INGESTION_RAW_BATCH_SIZE", 100),
   ENABLE_DEV_ADAPTER: boolean("INGESTION_ENABLE_DEV_ADAPTER", false),
   REQUIRE_DEV_ORGS: boolean("INGESTION_REQUIRE_DEV_ORGS", !IS_PRODUCTION),
+  TARGET_ORG_IDS: stringList("INGESTION_ORG_IDS", process.env.PIPELINE_ORG_IDS),
 };
 
 export function requireEncryptionKey(): string {

@@ -12,12 +12,7 @@ import {
   type SyncMode,
 } from "@mspbyte/pipeline";
 import { INTEGRATIONS, type FacetSyncConfig, type ProviderId } from "@mspbyte/shared";
-import {
-  canProcessOrg,
-  env,
-  hasMicrosoftCredentials,
-  requireEncryptionKey,
-} from "./env.js";
+import { canProcessOrg, env, hasMicrosoftCredentials, requireEncryptionKey } from "./env.js";
 import { logger } from "./logger.js";
 import type { RedisConnection } from "./redis.js";
 import { maybeGetAdapter } from "./adapters/registry.js";
@@ -52,11 +47,7 @@ export async function scheduleDueIngestion(
   });
 
   for (const org of orgs) {
-    const tenant = await getTenantServiceDbByOrgId(
-      org.id,
-      requireEncryptionKey(),
-      env.CATALOG_DATABASE_URL,
-    );
+    const tenant = await getTenantServiceDbByOrgId(org.id, requireEncryptionKey(), env.CATALOG_DATABASE_URL);
     const rows = await listActiveLinks(tenant.db);
 
     for (const row of rows) {
@@ -79,10 +70,7 @@ export async function scheduleDueIngestion(
         continue;
       }
 
-      if (
-        row.credentialExpiration &&
-        new Date(row.credentialExpiration).getTime() <= Date.now()
-      ) {
+      if (row.credentialExpiration && new Date(row.credentialExpiration).getTime() <= Date.now()) {
         logger.warn("Skipping integration link with expired credentials", {
           orgId: org.id,
           linkId: row.link.id,
@@ -174,16 +162,24 @@ async function listActiveLinks(db: Db) {
 }
 
 function activeOrgWhere() {
-  const active = eq(organization.status, "active");
-  if (!env.REQUIRE_DEV_ORGS) return active;
+  const filters = [eq(organization.status, "active")];
 
-  return and(active, eq(organization.isDev, true));
+  if (env.REQUIRE_DEV_ORGS) filters.push(eq(organization.isDev, true));
+  if (env.TARGET_ORG_IDS.length > 0) {
+    filters.push(inArray(organization.id, env.TARGET_ORG_IDS));
+  }
+
+  return and(...filters);
 }
 
 async function assertOrgCanBeProcessed(orgId: string): Promise<void> {
   const catalogDb = getCatalogDb(env.CATALOG_DATABASE_URL);
   const [org] = await catalogDb
-    .select({ id: organization.id, isDev: organization.isDev, status: organization.status })
+    .select({
+      id: organization.id,
+      isDev: organization.isDev,
+      status: organization.status,
+    })
     .from(organization)
     .where(eq(organization.id, orgId))
     .limit(1);
@@ -227,10 +223,9 @@ async function enqueueIngestionForLink(
     .returning({ id: syncRuns.id });
 
   const queueName = orgQueueName(QUEUES.INGEST, params.orgId);
-  const queue = new Queue<IngestionJobData, { syncRunId: string; jobId: string }, string>(
-    queueName,
-    { connection: redis as never },
-  );
+  const queue = new Queue<IngestionJobData, { syncRunId: string; jobId: string }, string>(queueName, {
+    connection: redis as never,
+  });
 
   try {
     const jobName = assertBullMqName(
@@ -349,8 +344,7 @@ async function decideSyncMode(
   }
 
   const now = Date.now();
-  const fullIntervalMs =
-    syncConfig.fullIntervalMs ?? syncConfig.intervalMs ?? env.FULL_SYNC_INTERVAL_MS;
+  const fullIntervalMs = syncConfig.fullIntervalMs ?? syncConfig.intervalMs ?? env.FULL_SYNC_INTERVAL_MS;
   const incrementalIntervalMs =
     syncConfig.incrementalIntervalMs ?? syncConfig.intervalMs ?? env.INCREMENTAL_SYNC_INTERVAL_MS;
   const lastFullAt = dateMs(context.fullSyncAt);

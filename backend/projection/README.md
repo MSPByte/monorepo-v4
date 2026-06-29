@@ -22,6 +22,9 @@ Required environment:
 Useful settings:
 
 - `PROJECTION_WORKER_CONCURRENCY=6`
+- `PIPELINE_ORG_IDS=<org-id>[,<org-id>]` limits workers to specific orgs across
+  the backend pipeline. `PROJECTION_ORG_IDS` can override this for projection
+  only.
 - `PROJECTION_REQUIRE_DEV_ORGS=false` for an explicit local override.
 
 ## Data Flow

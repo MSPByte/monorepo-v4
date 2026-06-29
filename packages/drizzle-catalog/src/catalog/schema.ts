@@ -124,7 +124,10 @@ export const organization = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [index("organization_slug_idx").on(t.slug)],
+  (t) => [
+    index("organization_slug_idx").on(t.slug),
+    index("organization_worker_scan_idx").on(t.status, t.isDev),
+  ],
 );
 
 export const member = pgTable(

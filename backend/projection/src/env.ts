@@ -15,6 +15,16 @@ function boolean(name: string, fallback: boolean): boolean {
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
 
+function stringList(name: string, fallback?: string): string[] {
+  const value = process.env[name] ?? fallback;
+  if (!value) return [];
+
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function runtimeEnvironment(): string {
   return (
     process.env.PROJECTION_ENV ??
@@ -36,11 +46,9 @@ export const env = {
   ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
   LOG_LEVEL: process.env.LOG_LEVEL ?? "info",
   WORKER_CONCURRENCY: integer("PROJECTION_WORKER_CONCURRENCY", 6),
-  WORKER_REFRESH_INTERVAL_MS: integer(
-    "PROJECTION_WORKER_REFRESH_INTERVAL_MS",
-    60_000,
-  ),
+  WORKER_REFRESH_INTERVAL_MS: integer("PROJECTION_WORKER_REFRESH_INTERVAL_MS", 60_000),
   REQUIRE_DEV_ORGS: boolean("PROJECTION_REQUIRE_DEV_ORGS", !IS_PRODUCTION),
+  TARGET_ORG_IDS: stringList("PROJECTION_ORG_IDS", process.env.PIPELINE_ORG_IDS),
 };
 
 export function requireEncryptionKey(): string {

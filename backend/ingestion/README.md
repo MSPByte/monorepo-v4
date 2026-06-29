@@ -75,14 +75,19 @@ Required environment:
 
 Useful development flags:
 
+- Scheduled ingestion is disabled by default outside production. Use
+  `INGESTION_SCHEDULER_ENABLED=true` only when intentionally testing scheduled
+  scans.
 - Non-production runtimes only process catalog organizations where
   `organization.is_dev = true`. Production is detected when `INGESTION_ENV`,
   `APP_ENV`, or `NODE_ENV` is `production`.
+- `PIPELINE_ORG_IDS=<org-id>[,<org-id>]` limits scheduler scans and workers to
+  specific orgs across the backend pipeline. `INGESTION_ORG_IDS` can override
+  this for ingestion only.
 - `INGESTION_REQUIRE_DEV_ORGS=false` can disable the dev-org guard for a local
   one-off run, but should not be used for normal development testing.
 - `INGESTION_ENABLE_DEV_ADAPTER=true` registers provider `dev` with type
   `dev_entities`.
-- `INGESTION_SCHEDULER_ENABLED=false` starts workers without scheduled scans.
 - `INGESTION_WORKER_CONCURRENCY=4` controls per-org worker concurrency.
 - `INGESTION_ACTIVE_RUN_STALE_MS=7200000` controls when a stuck active run is
   marked failed and allowed to be scheduled again.
