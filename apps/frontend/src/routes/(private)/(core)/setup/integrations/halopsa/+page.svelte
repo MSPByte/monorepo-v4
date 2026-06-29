@@ -42,6 +42,7 @@
         externalOptions = sites.map((s) => ({
           id: String(s.id),
           name: s.clientsite_name,
+          meta: { clientId: s.client_id },
         }));
       })
       .catch(() => {

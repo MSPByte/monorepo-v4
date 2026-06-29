@@ -1,5 +1,7 @@
-import { Queue, Worker } from "bullmq";
+import { Queue, UnrecoverableError, Worker } from "bullmq";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
+import { syncRuns } from "@mspbyte/drizzle";
+import { eq } from "drizzle-orm";
 import {
   assertBullMqName,
   orgQueueName,
@@ -80,6 +82,25 @@ export function createIngestionWorker(
         syncRunId: data.syncRunId,
         jobId: bullmqJobId,
       });
+
+      const [syncRun] = await db
+        .select({ id: syncRuns.id })
+        .from(syncRuns)
+        .where(eq(syncRuns.id, data.syncRunId))
+        .limit(1);
+      if (!syncRun) {
+        logger.warn("Discarding orphaned ingestion job because sync run is missing", {
+          orgId: data.orgId,
+          linkId: data.linkId,
+          provider: data.provider,
+          type: data.type,
+          syncRunId: data.syncRunId,
+          jobId: bullmqJobId,
+        });
+        throw new UnrecoverableError(
+          `Ingestion sync run ${data.syncRunId} is missing for job ${bullmqJobId}`,
+        );
+      }
 
       try {
         stageId = await startStage(db, {

@@ -28,6 +28,8 @@ export enum ProviderFacet {
   SophosFirewalls = 'sophos_firewalls',
   SophosLicenses = 'sophos_licenses',
   SophosTamperProtection = 'sophos_tamper_protection',
+  // HaloPSA
+  HaloPsaRecurringItems = 'halopsa_recurring_items',
   // Datto RMM
   DattoEndpoints = 'datto_endpoints',
   // Cove
@@ -80,6 +82,7 @@ export const PROVIDER_FACETS: Record<string, ProviderFacet[]> = {
     ProviderFacet.SophosLicenses,
     ProviderFacet.SophosTamperProtection
   ],
+  [PROVIDER_IDS.HALOPSA]: [ProviderFacet.HaloPsaRecurringItems],
   [PROVIDER_IDS.DATTO]: [ProviderFacet.DattoEndpoints],
   [PROVIDER_IDS.COVE]: [ProviderFacet.CoveEndpoints]
 };
@@ -106,6 +109,7 @@ export const FACET_TABLE_MAP: Partial<Record<ProviderFacet, string>> = {
   [ProviderFacet.SophosFirewalls]: 'sophosFirewalls',
   [ProviderFacet.SophosLicenses]: 'sophosLicenses',
   [ProviderFacet.SophosTamperProtection]: 'sophosTamperProtection',
+  [ProviderFacet.HaloPsaRecurringItems]: 'haloPsaRecurringItems',
   [ProviderFacet.DattoEndpoints]: 'dattoEndpoints',
   [ProviderFacet.CoveEndpoints]: 'coveEndpoints'
 };

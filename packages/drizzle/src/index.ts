@@ -2,6 +2,7 @@ export * from "./types.js";
 export * from "./db/public/index.js";
 export * from "./db/agent/index.js";
 export * from "./db/audit/index.js";
+export * from "./db/billing/index.js";
 export * from "./db/canonical/index.js";
 export * from "./db/ingestor/index.js";
 export * from "./db/policy/index.js";

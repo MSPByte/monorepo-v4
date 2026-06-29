@@ -101,6 +101,14 @@ export interface HaloPSANewTicket {
   images: string[];
 }
 
+export type HaloPSARecurringInvoice = Record<string, unknown> & {
+  id?: number | string;
+  client_id?: number | string;
+  client_name?: string;
+  site_id?: number | string;
+  site_name?: string;
+};
+
 // ─── Connector ────────────────────────────────────────────────────────────────
 
 export class HaloPSAConnector {
@@ -124,6 +132,16 @@ export class HaloPSAConnector {
 
   readonly attachment: {
     uploadImage: (file: Blob) => Promise<string>;
+  };
+
+  readonly recurringInvoice: {
+    list: (params?: {
+      siteId?: string | number;
+      clientId?: string | number;
+      includeLines?: boolean;
+      fullObjects?: boolean;
+    }) => Promise<HaloPSARecurringInvoice[]>;
+    get: (id: string | number, includeLines?: boolean) => Promise<HaloPSARecurringInvoice>;
   };
 
   constructor(url: string, clientId: string, clientSecret: string) {
@@ -213,6 +231,76 @@ export class HaloPSAConnector {
         return data.link;
       }
     };
+
+    this.recurringInvoice = {
+      list: async (options = {}) => {
+        const params = new URLSearchParams({
+          paginate: 'true',
+          page_size: '50',
+          page_no: '1'
+        });
+        if (options.siteId != null) {
+          params.set('site_id', String(options.siteId));
+        }
+        if (options.clientId != null) {
+          params.set('client_id', String(options.clientId));
+        }
+        if (options.includeLines ?? true) {
+          params.set('includelines', 'true');
+        }
+
+        const invoices = await this.getRecurringInvoicePages(params);
+        if (!options.fullObjects) return invoices;
+
+        return Promise.all(
+          invoices.map((invoice) =>
+            invoice.id == null
+              ? invoice
+              : this.recurringInvoice.get(invoice.id, options.includeLines ?? true)
+          )
+        );
+      },
+      get: async (id, includeLines = true) => {
+        const params = new URLSearchParams();
+        if (includeLines) {
+          params.set('includelines', 'true');
+          params.set('include_lines', 'true');
+        }
+        const suffix = params.size ? `?${params}` : '';
+        const data = await this.client.get<Record<string, unknown>>(
+          `/api/RecurringInvoice/${id}${suffix}`
+        );
+        return firstRecurringInvoice(data) ?? (data as HaloPSARecurringInvoice);
+      }
+    };
+  }
+
+  private async getRecurringInvoicePages(
+    params: URLSearchParams
+  ): Promise<HaloPSARecurringInvoice[]> {
+    type PagedResponse = {
+      record_count?: number;
+      page_no?: number;
+      count?: number;
+      total?: number;
+    } & Record<string, unknown>;
+
+    const items: HaloPSARecurringInvoice[] = [];
+    const first = await this.client.get<PagedResponse>(`/api/RecurringInvoice?${params}`);
+    items.push(...recurringInvoiceItems(first));
+
+    const total = Number(first.record_count ?? first.count ?? first.total ?? items.length);
+    params.set('page_no', String(Number(first.page_no ?? 1) + 1));
+
+    while (items.length < total) {
+      const page = await this.client.get<PagedResponse>(`/api/RecurringInvoice?${params}`);
+      const batch = recurringInvoiceItems(page);
+      if (batch.length === 0) break;
+      items.push(...batch);
+      params.set('page_no', String(Number(page.page_no ?? Number(params.get('page_no'))) + 1));
+    }
+
+    return items;
   }
 
   async checkHealth(): Promise<boolean> {
@@ -223,4 +311,35 @@ export class HaloPSAConnector {
       return false;
     }
   }
+}
+
+function firstRecurringInvoice(value: unknown): HaloPSARecurringInvoice | null {
+  const items = recurringInvoiceItems(value);
+  return items[0] ?? null;
+}
+
+function recurringInvoiceItems(value: unknown): HaloPSARecurringInvoice[] {
+  if (Array.isArray(value)) return value.filter(isRecord) as HaloPSARecurringInvoice[];
+  if (!isRecord(value)) return [];
+
+  for (const key of [
+    'invoices',
+    'recurringinvoices',
+    'recurring_invoices',
+    'recurringInvoices',
+    'results',
+    'data'
+  ]) {
+    const maybeItems = value[key];
+    if (Array.isArray(maybeItems)) return maybeItems.filter(isRecord) as HaloPSARecurringInvoice[];
+  }
+
+  const fallback = Object.values(value).find(
+    (entry) => Array.isArray(entry) && entry.some(isRecord)
+  );
+  return Array.isArray(fallback) ? (fallback.filter(isRecord) as HaloPSARecurringInvoice[]) : [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }

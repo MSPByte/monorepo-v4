@@ -66,6 +66,7 @@ export class HaloPSAHttpClient {
     if (!res.ok) {
       throw new Error(`HaloPSA GET error: HTTP ${res.status} ${res.statusText} — ${url}`);
     }
+
     return res.json() as Promise<T>;
   }
 
@@ -99,11 +100,7 @@ export class HaloPSAHttpClient {
 
   // Page-number pagination: fetches first page, then continues while items.length < record_count.
   // `key` is the response body field that contains the array (e.g. 'sites', 'assets', 'users').
-  async getAll<T>(
-    path: string,
-    key: string,
-    params: URLSearchParams
-  ): Promise<T[]> {
+  async getAll<T>(path: string, key: string, params: URLSearchParams): Promise<T[]> {
     type PagedResponse = { record_count: number; page_no: number } & Record<string, T[]>;
 
     const items: T[] = [];

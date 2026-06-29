@@ -45,6 +45,11 @@ const ROUTES: Route[] = [
     permission: 'Assets.Read',
   },
   {
+    label: 'Billing',
+    href: '/billing',
+    permission: 'Assets.Read',
+  },
+  {
     label: 'Wiki',
     href: '/wiki',
     devOnly: true,

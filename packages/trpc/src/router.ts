@@ -17,6 +17,7 @@ import { agentsRouter } from './routers/agents.js';
 import { pipelineRouter } from './routers/pipeline.js';
 import { wikiRouter } from './routers/wiki.js';
 import { auditRouter } from './routers/audit.js';
+import { billingRouter } from './routers/billing.js';
 
 export const appRouter = t.router({
   auth: authRouter,
@@ -36,7 +37,8 @@ export const appRouter = t.router({
   agents: agentsRouter,
   pipeline: pipelineRouter,
   wiki: wikiRouter,
-  audit: auditRouter
+  audit: auditRouter,
+  billing: billingRouter
 });
 
 export type AppRouter = typeof appRouter;

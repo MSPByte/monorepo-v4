@@ -6,6 +6,7 @@ export * from "./schemas/m365.js";
 export * from "./schemas/sophos.js";
 export * from "./schemas/cove.js";
 export * from "./schemas/datto.js";
+export * from "./schemas/halopsa.js";
 export * from "./lib/auth.js";
 export * from "./lib/m365-inbox-rules.js";
 export {
@@ -25,6 +26,7 @@ export type {
   DelegatedAdminRelationship,
   HaloPSAAsset,
   HaloPSANewTicket,
+  HaloPSARecurringInvoice,
   HaloPSASite,
   HaloPSATicketBody,
   HaloPSAUser,

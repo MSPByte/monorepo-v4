@@ -15,6 +15,7 @@ import {
   sophosFirewalls,
   sophosLicenses,
   sophosTamperProtection,
+  haloPsaRecurringItems,
   dattoEndpoints,
   coveEndpoints
 } from './index.js';
@@ -86,6 +87,10 @@ export const vendorTableRegistry = {
   sophosTamperProtection: {
     table: sophosTamperProtection,
     conflictTarget: [sophosTamperProtection.endpointId] as const
+  },
+  haloPsaRecurringItems: {
+    table: haloPsaRecurringItems,
+    conflictTarget: [haloPsaRecurringItems.linkId, haloPsaRecurringItems.externalId] as const
   },
   dattoEndpoints: {
     table: dattoEndpoints,

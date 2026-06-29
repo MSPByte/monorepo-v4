@@ -13,6 +13,7 @@ export default defineConfig({
     "public",
     "agent",
     "audit",
+    "billing",
     "canonical",
     "ingestor",
     "compliance",
