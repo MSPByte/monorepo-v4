@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { and, count, eq, inArray } from 'drizzle-orm';
 import {
   assets,
+  customerLogs,
   entitySources,
   findings,
   integrationLinks,
@@ -17,6 +18,7 @@ import {
   sophosFirewallsWithSite
 } from '@mspbyte/drizzle';
 import {
+  ActionLabels,
   BUILT_IN_PROFILE_FIELDS,
   BUILT_IN_STACK_CATEGORIES,
   hasPermission,
@@ -35,6 +37,33 @@ function requireSitePermission(ctx: Context, permission: Permission) {
   if (!hasPermission(attrs, permission)) {
     throw new TRPCError({ code: 'FORBIDDEN', message: `${permission} permission required` });
   }
+}
+
+async function auditSiteChange(
+  ctx: Context,
+  input: {
+    siteId: string;
+    action: 'create' | 'update' | 'delete';
+    actionLabel: ActionLabels;
+    targetLabel: string;
+    metadata?: Record<string, unknown>;
+  }
+) {
+  await ctx.db.insert(customerLogs).values({
+    siteId: input.siteId,
+    actorType: 'user',
+    actorId: ctx.user.id,
+    actorLabel: ctx.user.name || ctx.user.email,
+    action: input.action,
+    actionLabel: input.actionLabel,
+    targetType: 'site',
+    targetId: input.siteId,
+    targetLabel: input.targetLabel,
+    result: 'success',
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+    metadata: input.metadata ?? null
+  });
 }
 
 const SUPPORTED_METRIC_KEYS = [
@@ -521,5 +550,102 @@ export const sitesRouter = t.router({
         .values({ name: input.name, description: input.description })
         .returning();
       return site!;
+    }),
+
+  rename: authProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        name: z.string().trim().min(1, 'Name is required').max(200)
+      })
+    )
+    .mutation(async ({ ctx, input }): Promise<SiteRow> => {
+      requireSitePermission(ctx, 'Sites.Write');
+      const [existing] = await ctx.db
+        .select()
+        .from(sites)
+        .where(eq(sites.id, input.id))
+        .limit(1);
+      if (!existing) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      if (existing.name === input.name) return existing;
+
+      const [row] = await ctx.db
+        .update(sites)
+        .set({ name: input.name })
+        .where(eq(sites.id, input.id))
+        .returning();
+      if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+
+      await auditSiteChange(ctx, {
+        siteId: row.id,
+        action: 'update',
+        actionLabel: ActionLabels.SiteRename,
+        targetLabel: row.name,
+        metadata: { previousName: existing.name, newName: row.name }
+      });
+
+      return row;
+    }),
+
+  delete: authProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      requireSitePermission(ctx, 'Sites.Delete');
+      const [existing] = await ctx.db
+        .select()
+        .from(sites)
+        .where(eq(sites.id, input.id))
+        .limit(1);
+      if (!existing) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      try {
+        await ctx.db.delete(sites).where(eq(sites.id, input.id));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await ctx.db.insert(customerLogs).values({
+          siteId: existing.id,
+          actorType: 'user',
+          actorId: ctx.user.id,
+          actorLabel: ctx.user.name || ctx.user.email,
+          action: 'delete',
+          actionLabel: ActionLabels.SiteDelete,
+          targetType: 'site',
+          targetId: existing.id,
+          targetLabel: existing.name,
+          result: 'failure',
+          errorMessage: message,
+          ipAddress: ctx.ipAddress,
+          userAgent: ctx.userAgent,
+          metadata: { name: existing.name }
+        });
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message:
+            'Site cannot be deleted while related records (assets, people, integrations, etc.) remain. Remove or reassign them first.'
+        });
+      }
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: null,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email,
+        action: 'delete',
+        actionLabel: ActionLabels.SiteDelete,
+        targetType: 'site',
+        targetId: existing.id,
+        targetLabel: existing.name,
+        result: 'success',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: {
+          name: existing.name,
+          description: existing.description,
+          parentSiteId: existing.parentSiteId
+        }
+      });
+
+      return { ok: true };
     })
 });

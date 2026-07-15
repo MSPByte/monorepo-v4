@@ -1,5 +1,6 @@
 <script lang="ts">
   import SourceGlyph from './source-glyph.svelte';
+  import SiteActionsMenu from './site-actions-menu.svelte';
   import type { SiteProfileResponse } from '../_profile/client-profile.types';
 
   let {
@@ -102,6 +103,7 @@
         SITE·{siteCode}
       </span>
     </div>
+    <SiteActionsMenu {siteId} {siteName} />
   </div>
 
   {#if factPills.length}

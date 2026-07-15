@@ -4,6 +4,8 @@ export enum ActionLabels {
   PolicyDelete = 'policy.delete',
   FindingSuppress = 'finding.suppress',
   FindingUnsuppress = 'finding.unsuppress',
+  SiteRename = 'site.rename',
+  SiteDelete = 'site.delete',
   SiteProfileFactCreate = 'site_profile.fact.create',
   SiteProfileFactUpdate = 'site_profile.fact.update',
   SiteProfileFactDelete = 'site_profile.fact.delete',
@@ -40,6 +42,14 @@ export const ActionResources = {
   [ActionLabels.FindingUnsuppress]: {
     label: ActionLabels.FindingUnsuppress,
     name: 'Finding unsuppress'
+  },
+  [ActionLabels.SiteRename]: {
+    label: ActionLabels.SiteRename,
+    name: 'Site rename'
+  },
+  [ActionLabels.SiteDelete]: {
+    label: ActionLabels.SiteDelete,
+    name: 'Site delete'
   },
   [ActionLabels.SiteProfileFactCreate]: {
     label: ActionLabels.SiteProfileFactCreate,
