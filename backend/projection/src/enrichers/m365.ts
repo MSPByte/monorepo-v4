@@ -7,7 +7,7 @@ import {
   m365Roles,
 } from "@mspbyte/drizzle";
 import { PROVIDER_IDS, ProviderFacet } from "@mspbyte/shared";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import type {
   Db,
@@ -199,7 +199,6 @@ async function activeMfaCandidatePolicies(
       and(
         eq(m365Policies.linkId, linkId),
         eq(m365Policies.policyState, "enabled"),
-        isNull(m365Policies.deletedAt),
       ),
     );
 }
@@ -211,9 +210,7 @@ async function activeIdentities(
   return db
     .select({ id: m365Identities.id, externalId: m365Identities.externalId })
     .from(m365Identities)
-    .where(
-      and(eq(m365Identities.linkId, linkId), isNull(m365Identities.deletedAt)),
-    );
+    .where(eq(m365Identities.linkId, linkId));
 }
 
 async function identityGroupMemberships(

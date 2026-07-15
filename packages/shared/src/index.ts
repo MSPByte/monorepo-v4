@@ -1,4 +1,5 @@
 export * from "./config/actions/index.js";
+export * from "./config/billing/index.js";
 export * from "./config/integrations/index.js";
 export * from "./config/policy-table-shapes.js";
 export * from "./config/site-profile-catalog.js";

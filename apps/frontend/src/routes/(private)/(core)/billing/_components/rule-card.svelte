@@ -3,6 +3,7 @@
   import { Badge } from '$lib/components/ui/badge';
   import Pencil from '@lucide/svelte/icons/pencil';
   import Trash2 from '@lucide/svelte/icons/trash-2';
+  import { formatMoney } from '$lib/utils/format';
 
   type VendorFilter = {
     column: string;
@@ -16,12 +17,15 @@
     enabled: boolean;
     siteId: string | null;
     psaItemMatch: { field: string; operator: string; value: string };
+    vendorProvider: string;
+    vendorFacet: string;
     vendorFilters: VendorFilter[];
   };
 
   let {
     rule,
     siteName,
+    facetLabel,
     matchedRows,
     mrrDelta = 0,
     onEdit,
@@ -30,20 +34,13 @@
   }: {
     rule: Rule;
     siteName: string;
+    facetLabel: string;
     matchedRows: number;
     mrrDelta?: number;
     onEdit: () => void;
     onDelete: () => void;
     deletePending?: boolean;
   } = $props();
-
-  function money(value: number) {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      maximumFractionDigits: 0,
-    }).format(value);
-  }
 
   function formatOp(op: string) {
     switch (op) {
@@ -95,12 +92,14 @@
 
   <div class="flex flex-wrap items-center gap-1.5 text-xs">
     <span class="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-      psa.{rule.psaItemMatch.field} {formatOp(rule.psaItemMatch.operator)}
+      psa.{rule.psaItemMatch.field}
+      {formatOp(rule.psaItemMatch.operator)}
       <span class="text-foreground">"{rule.psaItemMatch.value}"</span>
     </span>
     {#each rule.vendorFilters as f}
       <span class="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-        vendor.{f.column} {formatOp(f.operator)}{#if f.value != null}
+        vendor.{f.column}
+        {formatOp(f.operator)}{#if f.value != null}
           <span class="text-foreground"> {String(f.value)}</span>
         {/if}
       </span>
@@ -125,10 +124,10 @@
             : 'text-rose-600 dark:text-rose-400'}"
           title="Total MRR impact from this rule"
         >
-          {mrrDelta > 0 ? '+' : ''}{money(mrrDelta)}
+          {mrrDelta > 0 ? '+' : ''}{formatMoney(mrrDelta)}
         </span>
       {/if}
-      <Badge variant="outline" class="font-mono text-[10px]">sophos_endpoints</Badge>
+      <Badge variant="outline" class="font-mono text-[10px]">{facetLabel}</Badge>
     </div>
   </div>
 </div>

@@ -15,7 +15,6 @@ export const coveEndpoints = vendorsSchema.table(
     siteId: uuid('site_id').references(() => sites.id),
     externalId: text('external_id').notNull(),
     sourceHash: text('source_hash'),
-    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
     endpointName: text('endpoint_name').notNull(),
     hostname: text('hostname').notNull(),
     type: text('type', { enum: ['workstation', 'server'] }).notNull(),

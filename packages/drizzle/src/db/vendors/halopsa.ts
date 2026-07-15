@@ -26,7 +26,6 @@ export const haloPsaRecurringItems = vendorsSchema.table(
     cost: numeric('cost', { precision: 12, scale: 2 }),
     recurringPeriod: text('recurring_period'),
     sourceHash: text('source_hash'),
-    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' })
       .notNull()
       .defaultNow(),

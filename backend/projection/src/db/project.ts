@@ -20,7 +20,6 @@ type Db = any;
 type VendorRowState = {
   id: string;
   sourceHash: string | null;
-  deletedAt: string | null;
 };
 type RawProjectionRow = {
   id: string;
@@ -374,7 +373,7 @@ async function projectRowsIndividually(
     try {
       const rowResult =
         row.op === "delete"
-          ? await projectDelete(db, params, row.externalId, row.payloadHash)
+          ? await projectDelete(db, params, row.externalId)
           : await projectUpsert(db, params, row.payload, row.payloadHash);
 
       result.recordsOut += rowResult.recordsOut;
@@ -425,7 +424,7 @@ async function projectUpsertsBatch(
 
   for (const row of rows) {
     const existing = existingByExternalId.get(row.externalId);
-    if (existing?.sourceHash === row.payloadHash && existing.deletedAt == null) {
+    if (existing?.sourceHash === row.payloadHash) {
       unchangedIds.push(existing.id);
     } else {
       changedRows.push(row);
@@ -454,7 +453,6 @@ async function projectUpsertsBatch(
       updatedAt: now,
     };
     if (table.sourceHash) insertRow.sourceHash = row.payloadHash;
-    if (table.deletedAt) insertRow.deletedAt = null;
     return insertRow;
   });
   const setClause = vendorUpsertSetClause(table);
@@ -484,24 +482,10 @@ async function projectDeletesBatch(
 
   const registry = tableRegistryFor(params.type);
   const table = registry.table as any;
-  const now = new Date().toISOString();
   const externalIds = rows.map((row) => row.externalId);
-  const setValues: Record<string, unknown> = {
-    lastSeenAt: now,
-  };
-  if (table.deletedAt) setValues.deletedAt = now;
-  if (table.sourceHash) {
-    setValues.sourceHash = caseByExternalId(
-      table.externalId,
-      rows.map((row) => [row.externalId, row.payloadHash]),
-      table.sourceHash,
-    );
-  }
-  if (table.updatedAt) setValues.updatedAt = now;
 
   const returned = await db
-    .update(table)
-    .set(setValues)
+    .delete(table)
     .where(
       and(eq(table.linkId, params.linkId), inArray(table.externalId, externalIds)),
     )
@@ -541,7 +525,7 @@ async function projectUpsert(
     params.linkId,
     projected.externalId,
   );
-  if (existing?.sourceHash === payloadHash && existing.deletedAt == null) {
+  if (existing?.sourceHash === payloadHash) {
     await touchVendorRow(db, registry.table, existing.id);
     return { recordsOut: 0, createdCt: 0, updatedCt: 0 };
   }
@@ -556,7 +540,6 @@ async function projectUpsert(
     updatedAt: now,
   };
   if (table.sourceHash) insertRow.sourceHash = payloadHash;
-  if (table.deletedAt) insertRow.deletedAt = null;
 
   const setClause = vendorUpsertSetClause(table);
 
@@ -587,7 +570,6 @@ async function findExistingVendorRow(
   const selection = {
     id: requiredColumn(vendorTable, "id"),
     ...(vendorTable.sourceHash ? { sourceHash: vendorTable.sourceHash } : {}),
-    ...(vendorTable.deletedAt ? { deletedAt: vendorTable.deletedAt } : {}),
   };
   const [row] = await db
     .select(selection)
@@ -604,7 +586,6 @@ async function findExistingVendorRow(
   return {
     id: row.id,
     sourceHash: row.sourceHash ?? null,
-    deletedAt: row.deletedAt ?? null,
   };
 }
 
@@ -621,7 +602,6 @@ async function findExistingVendorRows(
     id: requiredColumn(vendorTable, "id"),
     externalId: requiredColumn(vendorTable, "externalId"),
     ...(vendorTable.sourceHash ? { sourceHash: vendorTable.sourceHash } : {}),
-    ...(vendorTable.deletedAt ? { deletedAt: vendorTable.deletedAt } : {}),
   };
   const rows = await db
     .select(selection)
@@ -639,7 +619,6 @@ async function findExistingVendorRows(
       {
         id: row.id,
         sourceHash: row.sourceHash ?? null,
-        deletedAt: row.deletedAt ?? null,
       },
     ]),
   );
@@ -678,7 +657,6 @@ async function projectDelete(
     type: string;
   },
   externalId: string,
-  payloadHash: string,
 ): Promise<{ recordsOut: number; createdCt: number; updatedCt: number }> {
   if (isSophosTamperProtectionFacet(params.type)) {
     const cleared = await softDeleteSophosTamperProtection(
@@ -690,17 +668,9 @@ async function projectDelete(
   }
   const registry = tableRegistryFor(params.type);
   const table = registry.table as any;
-  const now = new Date().toISOString();
-  const setValues: Record<string, unknown> = {
-    lastSeenAt: now,
-  };
-  if (table.deletedAt) setValues.deletedAt = now;
-  if (table.sourceHash) setValues.sourceHash = payloadHash;
-  if (table.updatedAt) setValues.updatedAt = now;
 
   const returned = await db
-    .update(table)
-    .set(setValues)
+    .delete(table)
     .where(
       and(eq(table.linkId, params.linkId), eq(table.externalId, externalId)),
     )
@@ -833,19 +803,6 @@ function vendorUpsertSetClause(table: unknown): Record<string, unknown> {
         sql.raw(`excluded.${Object(column).name}`),
       ]),
   );
-}
-
-function caseByExternalId(
-  externalIdColumn: unknown,
-  values: Array<[string, string]>,
-  fallback: unknown,
-) {
-  return sql`case ${externalIdColumn as never} ${sql.join(
-    values.map(
-      ([externalId, value]) => sql`when ${externalId} then ${value}`,
-    ),
-    sql.raw(" "),
-  )} else ${fallback as never} end`;
 }
 
 function caseByRawRecordId(

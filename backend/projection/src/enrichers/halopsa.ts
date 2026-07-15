@@ -29,12 +29,7 @@ async function projectRecurringItemsToBilling(context: {
   const rows = (await context.db
     .select()
     .from(haloPsaRecurringItems)
-    .where(
-      and(
-        eq(haloPsaRecurringItems.linkId, context.linkId),
-        isNull(haloPsaRecurringItems.deletedAt),
-      ),
-    )) as HaloPsaRecurringItemRow[];
+    .where(eq(haloPsaRecurringItems.linkId, context.linkId))) as HaloPsaRecurringItemRow[];
 
   if (rows.length === 0) {
     const deletedCt = await softDeleteBillingItemsForLink(context.db, context.linkId);

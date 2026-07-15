@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, ne, notInArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, notInArray, sql } from 'drizzle-orm';
 import {
   assets,
   assetsWithSites,
@@ -590,14 +590,10 @@ async function scopedRows(
   const table = entry.table as Record<string, unknown>;
   const conditions: unknown[] = [];
   const linkColumn = table.linkId;
-  const deletedAtColumn = table.deletedAt;
   const siteColumn = table.siteId;
 
   if (linkColumn && context.linkId) {
     conditions.push(eq(linkColumn as never, context.linkId));
-  }
-  if (deletedAtColumn) {
-    conditions.push(isNull(deletedAtColumn as never));
   }
   const scope = isObject(definition.scope) ? definition.scope : {};
   if (scope.siteId && siteColumn) {
@@ -621,7 +617,6 @@ async function scopedRows(
     ) {
       return false;
     }
-    if (!deletedAtColumn && readPath(row, 'deletedAt')) return false;
     if (!siteColumn && scope.siteId && readPath(row, 'siteId') !== scope.siteId) return false;
     return true;
   });

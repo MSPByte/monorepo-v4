@@ -1,6 +1,7 @@
 import { PersistedState } from 'runed';
 import type { ProviderId } from '@mspbyte/shared';
 import { INTEGRATIONS } from '@mspbyte/shared';
+
 type Integration = {
   id: string;
   config?: unknown;
@@ -30,9 +31,7 @@ function createScopeStore() {
 
   return {
     get currentScope() {
-      return currentIntegration.current
-        ? INTEGRATIONS[currentIntegration.current].scope
-        : null;
+      return currentIntegration.current ? INTEGRATIONS[currentIntegration.current].scope : null;
     },
     get currentLink() {
       return currentLinkId.current;

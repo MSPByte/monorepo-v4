@@ -56,6 +56,12 @@
     queryFn: () => trpc.billing.filterOptions.query(),
   }));
 
+  const facetsQuery = createQuery(() => ({
+    queryKey: ['billing.facets'],
+    queryFn: () => trpc.billing.facets.query(),
+    staleTime: 60_000,
+  }));
+
   const deleteRule = createMutation(() => ({
     mutationFn: (id: string) => trpc.billing.deleteRule.mutate({ id }),
     onSuccess: () => {
@@ -84,6 +90,7 @@
   let ruleSortKey = $state<RuleSortKey>('matched');
   let ruleSortDir = $state<'asc' | 'desc'>('desc');
   let ruleEnabledFilter = $state<'all' | 'enabled' | 'disabled'>('all');
+  let ruleFacetFilter = $state<string>('all');
 
   // Totals tracked from DataTable's fetchData
   let filteredRowsState = $state<EnrichedRow[]>([]);
@@ -92,6 +99,10 @@
   const sites = $derived(filterOptionsQuery.data?.sites ?? []);
   const siteGroups = $derived(filterOptionsQuery.data?.siteGroups ?? []);
   const rules = $derived(rulesQuery.data ?? []);
+  const facets = $derived(facetsQuery.data ?? []);
+  const facetLabelById = $derived(
+    new Map<string, string>(facets.map((f) => [f.facet as string, f.label]))
+  );
 
   const siteNameById = $derived(new Map(sites.map((site) => [site.id, site.name])));
   const groupById = $derived(new Map(siteGroups.map((g) => [g.id, g])));
@@ -107,6 +118,7 @@
     (reportQuery.data?.rows ?? []).map((row, idx) => ({
       ...row,
       id: row.psaItemId ?? `${row.ruleId ?? 'x'}-${row.siteId ?? 'unmapped'}-${idx}`,
+      vendorFacetLabel: row.vendorFacetLabel ?? 'No rule',
     }))
   );
 
@@ -185,7 +197,7 @@
     const q = search.trim().toLowerCase();
     if (!q) return true;
     const hay =
-      `${row.siteName} ${row.psaItemName} ${row.ruleName ?? ''} ${row.status}`.toLowerCase();
+      `${row.siteName} ${row.psaItemName} ${row.ruleName ?? ''} ${row.status} ${row.vendorFacetLabel ?? ''}`.toLowerCase();
     return hay.includes(q);
   }
 
@@ -270,13 +282,18 @@
 
   const summary = $derived(reportQuery.data?.summary);
 
-  const columns: DataTableColumn<EnrichedRow>[] = [
+  const facetSelectOptions = $derived([
+    { label: 'No rule', value: 'No rule' },
+    ...facets.map((f) => ({ label: f.label, value: f.label })),
+  ]);
+
+  const columns = $derived<DataTableColumn<EnrichedRow>[]>([
     {
       key: 'siteName',
       title: 'Site',
       sortable: true,
       searchable: true,
-      width: '20%',
+      width: '18%',
       filter: {
         type: 'text',
         operators: ['contains', 'eq'],
@@ -289,12 +306,25 @@
       title: 'PSA item',
       sortable: true,
       searchable: true,
-      width: '22%',
+      width: '20%',
       filter: {
         type: 'text',
         operators: ['contains', 'eq'],
         placeholder: 'Filter PSA item…',
       },
+    },
+    {
+      key: 'vendorFacetLabel',
+      title: 'Category',
+      sortable: true,
+      searchable: true,
+      width: '150px',
+      filter: {
+        type: 'select',
+        operators: ['eq', 'neq'],
+        options: facetSelectOptions,
+      },
+      cell: categoryCell,
     },
     {
       key: 'ruleName',
@@ -362,7 +392,7 @@
       },
       cell: statusCell,
     },
-  ];
+  ]);
 
   const views: TableView<EnrichedRow>[] = [
     {
@@ -426,10 +456,12 @@
     let list = rules.filter((rule) => {
       if (ruleEnabledFilter === 'enabled' && !rule.enabled) return false;
       if (ruleEnabledFilter === 'disabled' && rule.enabled) return false;
+      if (ruleFacetFilter !== 'all' && rule.vendorFacet !== ruleFacetFilter) return false;
       if (q.length) {
         const match = rule.psaItemMatch as { field?: string; value?: string } | null;
+        const facetLabel = facetLabelById.get(rule.vendorFacet) ?? '';
         const hay =
-          `${rule.name} ${match?.value ?? ''} ${match?.field ?? ''} ${rule.vendorProvider} ${rule.vendorFacet}`.toLowerCase();
+          `${rule.name} ${match?.value ?? ''} ${match?.field ?? ''} ${rule.vendorProvider} ${rule.vendorFacet} ${facetLabel}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -474,12 +506,19 @@
     { value: 'enabled', label: 'Enabled only' },
     { value: 'disabled', label: 'Disabled only' },
   ];
+  const ruleFacetOptions = $derived([
+    { value: 'all', label: 'All categories' },
+    ...facets.map((f) => ({ value: f.facet, label: f.label })),
+  ]);
 
   function onRuleSortKeyChange(v: string) {
     if (v) ruleSortKey = v as RuleSortKey;
   }
   function onRuleEnabledFilterChange(v: string) {
     ruleEnabledFilter = (v || 'all') as 'all' | 'enabled' | 'disabled';
+  }
+  function onRuleFacetFilterChange(v: string) {
+    ruleFacetFilter = v || 'all';
   }
   function toggleRuleSortDir() {
     ruleSortDir = ruleSortDir === 'asc' ? 'desc' : 'asc';
@@ -488,6 +527,14 @@
 
 {#snippet siteCell({ value }: { row: EnrichedRow; value: string })}
   <span class="font-medium">{value}</span>
+{/snippet}
+
+{#snippet categoryCell({ row, value }: { row: EnrichedRow; value: string | null })}
+  {#if row.vendorFacet}
+    <Badge variant="secondary" class="font-mono text-[10px]">{value}</Badge>
+  {:else}
+    <span class="text-xs italic text-muted-foreground">{value}</span>
+  {/if}
 {/snippet}
 
 {#snippet ruleNameCell({ value }: { row: EnrichedRow; value: string | null })}
@@ -754,6 +801,16 @@
               />
             </div>
 
+            <div class="w-56">
+              <SingleSelect
+                options={ruleFacetOptions}
+                selected={ruleFacetFilter}
+                onchange={onRuleFacetFilterChange}
+                placeholder="All categories"
+                searchPlaceholder="Search categories…"
+              />
+            </div>
+
             <div class="flex items-center gap-1">
               <div class="w-44">
                 <SingleSelect
@@ -837,6 +894,7 @@
                     siteName={rule.siteId
                       ? (siteNameById.get(rule.siteId) ?? 'Unknown site')
                       : 'Any site matched by PSA row'}
+                    facetLabel={facetLabelById.get(rule.vendorFacet) ?? rule.vendorFacet}
                     matchedRows={matchedRowsByRule.get(rule.id) ?? 0}
                     mrrDelta={mrrDeltaByRule.get(rule.id) ?? 0}
                     onEdit={() => openEditRule(rule)}

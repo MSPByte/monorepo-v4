@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import {
   assets,
   coveEndpoints,
@@ -184,7 +184,7 @@ async function normalizeM365Identities(
   const rows = (await db
     .select()
     .from(m365Identities)
-    .where(and(eq(m365Identities.linkId, params.linkId), isNull(m365Identities.deletedAt)))) as Array<
+    .where(eq(m365Identities.linkId, params.linkId))) as Array<
     typeof m365Identities.$inferSelect
   >;
   const metrics = emptyMetrics();
@@ -315,7 +315,7 @@ async function normalizeM365Devices(
   const rows = (await db
     .select()
     .from(m365Devices)
-    .where(and(eq(m365Devices.linkId, params.linkId), isNull(m365Devices.deletedAt)))) as Array<
+    .where(eq(m365Devices.linkId, params.linkId))) as Array<
     typeof m365Devices.$inferSelect
   >;
   const metrics = emptyMetrics();
@@ -652,7 +652,7 @@ async function activeVendorRows(db: Db, table: AssetTable, linkId: string): Prom
   return db
     .select()
     .from(table)
-    .where(and(eq(table.linkId, linkId), isNull(table.deletedAt)));
+    .where(eq(table.linkId, linkId));
 }
 
 async function findSourcesBatch(

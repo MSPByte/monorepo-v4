@@ -10,7 +10,7 @@ import {
   m365Roles
 } from '@mspbyte/drizzle';
 import { PROVIDER_IDS, ProviderFacet } from '@mspbyte/shared';
-import { and, eq, isNull } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db, ProjectionStep, ProjectionStepContext } from '../contracts/steps.js';
 
@@ -317,7 +317,7 @@ async function activeIdentities(db: Db, linkId: string): Promise<IdentityRow[]> 
       assignedRoleTemplateIds: m365Identities.assignedRoleTemplateIds
     })
     .from(m365Identities)
-    .where(and(eq(m365Identities.linkId, linkId), isNull(m365Identities.deletedAt)));
+    .where(eq(m365Identities.linkId, linkId));
 }
 
 async function activeGroups(db: Db, linkId: string): Promise<GroupRow[]> {
@@ -328,14 +328,14 @@ async function activeGroups(db: Db, linkId: string): Promise<GroupRow[]> {
       memberExternalIds: m365Groups.memberExternalIds
     })
     .from(m365Groups)
-    .where(and(eq(m365Groups.linkId, linkId), isNull(m365Groups.deletedAt)));
+    .where(eq(m365Groups.linkId, linkId));
 }
 
 async function activePolicies(db: Db, linkId: string): Promise<PolicyConditionsRow[]> {
   return db
     .select({ id: m365Policies.id, conditions: m365Policies.conditions })
     .from(m365Policies)
-    .where(and(eq(m365Policies.linkId, linkId), isNull(m365Policies.deletedAt)));
+    .where(eq(m365Policies.linkId, linkId));
 }
 
 async function roles(db: Db): Promise<RoleRow[]> {
