@@ -234,10 +234,16 @@ export class HaloPSAConnector {
 
     this.recurringInvoice = {
       list: async (options = {}) => {
+        // Mirror the query used by HaloPSA's own client-invoices UI so we get invoices + credits,
+        // including inactive ones, and the same field set.
         const params = new URLSearchParams({
           paginate: 'true',
           page_size: '50',
-          page_no: '1'
+          page_no: '1',
+          includeinactive: 'true',
+          includeinvoices: 'true',
+          includecredits: 'true',
+          includepoinvoices: 'false'
         });
         if (options.siteId != null) {
           params.set('site_id', String(options.siteId));
@@ -289,7 +295,7 @@ export class HaloPSAConnector {
     const first = await this.client.get<PagedResponse>(`/api/RecurringInvoice?${params}`);
     items.push(...recurringInvoiceItems(first));
 
-    const total = Number(first.record_count ?? first.count ?? first.total ?? items.length);
+    const total = Number(first.record_count);
     params.set('page_no', String(Number(first.page_no ?? 1) + 1));
 
     while (items.length < total) {

@@ -50,15 +50,29 @@ async function fetchRecurringInvoices(
   connector: HaloPSAConnector,
   context: IngestionAdapterContext
 ): Promise<HaloPSARecurringInvoice[]> {
-  const clientId = stringMeta(context, 'clientId');
+  const clientId = numberMeta(context, 'clientId');
   const siteId = stringMeta(context, 'externalId');
+
+  if (!clientId) {
+    logger.warn(
+      'HaloPSA link missing clientId in linkMeta; skipping recurring invoice fetch to avoid cross-tenant leakage',
+      {
+        linkId: context.linkId
+      }
+    );
+    return [];
+  }
+
   let invoices = await connector.recurringInvoice.list({
     clientId,
-    includeLines: true
+    includeLines: true,
+    fullObjects: false
   });
 
   const rows: HaloPSARecurringInvoice[] = [];
-  for (const invoice of invoices.filter((i) => invoiceAppliesToSite(i, siteId))) {
+  for (const invoice of invoices.filter(
+    (i) => invoiceAppliesToClient(i, clientId) && invoiceAppliesToSite(i, siteId)
+  )) {
     if (recurringLines(invoice).length > 0) {
       rows.push(invoice);
       continue;
@@ -113,12 +127,7 @@ function flattenRecurringItems(invoices: HaloPSARecurringInvoice[]): RecurringIt
     const lines = recurringLines(invoiceRecord);
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index]!;
-      const lineId =
-        stringId(line.id) ??
-        stringId(line.line_id) ??
-        stringId(line.item_id) ??
-        stringId(line.recurring_item_id) ??
-        String(index + 1);
+      const lineId = stringId(line.id) ?? String(index + 1);
       records.push({
         _external_id: `${invoiceId}:${lineId}`,
         _invoice: invoiceSummary,
@@ -130,7 +139,18 @@ function flattenRecurringItems(invoices: HaloPSARecurringInvoice[]): RecurringIt
   return records;
 }
 
-function invoiceAppliesToSite(invoice: HaloPSARecurringInvoice, siteId: string | undefined): boolean {
+function invoiceAppliesToClient(invoice: HaloPSARecurringInvoice, clientId: number): boolean {
+  const record = asRecord(invoice);
+  const invoiceClientId = stringId(record.client_id) ?? stringId(record.clientid);
+  // If HaloPSA returned an invoice with no client id at all, keep it (rare) — the site-level check will still gate it.
+  if (!invoiceClientId) return true;
+  return invoiceClientId === stringId(clientId);
+}
+
+function invoiceAppliesToSite(
+  invoice: HaloPSARecurringInvoice,
+  siteId: string | undefined
+): boolean {
   if (!siteId) return true;
   const record = asRecord(invoice);
   const invoiceSiteId =
@@ -140,7 +160,9 @@ function invoiceAppliesToSite(invoice: HaloPSARecurringInvoice, siteId: string |
     stringId(record.clientsiteid) ??
     stringId(record.sitenumber) ??
     stringId(record.site_number);
-  return !invoiceSiteId || invoiceSiteId === siteId;
+  // HaloPSA uses sitenumber/site_id = 0 to mean "applies to every site under the client".
+  if (!invoiceSiteId || invoiceSiteId === '0') return true;
+  return invoiceSiteId === siteId;
 }
 
 function summarizeInvoice(invoice: Record<string, unknown>): Record<string, unknown> {
@@ -165,37 +187,31 @@ function summarizeInvoice(invoice: Record<string, unknown>): Record<string, unkn
     'invoicenumber'
   ]);
   summary.applies_to_all_sites =
-    summary.site_id == null &&
-    summary.siteid == null &&
-    summary.sitenumber == null &&
-    summary.site_number == null;
+    isClientWideSiteRef(summary.site_id) &&
+    isClientWideSiteRef(summary.siteid) &&
+    isClientWideSiteRef(summary.sitenumber) &&
+    isClientWideSiteRef(summary.site_number);
   return summary;
+}
+
+function isClientWideSiteRef(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === 'number') return value === 0;
+  if (typeof value === 'string') return value === '' || value === '0';
+  return false;
 }
 
 function summarizeLine(line: Record<string, unknown>): Record<string, unknown> {
   return pickFields(line, [
     'id',
-    'line_id',
-    'item_id',
-    'itemid',
-    'recurring_item_id',
+    '_itemid',
     'item_name',
-    'name',
-    'description',
-    'long_description',
-    'quantity',
-    'qty',
-    'recurring_quantity',
+    'item_shortdescription',
+    'item_longdescription',
+    'qty_order',
     'unit_price',
-    'unitprice',
-    'price',
-    'sales_price',
-    'salesprice',
-    'cost',
     'unit_cost',
-    'costprice',
-    'contract_id',
-    'recurring_period'
+    'contract_id'
   ]);
 }
 
@@ -216,28 +232,11 @@ function pickFields(source: Record<string, unknown>, keys: string[]): Record<str
 }
 
 function recurringLines(invoice: Record<string, unknown>): Record<string, unknown>[] {
-  for (const key of [
-    'lines',
-    'Lines',
-    'invoice_lines',
-    'invoicelines',
-    'invoiceLines',
-    'recurring_items',
-    'recurringitems',
-    'recurringItems',
-    'line_items',
-    'lineitems',
-    'lineItems',
-    'items',
-    'details'
-  ]) {
-    const value = invoice[key];
-    if (Array.isArray(value)) {
-      return value.filter(
-        (entry): entry is Record<string, unknown> =>
-          !!entry && typeof entry === 'object' && !Array.isArray(entry)
-      );
-    }
+  if (Array.isArray(invoice.lines)) {
+    return invoice.lines.filter(
+      (entry): entry is Record<string, unknown> =>
+        !!entry && typeof entry === 'object' && !Array.isArray(entry)
+    );
   }
   return [];
 }
@@ -270,6 +269,11 @@ function stringConfig(context: IngestionAdapterContext, key: string): string {
 function stringMeta(context: IngestionAdapterContext, key: string): string | undefined {
   const value = context.linkMeta?.[key];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function numberMeta(context: IngestionAdapterContext, key: string): number | undefined {
+  const value = context.linkMeta?.[key];
+  return typeof value === 'number' ? value : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

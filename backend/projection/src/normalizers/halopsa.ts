@@ -1,8 +1,8 @@
 import {
   HaloPsaRecurringItemSchema,
   ProviderFacet,
-  type HaloPsaRecurringItem,
-} from "@mspbyte/shared";
+  type HaloPsaRecurringItem
+} from '@mspbyte/shared';
 
 type RecordValue = Record<string, unknown>;
 
@@ -26,46 +26,31 @@ function normalizeRecurringItem(raw: HaloPsaRecurringItem): RecordValue {
       stringValue(invoice.sitenumber) ??
       stringValue(invoice.site_number),
     externalContractId:
+      stringValue(line.contract_id) ??
       stringValue(invoice.contract_id) ??
-      stringValue(invoice.contractid) ??
-      stringValue(line.contract_id),
+      stringValue(invoice.contractid),
     externalInvoiceId: stringValue(invoice.id),
-    externalItemId:
-      stringValue(line.item_id) ??
-      stringValue(line.itemid) ??
-      stringValue(line.recurring_item_id) ??
-      stringValue(line.id),
-    itemName:
-      stringValue(line.item_name) ??
-      stringValue(line.name) ??
-      stringValue(line.description) ??
-      "Unknown recurring item",
-    description: stringValue(line.description) ?? stringValue(line.long_description),
-    quantity: integerValue(line.quantity ?? line.qty ?? line.recurring_quantity),
-    unitPrice: decimalString(
-      line.unit_price ??
-        line.unitprice ??
-        line.price ??
-        line.sales_price ??
-        line.salesprice,
-    ),
-    cost: nullableDecimalString(line.cost ?? line.unit_cost ?? line.costprice),
+    externalItemId: stringValue(line._itemid) ?? stringValue(line.id),
+    itemName: stringValue(line.item_name) ?? 'Unknown recurring item',
+    description:
+      stringValue(line.item_longdescription) ?? stringValue(line.item_shortdescription),
+    quantity: integerValue(line.qty_order),
+    unitPrice: decimalString(line.unit_price),
+    cost: nullableDecimalString(line.unit_cost),
     recurringPeriod:
-      stringValue(invoice.period) ??
-      stringValue(invoice.recurring_period) ??
-      stringValue(line.recurring_period),
+      stringValue(invoice.period) ?? stringValue(invoice.recurring_period)
   };
 }
 
 function stringValue(value: unknown): string | null {
-  if (typeof value === "string" && value.length > 0) return value;
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === 'string' && value.length > 0) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   return null;
 }
 
 function integerValue(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
-  if (typeof value === "string") {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
+  if (typeof value === 'string') {
     const parsed = Number.parseFloat(value);
     if (Number.isFinite(parsed)) return Math.round(parsed);
   }
@@ -73,13 +58,13 @@ function integerValue(value: unknown): number {
 }
 
 function decimalString(value: unknown): string {
-  return nullableDecimalString(value) ?? "0";
+  return nullableDecimalString(value) ?? '0';
 }
 
 function nullableDecimalString(value: unknown): string | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value.toFixed(2);
-  if (typeof value === "string") {
-    const parsed = Number.parseFloat(value.replace(/[$,]/g, ""));
+  if (typeof value === 'number' && Number.isFinite(value)) return value.toFixed(2);
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value.replace(/[$,]/g, ''));
     if (Number.isFinite(parsed)) return parsed.toFixed(2);
   }
   return null;
