@@ -123,7 +123,9 @@ async function sophosEndpointEvidence(
   };
 }
 
-async function buildReport(db: any): Promise<{ rows: ReconciliationRow[]; summary: ReportSummary }> {
+async function buildReport(
+  db: any
+): Promise<{ rows: ReconciliationRow[]; summary: ReportSummary }> {
   const [items, rules, siteRows] = await Promise.all([
     db.select().from(billingPsaItems).where(isNull(billingPsaItems.deletedAt)),
     db
@@ -275,7 +277,10 @@ export const billingRouter = t.router({
   }),
 
   rules: authProcedure.query(async ({ ctx }) => {
-    return ctx.db.select().from(billingReconciliationRules).orderBy(billingReconciliationRules.name);
+    return ctx.db
+      .select()
+      .from(billingReconciliationRules)
+      .orderBy(billingReconciliationRules.name);
   }),
 
   upsertRule: authProcedure.input(upsertRuleSchema).mutation(async ({ ctx, input }) => {
@@ -321,8 +326,7 @@ export const billingRouter = t.router({
       (allItems as PsaItem[]).find((psaItem) => {
         if (input.siteId && psaItem.siteId !== input.siteId) return false;
         return matchesPsaItem(psaItem, input.psaItemMatch);
-      }) ??
-      null;
+      }) ?? null;
 
     const evidence = await sophosEndpointEvidence(
       ctx.db,

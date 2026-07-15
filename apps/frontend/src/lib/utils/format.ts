@@ -28,9 +28,15 @@ export function formatBytes(bytes: number): string {
 }
 
 export function formatStringProper(value: string): string {
-  return value
-    .replace(/[_-]/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return value.replace(/[_-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+export function formatMoney(value: number | undefined | null) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 2,
+  }).format(value ?? 0);
 }
 
 const PRETTY_ACRONYMS: Record<string, string> = {

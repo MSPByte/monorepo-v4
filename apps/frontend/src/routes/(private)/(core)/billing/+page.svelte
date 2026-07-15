@@ -36,6 +36,7 @@
 
   import RuleEditorSheet from './_components/rule-editor-sheet.svelte';
   import RuleCard from './_components/rule-card.svelte';
+  import { formatMoney } from '$lib/utils/format';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const qc = useQueryClient();
@@ -239,14 +240,6 @@
   function openEditRule(rule: Rule) {
     editingRule = rule;
     sheetOpen = true;
-  }
-
-  function money(value: number | undefined | null) {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      maximumFractionDigits: 0,
-    }).format(value ?? 0);
   }
 
   function statusClass(status: ReportRow['status']) {
@@ -522,14 +515,14 @@
 {#snippet mrrCell({ value }: { row: EnrichedRow; value: number })}
   {#if value > 0}
     <span class="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
-      {money(value)}
+      {formatMoney(value)}
     </span>
   {:else if value < 0}
     <span class="font-mono tabular-nums text-rose-600 dark:text-rose-400">
-      {money(value)}
+      {formatMoney(value)}
     </span>
   {:else}
-    <span class="font-mono tabular-nums text-muted-foreground">{money(0)}</span>
+    <span class="font-mono tabular-nums text-muted-foreground">{formatMoney(0)}</span>
   {/if}
 {/snippet}
 
@@ -574,17 +567,17 @@
     <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
       <MetricCard
         label="Underbilled MRR"
-        value={money(summary?.underbilledMrr)}
+        value={formatMoney(summary?.underbilledMrr)}
         detail={`${summary?.underbilledRows ?? 0} rows to fix`}
       />
       <MetricCard
         label="Overbilled MRR"
-        value={money(summary?.overbilledMrr)}
+        value={formatMoney(summary?.overbilledMrr)}
         detail={`${summary?.overbilledRows ?? 0} rows to refund`}
       />
       <MetricCard
         label="Net MRR delta"
-        value={money(summary?.netMrrDelta)}
+        value={formatMoney(summary?.netMrrDelta)}
         detail="Positive = recoverable revenue"
       />
       <MetricCard
@@ -724,14 +717,14 @@
               </span>
               {#if filteredTotals.mrr > 0}
                 <span class="font-semibold text-emerald-600 dark:text-emerald-400">
-                  {money(filteredTotals.mrr)}
+                  {formatMoney(filteredTotals.mrr)}
                 </span>
               {:else if filteredTotals.mrr < 0}
                 <span class="font-semibold text-rose-600 dark:text-rose-400">
-                  {money(filteredTotals.mrr)}
+                  {formatMoney(filteredTotals.mrr)}
                 </span>
               {:else}
-                <span class="font-semibold text-muted-foreground">{money(0)}</span>
+                <span class="font-semibold text-muted-foreground">{formatMoney(0)}</span>
               {/if}
             </div>
           </div>
