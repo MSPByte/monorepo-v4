@@ -4,6 +4,8 @@ import { and, eq, isNull } from 'drizzle-orm';
 import {
   billingPsaItems,
   billingReconciliationRules,
+  siteGroupMembers,
+  siteGroups,
   sites,
   sophosEndpoints
 } from '@mspbyte/drizzle';
@@ -344,5 +346,39 @@ export const billingRouter = t.router({
 
   report: authProcedure.query(async ({ ctx }) => {
     return buildReport(ctx.db);
+  }),
+
+  filterOptions: authProcedure.query(async ({ ctx }) => {
+    const [siteRows, groupRows, memberRows] = await Promise.all([
+      ctx.db
+        .select({ id: sites.id, name: sites.name })
+        .from(sites)
+        .orderBy(sites.name)
+        .catch(() => [] as { id: string; name: string }[]),
+      ctx.db
+        .select({ id: siteGroups.id, name: siteGroups.name })
+        .from(siteGroups)
+        .orderBy(siteGroups.name)
+        .catch(() => [] as { id: string; name: string }[]),
+      ctx.db
+        .select({ siteGroupId: siteGroupMembers.siteGroupId, siteId: siteGroupMembers.siteId })
+        .from(siteGroupMembers)
+        .catch(() => [] as { siteGroupId: string; siteId: string }[])
+    ]);
+
+    const siteIdsByGroup = new Map<string, string[]>();
+    for (const row of memberRows) {
+      const list = siteIdsByGroup.get(row.siteGroupId) ?? [];
+      list.push(row.siteId);
+      siteIdsByGroup.set(row.siteGroupId, list);
+    }
+
+    return {
+      sites: siteRows,
+      siteGroups: groupRows.map((group) => ({
+        ...group,
+        siteIds: siteIdsByGroup.get(group.id) ?? []
+      }))
+    };
   })
 });
