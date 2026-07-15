@@ -48,6 +48,7 @@
     "@friendofsvelte/tipex": "^0.1.1",
     "@mspbyte/drizzle": "*",
     "@mspbyte/drizzle-catalog": "*",
+    "@mspbyte/pipeline": "*",
     "@mspbyte/shared": "*",
     "@mspbyte/trpc": "*",
     "@sveltejs/adapter-vercel": "^6.3.3",
@@ -74,6 +75,7 @@
     "better-auth": "^1.4.0",
     "drizzle-orm": "^1.0.0-beta.22",
     "exceljs": "^4.4.0",
+    "ioredis": "^5.11.1",
     "jwt-decode": "^4.0.0",
     "runed": "^0.35.1",
     "zod": "^4.3.6"

@@ -4,7 +4,6 @@ import { and, eq, isNull } from 'drizzle-orm';
 import {
   billingPsaItems,
   billingReconciliationRules,
-  integrationLinks,
   sites,
   sophosEndpoints
 } from '@mspbyte/drizzle';
@@ -345,70 +344,5 @@ export const billingRouter = t.router({
 
   report: authProcedure.query(async ({ ctx }) => {
     return buildReport(ctx.db);
-  }),
-
-  seedDemoPsaItems: authProcedure.mutation(async ({ ctx }) => {
-    const linkRows = await ctx.db
-      .select({
-        link: integrationLinks,
-        site: sites
-      })
-      .from(integrationLinks)
-      .leftJoin(sites, eq(integrationLinks.siteId, sites.id))
-      .where(
-        and(
-          eq(integrationLinks.integrationId, 'sophos-partner'),
-          eq(integrationLinks.status, 'active')
-        )
-      );
-
-    let created = 0;
-    for (const row of linkRows) {
-      if (!row.link.siteId) continue;
-      const endpointRows = await ctx.db
-        .select()
-        .from(sophosEndpoints)
-        .where(
-          and(eq(sophosEndpoints.siteId, row.link.siteId), isNull(sophosEndpoints.deletedAt))
-        );
-      if (!endpointRows.length) continue;
-
-      const actualQuantity = endpointRows.length;
-      const demoQuantity = Math.max(0, actualQuantity - 2);
-      const externalId = `demo-sophos-endpoints-${row.link.siteId}`;
-
-      await ctx.db
-        .insert(billingPsaItems)
-        .values({
-          sourceProvider: 'demo-psa',
-          sourceTable: 'demo',
-          linkId: row.link.id,
-          siteId: row.link.siteId,
-          externalId,
-          customerName: row.site?.name ?? row.link.name ?? 'Unknown site',
-          contractName: 'Demo Managed Services',
-          itemName: 'Sophos Endpoint Protection',
-          description: 'Demo PSA recurring item generated from Sophos endpoint inventory',
-          quantity: demoQuantity,
-          unitPrice: '8.00',
-          recurringPeriod: 'monthly',
-          rawSummary: { actualQuantity, demoQuantity },
-          updatedAt: new Date().toISOString(),
-          lastSeenAt: new Date().toISOString()
-        })
-        .onConflictDoUpdate({
-          target: [billingPsaItems.sourceProvider, billingPsaItems.externalId],
-          set: {
-            quantity: demoQuantity,
-            customerName: row.site?.name ?? row.link.name ?? 'Unknown site',
-            updatedAt: new Date().toISOString(),
-            lastSeenAt: new Date().toISOString(),
-            deletedAt: null
-          }
-        });
-      created += 1;
-    }
-
-    return { created };
   })
 });

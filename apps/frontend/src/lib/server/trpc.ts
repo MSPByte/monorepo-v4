@@ -2,6 +2,7 @@ import { appRouter } from '@mspbyte/trpc';
 import { createTenantDb, type organization } from '@mspbyte/drizzle-catalog';
 import type { db } from '$lib/db';
 import { ENCRYPTION_KEY, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET } from '$env/static/private';
+import { getRedis } from './redis';
 
 export function createServerCaller(locals: {
   auth: {
@@ -32,6 +33,6 @@ export function createServerCaller(locals: {
             clientSecret: MICROSOFT_CLIENT_SECRET,
           }
         : null,
-    redis: undefined,
+    redis: getRedis(),
   });
 }

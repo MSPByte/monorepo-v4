@@ -1,14 +1,9 @@
-import { randomUUID } from "node:crypto";
-import { Queue } from "bullmq";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { getCatalogDb, getTenantServiceDbByOrgId, organization } from "@mspbyte/drizzle-catalog";
-import { integrationLinks, integrations, syncContext, syncRuns } from "@mspbyte/drizzle";
+import { integrationLinks, integrations, syncContext } from "@mspbyte/drizzle";
 import {
-  assertBullMqName,
-  ingestionRootJobId,
-  orgQueueName,
-  QUEUES,
-  type IngestionJobData,
+  enqueueIngestionJob,
+  hasActiveIngestionRun,
   type SyncMode,
 } from "@mspbyte/pipeline";
 import { INTEGRATIONS, type FacetSyncConfig, type ProviderId } from "@mspbyte/shared";
@@ -80,18 +75,28 @@ export async function scheduleDueIngestion(
       }
 
       for (const type of adapter.types) {
-        if (await hasActiveRun(tenant.db, row.link.id, type)) continue;
+        if (await hasActiveIngestionRun(tenant.db, row.link.id, type, env.ACTIVE_RUN_STALE_MS)) continue;
 
         const decision = await decideSyncMode(tenant.db, row.link.id, row.link.integrationId, type);
         if (!decision.due) continue;
 
-        await enqueueIngestionForLink(redis, tenant.db, {
+        const result = await enqueueIngestionJob(redis, tenant.db, {
           orgId: org.id,
           link: row.link,
           integrationConfig: row.integrationConfig,
           type,
           mode: decision.mode,
           cursor: decision.cursor,
+        });
+
+        logger.info("Queued ingestion job", {
+          orgId: org.id,
+          linkId: row.link.id,
+          integrationId: row.link.integrationId,
+          type,
+          mode: decision.mode,
+          syncRunId: result.syncRunId,
+          bullmqJobId: result.jobId,
           triggerType,
         });
       }
@@ -128,7 +133,7 @@ export async function enqueueManualIngestion(
     throw new Error(`Adapter ${adapter.providerId} does not support ingestion type ${params.type}`);
   }
 
-  if (!params.force && (await hasActiveRun(tenant.db, params.linkId, params.type))) {
+  if (!params.force && (await hasActiveIngestionRun(tenant.db, params.linkId, params.type, env.ACTIVE_RUN_STALE_MS))) {
     throw new Error(`An ingestion run is already active for link ${params.linkId}`);
   }
 
@@ -138,15 +143,27 @@ export async function enqueueManualIngestion(
       ? await getStoredCursor(tenant.db, params.linkId, row.link.integrationId, params.type)
       : undefined;
 
-  return enqueueIngestionForLink(redis, tenant.db, {
+  const result = await enqueueIngestionJob(redis, tenant.db, {
     orgId: params.orgId,
     link: row.link,
     integrationConfig: row.integrationConfig,
     type: params.type,
     mode,
     cursor,
+  });
+
+  logger.info("Queued ingestion job", {
+    orgId: params.orgId,
+    linkId: params.linkId,
+    integrationId: row.link.integrationId,
+    type: params.type,
+    mode,
+    syncRunId: result.syncRunId,
+    bullmqJobId: result.jobId,
     triggerType: params.triggerType ?? "manual",
   });
+
+  return result;
 }
 
 async function listActiveLinks(db: Db) {
@@ -191,125 +208,6 @@ async function assertOrgCanBeProcessed(orgId: string): Promise<void> {
       `Org ${orgId} is not marked is_dev; ingestion is restricted to development orgs in ${env.RUNTIME_ENVIRONMENT}`,
     );
   }
-}
-
-async function enqueueIngestionForLink(
-  redis: RedisConnection,
-  db: Db,
-  params: {
-    orgId: string;
-    link: typeof integrationLinks.$inferSelect;
-    integrationConfig: unknown;
-    type: string;
-    mode: SyncMode;
-    cursor?: string;
-    triggerType: TriggerType;
-  },
-): Promise<{ syncRunId: string; jobId: string }> {
-  const ingestionRunId = randomUUID();
-  const bullmqJobId = ingestionRootJobId(params.link.id, ingestionRunId);
-
-  const [syncRun] = await db
-    .insert(syncRuns)
-    .values({
-      linkId: params.link.id,
-      integrationId: params.link.integrationId,
-      bullmqJobId,
-      type: params.type,
-      status: "pending",
-      mode: params.mode,
-      startedAt: new Date().toISOString(),
-    })
-    .returning({ id: syncRuns.id });
-
-  const queueName = orgQueueName(QUEUES.INGEST, params.orgId);
-  const queue = new Queue<IngestionJobData, { syncRunId: string; jobId: string }, string>(queueName, {
-    connection: redis as never,
-  });
-
-  try {
-    const jobName = assertBullMqName(
-      `ingest_${params.link.integrationId}_${params.type}_${syncRun.id}`,
-      "BullMQ job name",
-    );
-    const job = await queue.add(
-      jobName,
-      {
-        orgId: params.orgId,
-        linkId: params.link.id,
-        siteId: params.link.siteId ?? undefined,
-        integrationId: params.link.integrationId,
-        provider: params.link.integrationId,
-        type: params.type,
-        syncRunId: syncRun.id,
-        mode: params.mode,
-        cursor: params.cursor,
-        linkMeta: linkMetaWithExternalId(params.link.meta, params.link.externalId),
-        integrationConfig: asRecord(params.integrationConfig),
-      },
-      {
-        jobId: bullmqJobId,
-        attempts: 3,
-        backoff: { type: "exponential", delay: 5_000 },
-        removeOnComplete: 100,
-        removeOnFail: 500,
-      },
-    );
-
-    await db.update(syncRuns).set({ status: "queued" }).where(eq(syncRuns.id, syncRun.id));
-
-    logger.info("Queued ingestion job", {
-      orgId: params.orgId,
-      linkId: params.link.id,
-      integrationId: params.link.integrationId,
-      type: params.type,
-      mode: params.mode,
-      syncRunId: syncRun.id,
-      bullmqJobId: job.id,
-    });
-
-    return { syncRunId: syncRun.id, jobId: String(job.id) };
-  } catch (error) {
-    await db
-      .update(syncRuns)
-      .set({ status: "enqueue_failed", finishedAt: new Date().toISOString() })
-      .where(eq(syncRuns.id, syncRun.id));
-    throw error;
-  } finally {
-    await queue.close();
-  }
-}
-
-async function hasActiveRun(db: Db, linkId: string, type: string): Promise<boolean> {
-  const [run] = await db
-    .select({ id: syncRuns.id, createdAt: syncRuns.createdAt })
-    .from(syncRuns)
-    .where(
-      and(
-        eq(syncRuns.linkId, linkId),
-        eq(syncRuns.type, type),
-        inArray(syncRuns.status, ["pending", "queued", "running"]),
-      ),
-    )
-    .limit(1);
-
-  if (!run) return false;
-
-  const staleBefore = Date.now() - env.ACTIVE_RUN_STALE_MS;
-  if (new Date(run.createdAt).getTime() > staleBefore) return true;
-
-  await db
-    .update(syncRuns)
-    .set({ status: "failed", finishedAt: new Date().toISOString() })
-    .where(eq(syncRuns.id, run.id));
-
-  logger.warn("Marked stale ingestion run as failed before scheduling replacement", {
-    linkId,
-    type,
-    syncRunId: run.id,
-  });
-
-  return false;
 }
 
 async function decideSyncMode(
@@ -397,21 +295,4 @@ function dateMs(value: string | Date | null | undefined): number | undefined {
   const date = value instanceof Date ? value : new Date(value);
   const time = date.getTime();
   return Number.isNaN(time) ? undefined : time;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  return value as Record<string, unknown>;
-}
-
-function linkMetaWithExternalId(
-  meta: unknown,
-  externalId: string | null,
-): Record<string, unknown> | undefined {
-  const record = asRecord(meta) ?? {};
-  if (externalId && typeof record.externalId !== "string") {
-    record.externalId = externalId;
-  }
-
-  return Object.keys(record).length > 0 ? record : undefined;
 }

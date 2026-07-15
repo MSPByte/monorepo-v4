@@ -97,7 +97,7 @@ async function projectRecurringItemsToBilling(context: {
     .insert(billingPsaItems)
     .values(writeRows)
     .onConflictDoUpdate({
-      target: [billingPsaItems.sourceProvider, billingPsaItems.externalId],
+      target: [billingPsaItems.sourceProvider, billingPsaItems.linkId, billingPsaItems.externalId],
       set: {
         sourceId: sql`excluded.source_id`,
         linkId: sql`excluded.link_id`,

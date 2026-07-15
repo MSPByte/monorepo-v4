@@ -35,6 +35,66 @@
     queryFn: () => trpc.sites.list.query(),
   }));
 
+  const linksQuery = createQuery(() => ({
+    queryKey: ['pipeline.syncableLinks'],
+    queryFn: () => trpc.pipeline.syncableLinks.query(),
+  }));
+
+  const haloLink = $derived(
+    linksQuery.data?.find((l) => l.integrationId === 'halopsa' && l.status === 'active'),
+  );
+
+  let pendingRunId = $state<string | null>(null);
+
+  const runStatusQuery = createQuery(() => ({
+    queryKey: ['pipeline.recentRuns', haloLink?.id ?? ''],
+    queryFn: () =>
+      trpc.pipeline.recentRuns.query({ linkId: haloLink!.id, limit: 5 }),
+    refetchInterval: pendingRunId ? 3_000 : false,
+    enabled: Boolean(haloLink && pendingRunId),
+  }));
+
+  const TERMINAL_STATUSES = new Set([
+    'completed',
+    'failed',
+    'normalize_failed',
+    'policy_failed',
+    'projection_failed',
+    'enqueue_failed',
+  ]);
+
+  $effect(() => {
+    if (!pendingRunId || !runStatusQuery.data) return;
+    const match = runStatusQuery.data.find((r) => r.id === pendingRunId);
+    if (match && TERMINAL_STATUSES.has(match.status)) {
+      if (match.status === 'completed') {
+        toast.success('Halo sync completed');
+        qc.invalidateQueries({ queryKey: ['billing.report'] });
+        qc.invalidateQueries({ queryKey: ['billing.previewRule'] });
+      } else {
+        toast.error(`Halo sync ended with status: ${match.status}`);
+      }
+      pendingRunId = null;
+    }
+  });
+
+  const refreshHalo = createMutation(() => ({
+    mutationFn: () => {
+      if (!haloLink) throw new Error('No active HaloPSA link configured');
+      return trpc.pipeline.enqueueSync.mutate({
+        linkId: haloLink.id,
+        type: 'halopsa_recurring_items',
+        mode: 'full',
+      });
+    },
+    onSuccess: (result) => {
+      toast.success('Halo sync queued — polling for completion…');
+      pendingRunId = result.syncRunId;
+    },
+    onError: (e: unknown) =>
+      toast.error(e instanceof Error ? e.message : 'Failed to queue Halo sync'),
+  }));
+
   let name = $state('Sophos Endpoint Protection');
   let siteId = $state('');
   let itemNameContains = $state('Sophos Endpoint');
@@ -94,16 +154,6 @@
     onError: (e: unknown) => toast.error(e instanceof Error ? e.message : 'Rule delete failed'),
   }));
 
-  const seedDemo = createMutation(() => ({
-    mutationFn: () => trpc.billing.seedDemoPsaItems.mutate(),
-    onSuccess: (result) => {
-      toast.success(`Seeded ${result.created} demo PSA item${result.created === 1 ? '' : 's'}`);
-      qc.invalidateQueries({ queryKey: ['billing.report'] });
-      qc.invalidateQueries({ queryKey: ['billing.previewRule'] });
-    },
-    onError: (e: unknown) => toast.error(e instanceof Error ? e.message : 'Demo seed failed'),
-  }));
-
   function money(value: number | undefined) {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -130,13 +180,13 @@
         </p>
       </div>
       <Button
-        variant="outline"
         class="gap-2"
-        disabled={seedDemo.isPending}
-        onclick={() => seedDemo.mutate()}
+        disabled={!haloLink || refreshHalo.isPending || pendingRunId != null}
+        onclick={() => refreshHalo.mutate()}
+        title={haloLink ? 'Queue a Halo sync' : 'No active HaloPSA link'}
       >
-        <RefreshCw class="size-4" />
-        Seed demo PSA rows
+        <RefreshCw class={`size-4 ${pendingRunId ? 'animate-spin' : ''}`} />
+        {pendingRunId ? 'Syncing…' : refreshHalo.isPending ? 'Queueing…' : 'Refresh from Halo'}
       </Button>
     </div>
 

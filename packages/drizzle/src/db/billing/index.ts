@@ -46,7 +46,7 @@ export const billingPsaItems = billingSchema.table(
       .defaultNow()
   },
   (t) => [
-    unique().on(t.sourceProvider, t.externalId),
+    unique().on(t.sourceProvider, t.linkId, t.externalId),
     index('billing_psa_items_site_idx').on(t.siteId),
     rls
   ]

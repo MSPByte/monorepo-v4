@@ -18,6 +18,7 @@
     "@mspbyte/connectors": "*",
     "@mspbyte/drizzle": "*",
     "@mspbyte/drizzle-catalog": "*",
+    "@mspbyte/pipeline": "*",
     "@mspbyte/shared": "*",
     "@better-auth/drizzle-adapter": "^1.4.0",
     "@trpc/server": "^11.4.2",
