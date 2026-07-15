@@ -1048,5 +1048,44 @@ export const vendorRouter = t.router({
         .catch(() => []);
 
       return rows;
-    })
+    }),
+
+  sophosLicenseTiers: authProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.db
+      .select({
+        linkId: sophosLicenses.linkId,
+        code: sophosLicenses.code,
+        endsAt: sophosLicenses.endsAt
+      })
+      .from(sophosLicenses)
+      .innerJoin(integrationLinks, eq(integrationLinks.id, sophosLicenses.linkId))
+      .where(
+        and(
+          eq(integrationLinks.integrationId, 'sophos-partner'),
+          eq(integrationLinks.status, 'active')
+        )
+      );
+
+    const now = Date.now();
+    const serverRank = { 'SVRCIXAMTR-STD-MSP': 1, SVRCIXAXDR: 2, 'SVRCLOUDADV-MSP': 3 } as const;
+    const endpointRank = { 'CIXAMTR-STD-MSP': 1, CIXAXDR: 2, 'CIXA-MSP': 3 } as const;
+    const rankLabel = ['MDR', 'XDR', 'Endpoint'] as const;
+
+    const byLink = new Map<string, { serverRank: number | null; endpointRank: number | null }>();
+    for (const row of rows) {
+      if (row.endsAt && new Date(row.endsAt).getTime() <= now) continue;
+      const entry = byLink.get(row.linkId) ?? { serverRank: null, endpointRank: null };
+      const sr = serverRank[row.code as keyof typeof serverRank];
+      const er = endpointRank[row.code as keyof typeof endpointRank];
+      if (sr && (entry.serverRank === null || sr < entry.serverRank)) entry.serverRank = sr;
+      if (er && (entry.endpointRank === null || er < entry.endpointRank)) entry.endpointRank = er;
+      byLink.set(row.linkId, entry);
+    }
+
+    return Array.from(byLink.entries()).map(([linkId, { serverRank, endpointRank }]) => ({
+      linkId,
+      serverTier: serverRank ? rankLabel[serverRank - 1] : null,
+      endpointTier: endpointRank ? rankLabel[endpointRank - 1] : null
+    }));
+  })
 });

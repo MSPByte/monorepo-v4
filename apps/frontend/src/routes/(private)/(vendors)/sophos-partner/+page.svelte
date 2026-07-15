@@ -7,7 +7,10 @@
   import { goto } from '$app/navigation';
   import { cn } from '$lib/utils';
   import InsightsPanel from './_InsightsPanel.svelte';
-  import GlobalLinksOverview, { type LinkOverviewRow } from '../_GlobalLinksOverview.svelte';
+  import GlobalLinksOverview, {
+    type LinkOverviewRow,
+    type LinkOverviewExtraColumn,
+  } from '../_GlobalLinksOverview.svelte';
   import Loader from '$lib/components/transition/loader.svelte';
   import FadeIn from '$lib/components/transition/fade-in.svelte';
 
@@ -19,6 +22,44 @@
     queryFn: () => trpc.vendor.linkOverview.query({ integrationId: 'sophos-partner' }),
     enabled: !scopeStore.currentSite,
   }));
+
+  const licenseTiersQuery = createQuery(() => ({
+    queryKey: ['vendor.sophosLicenseTiers'],
+    queryFn: () => trpc.vendor.sophosLicenseTiers.query(),
+    enabled: !scopeStore.currentSite,
+  }));
+
+  const tiersByLink = $derived.by(() => {
+    const map = new Map<string, { serverTier: string | null; endpointTier: string | null }>();
+    for (const row of licenseTiersQuery.data ?? []) {
+      map.set(row.linkId, { serverTier: row.serverTier, endpointTier: row.endpointTier });
+    }
+    return map;
+  });
+
+  function tierBadge(value: unknown) {
+    if (value === 'MDR') return 'bg-primary/15 text-primary';
+    if (value === 'XDR') return 'bg-warning/20 text-warning';
+    if (value === 'Endpoint') return 'bg-success/15 text-success';
+    return 'bg-muted text-muted-foreground';
+  }
+
+  const licenseTierColumns: LinkOverviewExtraColumn[] = [
+    {
+      key: 'serverTier',
+      label: 'Server',
+      widthClass: 'w-28',
+      value: (row) => tiersByLink.get(row.linkId)?.serverTier ?? null,
+      badgeClass: tierBadge,
+    },
+    {
+      key: 'endpointTier',
+      label: 'Endpoint',
+      widthClass: 'w-28',
+      value: (row) => tiersByLink.get(row.linkId)?.endpointTier ?? null,
+      badgeClass: tierBadge,
+    },
+  ];
 
   const siteLinkQuery = createQuery(() => ({
     queryKey: ['integrationLinks.list', 'sophos-partner', scopeStore.currentSite],
@@ -167,6 +208,7 @@
     isLoading={overviewQuery.isPending}
     isPending={overviewQuery.isPending}
     vendorName="Sophos Partner"
+    extraColumns={licenseTierColumns}
     onrowclick={selectSite}
   />
 {/if}

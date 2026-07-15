@@ -132,6 +132,8 @@
   function sortValue(row: LinkOverviewRow, column: SortColumn) {
     if (column === 'disposition') return dispositionLabel(row.disposition) ?? '';
     if (column === 'maxSeverity') return row.maxSeverity ?? -1;
+    const extra = extraColumns.find((c) => c.key === column);
+    if (extra) return (extra.value?.(row) ?? row[column]) ?? '';
     return row[column] ?? '';
   }
 
