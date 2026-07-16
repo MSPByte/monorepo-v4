@@ -11,6 +11,7 @@ import type {
 } from "../../types/integration.js";
 import { ProviderFacet } from "../../types/provider.js";
 import type { ProviderId } from "../../types/provider.js";
+import type { SchemaFields } from "../../types/schema-registry.js";
 
 export { M365_INTEGRATION_CONFIG } from "./microsoft-365/index.js";
 export { M365PoliciesShape } from "./microsoft-365/policies.js";
@@ -64,4 +65,30 @@ export function getFacetTableMap(): Map<ProviderFacet, string> {
     }
   }
   return map;
+}
+
+export function getFacetRoute(facet: ProviderFacet): DbRoute | undefined {
+  for (const integration of Object.values(INTEGRATIONS)) {
+    const found = integration.supportedFacets.find((f) => f.facet === facet);
+    if (found?.db) return found.db;
+  }
+  return undefined;
+}
+
+export function getFacetShape(facet: ProviderFacet): SchemaFields {
+  return getFacetRoute(facet)?.shape ?? {};
+}
+
+export function getFacetByTable(
+  table: string,
+): { providerId: ProviderId; facet: ProviderFacet; db: DbRoute } | undefined {
+  for (const integration of Object.values(INTEGRATIONS)) {
+    const found = integration.supportedFacets.find(
+      (f) => f.db?.table === table,
+    );
+    if (found?.db) {
+      return { providerId: integration.id, facet: found.facet, db: found.db };
+    }
+  }
+  return undefined;
 }

@@ -6,7 +6,6 @@
   import { toast } from 'svelte-sonner';
 
   import MetricCard from '$lib/components/domain/metric-card.svelte';
-  import Loader from '$lib/components/transition/loader.svelte';
   import * as Card from '$lib/components/ui/card';
   import * as Tabs from '$lib/components/ui/tabs';
   import { Button } from '$lib/components/ui/button';
@@ -16,11 +15,11 @@
   import {
     DataTable,
     type DataTableColumn,
-    type FilterOperator,
     type PaginationInput,
-    type TableFilter,
     type TableView,
   } from '$lib/components/data-table';
+  import Loader from '$lib/components/transition/loader.svelte';
+  import { toServerTableInput } from '$lib/components/domain/server-table';
 
   import Plus from '@lucide/svelte/icons/plus';
   import Search from '@lucide/svelte/icons/search';
@@ -40,11 +39,6 @@
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const qc = useQueryClient();
-
-  const reportQuery = createQuery(() => ({
-    queryKey: ['billing.report'],
-    queryFn: () => trpc.billing.report.query(),
-  }));
 
   const rulesQuery = createQuery(() => ({
     queryKey: ['billing.rules'],
@@ -72,7 +66,8 @@
     onError: (e: unknown) => toast.error(e instanceof Error ? e.message : 'Delete failed'),
   }));
 
-  type ReportRow = NonNullable<typeof reportQuery.data>['rows'][number];
+  type ReportResponse = Awaited<ReturnType<typeof trpc.billing.report.query>>;
+  type ReportRow = ReportResponse['rows'][number];
   type EnrichedRow = ReportRow & { id: string };
   type Rule = NonNullable<typeof rulesQuery.data>[number];
 
@@ -80,7 +75,7 @@
   let editingRule = $state<any>(null);
   let activeTab = $state('reconciliation');
 
-  // External (compound) filters not managed by DataTable itself
+  // Scope filters are compound and forwarded to the server as report input
   let siteFilter = $state<string>('all');
   let siteGroupFilter = $state<string>('all');
 
@@ -92,8 +87,7 @@
   let ruleEnabledFilter = $state<'all' | 'enabled' | 'disabled'>('all');
   let ruleFacetFilter = $state<string>('all');
 
-  // Totals tracked from DataTable's fetchData
-  let filteredRowsState = $state<EnrichedRow[]>([]);
+  let reportSnapshot = $state<ReportResponse | null>(null);
   let refreshKey = $state(0);
 
   const sites = $derived(filterOptionsQuery.data?.sites ?? []);
@@ -105,145 +99,56 @@
   );
 
   const siteNameById = $derived(new Map(sites.map((site) => [site.id, site.name])));
-  const groupById = $derived(new Map(siteGroups.map((g) => [g.id, g])));
 
-  const allowedSiteIds = $derived.by<Set<string> | null>(() => {
-    if (siteGroupFilter === 'all') return null;
-    const group = groupById.get(siteGroupFilter);
-    if (!group) return new Set<string>();
-    return new Set(group.siteIds);
-  });
-
-  const enrichedRows = $derived<EnrichedRow[]>(
-    (reportQuery.data?.rows ?? []).map((row, idx) => ({
-      ...row,
-      id: row.psaItemId ?? `${row.ruleId ?? 'x'}-${row.siteId ?? 'unmapped'}-${idx}`,
-      vendorFacetLabel: row.vendorFacetLabel ?? 'No rule',
-    }))
-  );
-
-  const matchedRowsByRule = $derived.by(() => {
-    const m = new Map<string, number>();
-    for (const row of enrichedRows) {
-      if (row.ruleId && row.status !== 'missing_rule') {
-        m.set(row.ruleId, (m.get(row.ruleId) ?? 0) + 1);
-      }
-    }
-    return m;
-  });
-
-  const mrrDeltaByRule = $derived.by(() => {
-    const m = new Map<string, number>();
-    for (const row of enrichedRows) {
-      if (!row.ruleId) continue;
-      m.set(row.ruleId, (m.get(row.ruleId) ?? 0) + row.monthlyDelta);
-    }
-    return m;
-  });
-
+  // Bump refreshKey so DataTable re-runs fetchData when scope changes.
   $effect(() => {
     siteFilter;
     siteGroupFilter;
-    enrichedRows;
     untrack(() => {
       refreshKey = refreshKey + 1;
     });
   });
 
-  function matchFilter(actual: unknown, op: FilterOperator, expected: unknown): boolean {
-    switch (op) {
-      case 'eq':
-        return actual === expected;
-      case 'neq':
-        return actual !== expected;
-      case 'contains':
-        return String(actual ?? '')
-          .toLowerCase()
-          .includes(String(expected ?? '').toLowerCase());
-      case 'lt':
-        return Number(actual) < Number(expected);
-      case 'lte':
-        return Number(actual) <= Number(expected);
-      case 'gt':
-        return Number(actual) > Number(expected);
-      case 'gte':
-        return Number(actual) >= Number(expected);
-      case 'is_null':
-        return actual == null;
-      case 'is_not_null':
-        return actual != null;
-    }
-  }
-
-  function applyExternalFilters(row: EnrichedRow): boolean {
-    if (siteFilter !== 'all') {
-      if (siteFilter === 'unmapped') {
-        if (row.siteId) return false;
-      } else if (row.siteId !== siteFilter) return false;
-    }
-    if (allowedSiteIds && (!row.siteId || !allowedSiteIds.has(row.siteId))) return false;
-    return true;
-  }
-
-  function applyTableFilters(row: EnrichedRow, filters: TableFilter[]): boolean {
-    for (const f of filters) {
-      const value = (row as unknown as Record<string, unknown>)[f.field];
-      if (!matchFilter(value, f.operator, f.value)) return false;
-    }
-    return true;
-  }
-
-  function applyGlobalSearch(row: EnrichedRow, search: string): boolean {
-    const q = search.trim().toLowerCase();
-    if (!q) return true;
-    const hay =
-      `${row.siteName} ${row.psaItemName} ${row.ruleName ?? ''} ${row.status} ${row.vendorFacetLabel ?? ''}`.toLowerCase();
-    return hay.includes(q);
-  }
-
   async function fetchData(input: PaginationInput) {
-    const filtered = enrichedRows.filter(
-      (row) =>
-        applyExternalFilters(row) &&
-        applyGlobalSearch(row, input.globalSearch) &&
-        applyTableFilters(row, input.filters)
-    );
-
-    if (input.sortField) {
-      const dir = input.sortDir === 'desc' ? -1 : 1;
-      const key = input.sortField;
-      filtered.sort((a, b) => {
-        const av = (a as unknown as Record<string, unknown>)[key];
-        const bv = (b as unknown as Record<string, unknown>)[key];
-        if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
-        return String(av ?? '').localeCompare(String(bv ?? '')) * dir;
-      });
-    }
-
-    filteredRowsState = filtered;
-
-    const start = input.page * input.pageSize;
-    const paged = filtered.slice(start, start + input.pageSize);
-    return { rows: paged, total: filtered.length };
+    const base = toServerTableInput(input, ['siteName', 'psaItemName', 'ruleName']);
+    const response = await trpc.billing.report.query({
+      ...base,
+      scopeSiteId: siteFilter !== 'all' ? siteFilter : undefined,
+      scopeSiteGroupId: siteGroupFilter !== 'all' ? siteGroupFilter : undefined,
+    });
+    reportSnapshot = response;
+    const rows: EnrichedRow[] = response.rows.map((row, idx) => ({
+      ...row,
+      id: row.psaItemId ?? `${row.ruleId ?? 'x'}-${row.siteId ?? 'unmapped'}-${idx}`,
+      vendorFacetLabel: row.vendorFacetLabel ?? 'No rule',
+    }));
+    return { rows, total: response.total };
   }
 
-  const filteredTotals = $derived.by(() => {
-    let billed = 0;
-    let actual = 0;
-    let diff = 0;
-    let mrr = 0;
-    let underCount = 0;
-    let overCount = 0;
-    for (const row of filteredRowsState) {
-      billed += row.billedQuantity;
-      actual += row.actualQuantity;
-      diff += row.diffQuantity;
-      mrr += row.monthlyDelta;
-      if (row.status === 'underbilled') underCount += 1;
-      if (row.status === 'overbilled') overCount += 1;
-    }
-    return { billed, actual, diff, mrr, underCount, overCount };
+  const matchedRowsByRule = $derived.by(() => {
+    const m = new Map<string, number>();
+    const agg = reportSnapshot?.ruleAggregates ?? {};
+    for (const [ruleId, entry] of Object.entries(agg)) m.set(ruleId, entry.matchedRows);
+    return m;
   });
+  const mrrDeltaByRule = $derived.by(() => {
+    const m = new Map<string, number>();
+    const agg = reportSnapshot?.ruleAggregates ?? {};
+    for (const [ruleId, entry] of Object.entries(agg)) m.set(ruleId, entry.mrrDelta);
+    return m;
+  });
+
+  const filteredTotals = $derived(
+    reportSnapshot?.filteredSummary ?? {
+      billed: 0,
+      actual: 0,
+      diff: 0,
+      mrr: 0,
+      underCount: 0,
+      overCount: 0,
+    }
+  );
+  const filteredRowCount = $derived(reportSnapshot?.total ?? 0);
 
   function openNewRule() {
     editingRule = null;
@@ -280,7 +185,7 @@
     }
   }
 
-  const summary = $derived(reportQuery.data?.summary);
+  const summary = $derived(reportSnapshot?.summary);
 
   const facetSelectOptions = $derived([
     { label: 'No rule', value: 'No rule' },
@@ -686,21 +591,15 @@
         </div>
 
         <div class="flex min-h-0 flex-1 flex-col p-3">
-          {#if !reportQuery.data}
-            <div class="flex h-40 items-center justify-center">
-              <Loader />
-            </div>
-          {:else}
-            <DataTable
-              {fetchData}
-              {columns}
-              {views}
-              {refreshKey}
-              defaultPageSize={50}
-              defaultSort={{ field: 'monthlyDelta', dir: 'desc' }}
-              globalSearchFields={['siteName', 'psaItemName', 'ruleName']}
-            />
-          {/if}
+          <DataTable
+            {fetchData}
+            {columns}
+            {views}
+            {refreshKey}
+            defaultPageSize={50}
+            defaultSort={{ field: 'monthlyDelta', dir: 'desc' }}
+            globalSearchFields={['siteName', 'psaItemName', 'ruleName']}
+          />
         </div>
 
         <div
@@ -710,7 +609,7 @@
             class="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
           >
             <Sigma class="size-3.5" />
-            Totals · {filteredRowsState.length} row{filteredRowsState.length === 1 ? '' : 's'}
+            Totals · {filteredRowCount} row{filteredRowCount === 1 ? '' : 's'}
             {#if filteredTotals.underCount > 0 || filteredTotals.overCount > 0}
               <span class="ml-1 flex items-center gap-1 normal-case">
                 {#if filteredTotals.underCount > 0}

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, count, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import {
   billingPsaItems,
   billingReconciliationRules,
@@ -17,9 +17,16 @@ import {
   m365Licenses,
   m365Devices
 } from '@mspbyte/drizzle';
-import { BILLING_FACETS, getBillingFacet, listBillingFacets, ProviderFacet } from '@mspbyte/shared';
-import type { BillingFacetConfig } from '@mspbyte/shared';
+import {
+  BILLING_FACETS,
+  getBillingFacetLabel,
+  getBillingFilterColumns,
+  listBillingFacets,
+  ProviderFacet
+} from '@mspbyte/shared';
+import type { BillingFilterColumn } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
+import { tableDataInputSchema } from './table-data.js';
 
 const psaItemMatchSchema = z.object({
   field: z.enum(['itemName', 'externalId']).default('itemName'),
@@ -51,10 +58,16 @@ const upsertRuleSchema = z.object({
   countMode: z.literal('count_rows').default('count_rows')
 });
 
+const reportInputSchema = tableDataInputSchema.extend({
+  scopeSiteId: z.string().optional(),
+  scopeSiteGroupId: z.string().optional()
+});
+
 type PsaItem = typeof billingPsaItems.$inferSelect;
 type Rule = typeof billingReconciliationRules.$inferSelect;
 type PsaItemMatch = z.infer<typeof psaItemMatchSchema>;
 type VendorFilter = z.infer<typeof vendorFilterSchema>;
+type ReportInput = z.infer<typeof reportInputSchema>;
 
 type ReconciliationRow = {
   siteId: string | null;
@@ -75,7 +88,6 @@ type ReconciliationRow = {
   evidence: {
     psaMatch?: PsaItemMatch;
     vendorFilters?: VendorFilter[];
-    matchedRowIds?: string[];
   };
 };
 
@@ -116,119 +128,131 @@ function matchesPsaItem(item: PsaItem, match: PsaItemMatch): boolean {
   return actual.toLowerCase().includes(match.value.toLowerCase());
 }
 
-function normalizeFilterValue(raw: string | boolean | undefined): string {
-  if (raw === undefined || raw === null) return '';
-  if (typeof raw === 'boolean') return raw ? 'true' : 'false';
-  return raw;
-}
-
-function matchesVendorFilter(row: Record<string, unknown>, filter: VendorFilter): boolean {
-  const actual = row[filter.column];
-  switch (filter.operator) {
-    case 'eq':
-      return String(actual ?? '') === normalizeFilterValue(filter.value);
-    case 'neq':
-      return String(actual ?? '') !== normalizeFilterValue(filter.value);
-    case 'is_null':
-      return actual == null;
-    case 'is_not_null':
-      return actual != null;
-  }
-}
-
 function ruleStatus(billedQuantity: number, actualQuantity: number): ReconciliationRow['status'] {
   if (actualQuantity > billedQuantity) return 'underbilled';
   if (actualQuantity < billedQuantity) return 'overbilled';
   return 'matched';
 }
 
-type FacetIndex = Map<string, Record<string, unknown>[]>; // siteId → rows (siteId '' means unmapped)
+function coerceFilterValue(kind: BillingFilterColumn['kind'], value: string | boolean | undefined) {
+  if (value === undefined || value === null) return null;
+  if (kind === 'boolean') return value === true || value === 'true';
+  if (kind === 'number') return Number(value);
+  return typeof value === 'boolean' ? String(value) : value;
+}
 
-async function loadFacetIndex(
+function buildVendorWhereClause(
+  table: Record<string, unknown>,
+  filters: VendorFilter[],
+  filterColumns: BillingFilterColumn[]
+) {
+  const kindByColumn = new Map(filterColumns.map((c) => [c.column, c.kind] as const));
+  const clauses = filters
+    .map((filter) => {
+      const kind = kindByColumn.get(filter.column);
+      if (!kind) return null;
+      const col = table[filter.column] as never;
+      if (!col) return null;
+      switch (filter.operator) {
+        case 'eq':
+          return eq(col, coerceFilterValue(kind, filter.value));
+        case 'neq':
+          return ne(col, coerceFilterValue(kind, filter.value));
+        case 'is_null':
+          return isNull(col);
+        case 'is_not_null':
+          return isNotNull(col);
+      }
+    })
+    .filter((c): c is NonNullable<typeof c> => c != null);
+  return clauses.length ? and(...clauses) : undefined;
+}
+
+/**
+ * Aggregate one row per effective site (COALESCE(vendor.siteId, link.siteId))
+ * for a rule's filter set. Returns O(sites) rows instead of hydrating the
+ * full vendor table.
+ */
+async function loadFacetCountsBySite(
   db: any,
   facet: FacetKey,
-  linkSiteMap: Map<string, string | null>
-): Promise<FacetIndex> {
-  const table = FACET_TABLES[facet];
-  const rows: Record<string, unknown>[] = await db.select().from(table);
-  const index: FacetIndex = new Map();
-  for (const row of rows) {
-    const direct = (row as { siteId?: string | null }).siteId ?? null;
-    const linkId = (row as { linkId?: string | null }).linkId ?? null;
-    const siteId = direct ?? (linkId ? (linkSiteMap.get(linkId) ?? null) : null);
-    const key = siteId ?? '';
-    const bucket = index.get(key);
-    if (bucket) bucket.push(row);
-    else index.set(key, [row]);
-  }
-  return index;
-}
-
-function countMatches(
-  index: FacetIndex,
-  siteId: string | null,
   filters: VendorFilter[]
-): { count: number; matchedIds: string[] } {
-  const rows = index.get(siteId ?? '') ?? [];
-  const matched = rows.filter((row) => filters.every((filter) => matchesVendorFilter(row, filter)));
-  return {
-    count: matched.length,
-    matchedIds: matched.map((row) => String((row as { id?: string }).id ?? ''))
-  };
+): Promise<Map<string, number>> {
+  const table = FACET_TABLES[facet] as unknown as Record<string, unknown>;
+  const filterColumns = getBillingFilterColumns(facet);
+  const whereClause = buildVendorWhereClause(table, filters, filterColumns);
+  const siteCol = table.siteId as never;
+  const linkCol = table.linkId as never;
+  const effectiveSite = sql<string | null>`coalesce(${siteCol}, ${integrationLinks.siteId})`;
+
+  const query = db
+    .select({ siteId: effectiveSite, count: count() })
+    .from(FACET_TABLES[facet])
+    .leftJoin(integrationLinks, eq(linkCol, integrationLinks.id));
+
+  const rows: { siteId: string | null; count: number | string }[] = whereClause
+    ? await query.where(whereClause).groupBy(effectiveSite)
+    : await query.groupBy(effectiveSite);
+
+  const map = new Map<string, number>();
+  for (const row of rows) map.set(row.siteId ?? '', Number(row.count));
+  return map;
 }
 
-async function buildReport(
-  db: any
-): Promise<{ rows: ReconciliationRow[]; summary: ReportSummary }> {
-  const [items, rules, siteRows, linkRows] = await Promise.all([
-    db.select().from(billingPsaItems),
+async function buildReport(db: any, input: ReportInput): Promise<BillingReportOutput> {
+  const [items, rules, siteRows, groupMemberRows] = await Promise.all([
+    db.select().from(billingPsaItems).where(isNull(billingPsaItems.deletedAt)),
     db
       .select()
       .from(billingReconciliationRules)
       .where(eq(billingReconciliationRules.enabled, true)),
     db.select().from(sites),
-    db.select({ id: integrationLinks.id, siteId: integrationLinks.siteId }).from(integrationLinks)
+    input.scopeSiteGroupId
+      ? db
+          .select({ siteId: siteGroupMembers.siteId })
+          .from(siteGroupMembers)
+          .where(eq(siteGroupMembers.siteGroupId, input.scopeSiteGroupId))
+      : Promise.resolve([] as { siteId: string }[])
   ]);
 
   const siteNames = new Map<string, string>(
-    siteRows.map((site: typeof sites.$inferSelect) => [site.id, site.name])
-  );
-  const linkSiteMap = new Map<string, string | null>(
-    linkRows.map((row: { id: string; siteId: string | null }) => [row.id, row.siteId])
+    (siteRows as (typeof sites.$inferSelect)[]).map((site) => [site.id, site.name])
   );
 
-  // Batch-load each facet that's referenced by an enabled rule (fixes the N+1)
-  const facetsUsed = new Set<FacetKey>();
-  for (const rule of rules as Rule[]) {
-    if (isSupportedFacet(rule.vendorFacet)) facetsUsed.add(rule.vendorFacet);
-  }
-  const facetIndexes = new Map<FacetKey, FacetIndex>();
+  const ruleList = rules as Rule[];
+  const psaItems = items as PsaItem[];
+
+  // One SQL count-per-site query per enabled rule (fixes the vendor-table
+  // hydration). Batched via Promise.all.
+  const ruleCounts = new Map<string, Map<string, number>>();
   await Promise.all(
-    Array.from(facetsUsed).map(async (facet) => {
-      facetIndexes.set(facet, await loadFacetIndex(db, facet, linkSiteMap));
+    ruleList.map(async (rule) => {
+      if (!isSupportedFacet(rule.vendorFacet)) return;
+      const filters = parseVendorFilters(rule.vendorFilters);
+      ruleCounts.set(rule.id, await loadFacetCountsBySite(db, rule.vendorFacet, filters));
     })
   );
 
   const rows: ReconciliationRow[] = [];
   const matchedPsaItemIds = new Set<string>();
 
-  for (const rule of rules as Rule[]) {
+  for (const rule of ruleList) {
     const match = parsePsaItemMatch(rule.psaItemMatch);
     if (!match) continue;
     if (!isSupportedFacet(rule.vendorFacet)) continue;
 
-    const facetConfig = getBillingFacet(rule.vendorFacet);
+    const facetLabel = getBillingFacetLabel(rule.vendorFacet);
     const filters = parseVendorFilters(rule.vendorFilters);
-    const facetIndex = facetIndexes.get(rule.vendorFacet)!;
+    const countsBySite = ruleCounts.get(rule.id) ?? new Map<string, number>();
 
-    const candidateItems = (items as PsaItem[]).filter((item) => {
+    const candidateItems = psaItems.filter((item) => {
       if (rule.siteId && item.siteId !== rule.siteId) return false;
       return matchesPsaItem(item, match);
     });
 
     if (!candidateItems.length) {
       const siteId = rule.siteId ?? null;
-      const evidence = countMatches(facetIndex, siteId, filters);
+      const actualQuantity = countsBySite.get(siteId ?? '') ?? 0;
       rows.push({
         siteId,
         siteName: siteId ? (siteNames.get(siteId) ?? 'Unknown site') : 'All sites',
@@ -238,18 +262,14 @@ async function buildReport(
         ruleName: rule.name,
         vendorProvider: rule.vendorProvider,
         vendorFacet: rule.vendorFacet,
-        vendorFacetLabel: facetConfig?.label ?? rule.vendorFacet,
+        vendorFacetLabel: facetLabel,
         billedQuantity: 0,
-        actualQuantity: evidence.count,
-        diffQuantity: evidence.count,
+        actualQuantity,
+        diffQuantity: actualQuantity,
         unitPrice: 0,
         monthlyDelta: 0,
         status: 'missing_psa_line',
-        evidence: {
-          psaMatch: match,
-          vendorFilters: filters,
-          matchedRowIds: evidence.matchedIds
-        }
+        evidence: { psaMatch: match, vendorFilters: filters }
       });
       continue;
     }
@@ -257,9 +277,8 @@ async function buildReport(
     for (const item of candidateItems) {
       matchedPsaItemIds.add(item.id);
       const siteId = item.siteId ?? rule.siteId ?? null;
-      const evidence = countMatches(facetIndex, siteId, filters);
+      const actualQuantity = countsBySite.get(siteId ?? '') ?? 0;
       const billedQuantity = item.quantity;
-      const actualQuantity = evidence.count;
       const diffQuantity = actualQuantity - billedQuantity;
       const unitPrice = numberValue(item.unitPrice);
 
@@ -274,23 +293,19 @@ async function buildReport(
         ruleName: rule.name,
         vendorProvider: rule.vendorProvider,
         vendorFacet: rule.vendorFacet,
-        vendorFacetLabel: facetConfig?.label ?? rule.vendorFacet,
+        vendorFacetLabel: facetLabel,
         billedQuantity,
         actualQuantity,
         diffQuantity,
         unitPrice,
         monthlyDelta: diffQuantity * unitPrice,
         status: ruleStatus(billedQuantity, actualQuantity),
-        evidence: {
-          psaMatch: match,
-          vendorFilters: filters,
-          matchedRowIds: evidence.matchedIds
-        }
+        evidence: { psaMatch: match, vendorFilters: filters }
       });
     }
   }
 
-  for (const item of items as PsaItem[]) {
+  for (const item of psaItems) {
     if (matchedPsaItemIds.has(item.id)) continue;
     rows.push({
       siteId: item.siteId,
@@ -314,7 +329,49 @@ async function buildReport(
     });
   }
 
-  return { rows, summary: summarizeRows(rows) };
+  // MetricCards + Rules tab show unfiltered, tenant-wide numbers — freeze
+  // them here before scope/user filters narrow the set.
+  const summary = summarizeRows(rows);
+  const ruleAggregates: Record<string, RuleAggregate> = {};
+  for (const row of rows) {
+    if (!row.ruleId) continue;
+    const agg = (ruleAggregates[row.ruleId] ??= { matchedRows: 0, mrrDelta: 0 });
+    if (row.status !== 'missing_rule') agg.matchedRows += 1;
+    agg.mrrDelta += row.monthlyDelta;
+  }
+
+  const allowedSiteIds = input.scopeSiteGroupId
+    ? new Set((groupMemberRows as { siteId: string }[]).map((r) => r.siteId))
+    : null;
+
+  const scoped = rows.filter((row) => {
+    if (input.scopeSiteId === 'unmapped') {
+      if (row.siteId) return false;
+    } else if (input.scopeSiteId) {
+      if (row.siteId !== input.scopeSiteId) return false;
+    }
+    if (allowedSiteIds && (!row.siteId || !allowedSiteIds.has(row.siteId))) return false;
+    return true;
+  });
+
+  const searched = applyGlobalSearch(scoped, input.globalSearch, input.globalSearchColumns);
+  const filtered = applyFilters(searched, input.filters ?? []);
+  const filteredSummary = summarizeFiltered(filtered);
+  const sorted = applySort(filtered, input.sortColumn, input.sortDirection);
+  const total = sorted.length;
+  const start = (input.page - 1) * input.pageSize;
+  const paged = sorted.slice(start, start + input.pageSize);
+
+  return {
+    rows: paged,
+    total,
+    page: input.page,
+    pageSize: input.pageSize,
+    pageCount: Math.ceil(total / input.pageSize),
+    summary,
+    filteredSummary,
+    ruleAggregates
+  };
 }
 
 type ReportSummary = {
@@ -325,6 +382,28 @@ type ReportSummary = {
   underbilledMrr: number;
   overbilledMrr: number;
   netMrrDelta: number;
+};
+
+type FilteredSummary = {
+  billed: number;
+  actual: number;
+  diff: number;
+  mrr: number;
+  underCount: number;
+  overCount: number;
+};
+
+type RuleAggregate = { matchedRows: number; mrrDelta: number };
+
+type BillingReportOutput = {
+  rows: ReconciliationRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  summary: ReportSummary;
+  filteredSummary: FilteredSummary;
+  ruleAggregates: Record<string, RuleAggregate>;
 };
 
 function summarizeRows(rows: ReconciliationRow[]): ReportSummary {
@@ -355,6 +434,92 @@ function summarizeRows(rows: ReconciliationRow[]): ReportSummary {
   );
 }
 
+function summarizeFiltered(rows: ReconciliationRow[]): FilteredSummary {
+  const acc: FilteredSummary = {
+    billed: 0,
+    actual: 0,
+    diff: 0,
+    mrr: 0,
+    underCount: 0,
+    overCount: 0
+  };
+  for (const row of rows) {
+    acc.billed += row.billedQuantity;
+    acc.actual += row.actualQuantity;
+    acc.diff += row.diffQuantity;
+    acc.mrr += row.monthlyDelta;
+    if (row.status === 'underbilled') acc.underCount += 1;
+    if (row.status === 'overbilled') acc.overCount += 1;
+  }
+  return acc;
+}
+
+function readRowField(row: ReconciliationRow, key: string): unknown {
+  return (row as unknown as Record<string, unknown>)[key];
+}
+
+function applyGlobalSearch(
+  rows: ReconciliationRow[],
+  search: string | undefined,
+  columns: string[] | undefined
+): ReconciliationRow[] {
+  const q = (search ?? '').trim().toLowerCase();
+  if (!q || !columns?.length) return rows;
+  return rows.filter((row) =>
+    columns.some((col) => String(readRowField(row, col) ?? '').toLowerCase().includes(q))
+  );
+}
+
+function applyFilters(
+  rows: ReconciliationRow[],
+  filters: { column: string; operator: string; value?: string | number | boolean }[]
+): ReconciliationRow[] {
+  if (!filters.length) return rows;
+  return rows.filter((row) =>
+    filters.every((filter) => {
+      const actual = readRowField(row, filter.column);
+      const expected = filter.value;
+      switch (filter.operator) {
+        case 'eq':
+          return String(actual ?? '') === String(expected ?? '');
+        case 'neq':
+          return String(actual ?? '') !== String(expected ?? '');
+        case 'contains':
+          return String(actual ?? '').toLowerCase().includes(String(expected ?? '').toLowerCase());
+        case 'gt':
+          return Number(actual) > Number(expected);
+        case 'gte':
+          return Number(actual) >= Number(expected);
+        case 'lt':
+          return Number(actual) < Number(expected);
+        case 'lte':
+          return Number(actual) <= Number(expected);
+        case 'is_null':
+          return actual == null || actual === '';
+        case 'is_not_null':
+          return actual != null && actual !== '';
+        default:
+          return true;
+      }
+    })
+  );
+}
+
+function applySort(
+  rows: ReconciliationRow[],
+  sortColumn: string | undefined,
+  sortDirection: 'asc' | 'desc' | undefined
+): ReconciliationRow[] {
+  if (!sortColumn) return rows;
+  const dir = sortDirection === 'desc' ? -1 : 1;
+  return [...rows].sort((a, b) => {
+    const av = readRowField(a, sortColumn);
+    const bv = readRowField(b, sortColumn);
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+    return String(av ?? '').localeCompare(String(bv ?? ''), undefined, { numeric: true }) * dir;
+  });
+}
+
 async function previewRule(
   db: any,
   input: z.infer<typeof upsertRuleSchema>
@@ -365,11 +530,12 @@ async function previewRule(
   diffQuantity: number;
   unitPrice: number;
   monthlyDelta: number;
-  matchedRowIds: string[];
   facetLabel: string | null;
 }> {
-  const facetConfig = getBillingFacet(input.vendorFacet) as BillingFacetConfig | null;
-  const allItems = await db.select().from(billingPsaItems);
+  const facetLabel = isSupportedFacet(input.vendorFacet)
+    ? getBillingFacetLabel(input.vendorFacet)
+    : null;
+  const allItems = await db.select().from(billingPsaItems).where(isNull(billingPsaItems.deletedAt));
   const matchedItem =
     (allItems as PsaItem[]).find((psaItem) => {
       if (input.siteId && psaItem.siteId !== input.siteId) return false;
@@ -384,23 +550,15 @@ async function previewRule(
       diffQuantity: -(matchedItem?.quantity ?? 0),
       unitPrice: numberValue(matchedItem?.unitPrice ?? 0),
       monthlyDelta: 0,
-      matchedRowIds: [],
-      facetLabel: facetConfig?.label ?? null
+      facetLabel
     };
   }
 
   const siteId = matchedItem?.siteId ?? input.siteId ?? null;
-  const linkRows = await db
-    .select({ id: integrationLinks.id, siteId: integrationLinks.siteId })
-    .from(integrationLinks);
-  const linkSiteMap = new Map<string, string | null>(
-    linkRows.map((row: { id: string; siteId: string | null }) => [row.id, row.siteId])
-  );
-  const index = await loadFacetIndex(db, input.vendorFacet, linkSiteMap);
-  const evidence = countMatches(index, siteId, input.vendorFilters);
+  const countsBySite = await loadFacetCountsBySite(db, input.vendorFacet, input.vendorFilters);
+  const actualQuantity = countsBySite.get(siteId ?? '') ?? 0;
 
   const billedQuantity = matchedItem?.quantity ?? 0;
-  const actualQuantity = evidence.count;
   const unitPrice = numberValue(matchedItem?.unitPrice ?? 0);
 
   return {
@@ -410,14 +568,11 @@ async function previewRule(
     diffQuantity: actualQuantity - billedQuantity,
     unitPrice,
     monthlyDelta: (actualQuantity - billedQuantity) * unitPrice,
-    matchedRowIds: evidence.matchedIds,
-    facetLabel: facetConfig?.label ?? null
+    facetLabel
   };
 }
 
-// Unused inArray import guard for future filter batching
 void inArray;
-void and;
 
 export const billingRouter = t.router({
   psaItems: authProcedure.query(async ({ ctx }) => {
@@ -435,8 +590,8 @@ export const billingRouter = t.router({
     return listBillingFacets().map((facet) => ({
       facet: facet.facet,
       providerId: facet.providerId,
-      label: facet.label,
-      filterColumns: facet.filterColumns,
+      label: getBillingFacetLabel(facet.facet),
+      filterColumns: getBillingFilterColumns(facet.facet),
       defaultFilters: facet.defaultFilters ?? []
     }));
   }),
@@ -479,8 +634,8 @@ export const billingRouter = t.router({
     return previewRule(ctx.db, input);
   }),
 
-  report: authProcedure.query(async ({ ctx }) => {
-    return buildReport(ctx.db);
+  report: authProcedure.input(reportInputSchema).query(async ({ ctx, input }) => {
+    return buildReport(ctx.db, input);
   }),
 
   filterOptions: authProcedure.query(async ({ ctx }) => {

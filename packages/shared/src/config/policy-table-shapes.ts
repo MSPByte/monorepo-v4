@@ -1,6 +1,6 @@
 import type { SchemaFields } from '../types/schema-registry.js';
-import { INTEGRATIONS } from './integrations/index.js';
-import { M365PoliciesShape } from './integrations/microsoft-365/policies.js';
+import { ProviderFacet } from '../types/provider.js';
+import { getFacetShape, INTEGRATIONS } from './integrations/index.js';
 
 export type PolicyTableShape = {
   table: string;
@@ -8,6 +8,7 @@ export type PolicyTableShape = {
   resourceType: string;
   targetType: 'tenant' | 'site' | 'integration_link' | 'person' | 'asset' | 'vendor';
   providerId?: string;
+  facet?: ProviderFacet;
   canonicalResourceTypes?: ('person' | 'asset')[];
   /**
    * Where this table is browsable in the UI. `path` is the data-table route and
@@ -162,142 +163,6 @@ export const CanonicalPeopleShape: SchemaFields = {
   }
 };
 
-export const M365IdentitiesShape: SchemaFields = {
-  displayName: {
-    label: 'Display Name',
-    type: 'string',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'displayName',
-    required: true
-  },
-  email: {
-    label: 'Email',
-    type: 'string',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'email',
-    required: false
-  },
-  enabled: {
-    label: 'Enabled',
-    type: 'boolean',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'enabled',
-    required: false
-  },
-  mfaEnforced: {
-    label: 'MFA Enforced',
-    type: 'boolean',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'mfaEnforced',
-    required: false
-  },
-  type: {
-    label: 'User Type',
-    type: 'enum',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'type',
-    required: false,
-    options: [
-      { value: 'Member', label: 'Member' },
-      { value: 'Guest', label: 'Guest' }
-    ]
-  }
-};
-
-export const M365DevicesShape: SchemaFields = {
-  displayName: {
-    label: 'Display Name',
-    type: 'string',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'displayName',
-    required: true
-  },
-  enabled: {
-    label: 'Enabled',
-    type: 'boolean',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'enabled',
-    required: false
-  },
-  compliant: {
-    label: 'Compliant',
-    type: 'boolean',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'compliant',
-    required: false
-  },
-  operatingSystem: {
-    label: 'Operating System',
-    type: 'string',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'operatingSystem',
-    required: false
-  }
-};
-
-export const SophosPartnerEndpointShape: SchemaFields = {
-  externalId: {
-    label: 'External ID',
-    type: 'string',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'externalId',
-    required: true
-  },
-  hostname: {
-    label: 'Hostname',
-    type: 'string',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'hostname',
-    required: false
-  },
-  lastHeartbeatAt: {
-    label: 'Last Heartbeat',
-    type: 'string',
-    modality: 'single',
-    trackable: true,
-    required: false,
-    ingestPath: 'lastHeartbeatAt'
-  }
-};
-
-export const VendorAssetSourceShape: SchemaFields = {
-  externalId: {
-    label: 'External ID',
-    type: 'string',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'externalId',
-    required: true
-  },
-  hostname: {
-    label: 'Hostname',
-    type: 'string',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'hostname',
-    required: false
-  },
-  lastSeenAt: {
-    label: 'Last Seen',
-    type: 'string',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'lastSeenAt',
-    required: false
-  }
-};
-
 export const PolicyTableShapes: PolicyTableShape[] = [
   {
     table: 'assets',
@@ -319,9 +184,10 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     resourceType: 'm365_identity',
     targetType: 'vendor',
     providerId: 'microsoft-365',
+    facet: ProviderFacet.M365Identities,
     canonicalResourceTypes: ['person'],
     route: { path: '/microsoft-365/identities', searchField: 'externalId' },
-    shape: M365IdentitiesShape
+    shape: getFacetShape(ProviderFacet.M365Identities)
   },
   {
     table: 'm365Policies',
@@ -329,7 +195,8 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     resourceType: 'm365_policy',
     targetType: 'vendor',
     providerId: 'microsoft-365',
-    shape: M365PoliciesShape
+    facet: ProviderFacet.M365CAPolicies,
+    shape: getFacetShape(ProviderFacet.M365CAPolicies)
   },
   {
     table: 'm365Devices',
@@ -337,9 +204,10 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     resourceType: 'm365_device',
     targetType: 'vendor',
     providerId: 'microsoft-365',
+    facet: ProviderFacet.M365Devices,
     canonicalResourceTypes: ['asset'],
     route: { path: '/microsoft-365/devices', searchField: 'externalId' },
-    shape: M365DevicesShape
+    shape: getFacetShape(ProviderFacet.M365Devices)
   },
   {
     table: 'sophosEndpoints',
@@ -347,9 +215,10 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     resourceType: 'sophos_endpoint',
     targetType: 'vendor',
     providerId: 'sophos-partner',
+    facet: ProviderFacet.SophosEndpoints,
     canonicalResourceTypes: ['asset'],
     route: { path: '/sophos-partner/endpoints', searchField: 'externalId' },
-    shape: VendorAssetSourceShape
+    shape: getFacetShape(ProviderFacet.SophosEndpoints)
   },
   {
     table: 'sophosFirewalls',
@@ -357,9 +226,10 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     resourceType: 'sophos_firewall',
     targetType: 'vendor',
     providerId: 'sophos-partner',
+    facet: ProviderFacet.SophosFirewalls,
     canonicalResourceTypes: ['asset'],
     route: { path: '/sophos-partner/firewalls', searchField: 'externalId' },
-    shape: VendorAssetSourceShape
+    shape: getFacetShape(ProviderFacet.SophosFirewalls)
   },
   {
     table: 'dattoEndpoints',
@@ -367,9 +237,10 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     resourceType: 'datto_endpoint',
     targetType: 'vendor',
     providerId: 'dattormm',
+    facet: ProviderFacet.DattoEndpoints,
     canonicalResourceTypes: ['asset'],
     route: { path: '/dattormm/endpoints', searchField: 'externalId' },
-    shape: VendorAssetSourceShape
+    shape: getFacetShape(ProviderFacet.DattoEndpoints)
   },
   {
     table: 'coveEndpoints',
@@ -377,9 +248,10 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     resourceType: 'cove_endpoint',
     targetType: 'vendor',
     providerId: 'cove',
+    facet: ProviderFacet.CoveEndpoints,
     canonicalResourceTypes: ['asset'],
     route: { path: '/cove/endpoints', searchField: 'externalId' },
-    shape: VendorAssetSourceShape
+    shape: getFacetShape(ProviderFacet.CoveEndpoints)
   }
 ];
 

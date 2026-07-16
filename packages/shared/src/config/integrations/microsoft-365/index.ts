@@ -2,6 +2,12 @@ import type { Integration } from '../../../types/integration.js';
 import { ProviderFacet } from '../../../types/provider.js';
 import { SyncIntervals } from '../intervals.js';
 import { M365PoliciesShape } from './policies.js';
+import {
+  M365DevicesShape,
+  M365GroupsShape,
+  M365IdentitiesShape,
+  M365LicensesShape
+} from './shapes.js';
 
 export const CONSENT_VERSION = 4;
 
@@ -43,7 +49,7 @@ export const M365_INTEGRATION_CONFIG: Integration = {
     {
       facet: ProviderFacet.M365Identities,
       scopeLevel: 'link',
-      db: { table: 'm365Identities', name: 'M365 Identities', shape: {} },
+      db: { table: 'm365Identities', name: 'M365 Identities', shape: M365IdentitiesShape },
       sync: {
         supportsIncremental: true,
         incrementalIntervalMs: SyncIntervals['1_HOURS'],
@@ -54,7 +60,7 @@ export const M365_INTEGRATION_CONFIG: Integration = {
     {
       facet: ProviderFacet.M365Groups,
       scopeLevel: 'link',
-      db: { table: 'm365Groups', name: 'M365 Groups', shape: {} },
+      db: { table: 'm365Groups', name: 'M365 Groups', shape: M365GroupsShape },
       sync: {
         intervalMs: SyncIntervals['8_HOURS']
       }
@@ -62,7 +68,7 @@ export const M365_INTEGRATION_CONFIG: Integration = {
     {
       facet: ProviderFacet.M365Licenses,
       scopeLevel: 'link',
-      db: { table: 'm365Licenses', name: 'M365 Roles', shape: {} },
+      db: { table: 'm365Licenses', name: 'M365 Licenses', shape: M365LicensesShape },
       sync: {
         intervalMs: SyncIntervals['24_HOURS']
       }
@@ -89,7 +95,7 @@ export const M365_INTEGRATION_CONFIG: Integration = {
     {
       facet: ProviderFacet.M365Devices,
       scopeLevel: 'link',
-      db: { table: 'm365Devices', name: 'M365 Devices', shape: {} },
+      db: { table: 'm365Devices', name: 'M365 Devices', shape: M365DevicesShape },
       sync: { intervalMs: SyncIntervals['24_HOURS'] }
     },
     {
