@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getContext } from 'svelte';
-  import { createQuery } from '@tanstack/svelte-query';
+  import { createQuery, useQueryClient } from '@tanstack/svelte-query';
+  import { toast } from 'svelte-sonner';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
@@ -23,8 +24,8 @@
   import { useSiteContext } from './_components/site-context';
   import type { ProfileFact, ProfileNote, StackEntry } from './_profile/client-profile.types';
 
-  import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
   import Plus from '@lucide/svelte/icons/plus';
+  import X from '@lucide/svelte/icons/x';
   import Separator from '$lib/components/ui/separator/separator.svelte';
 
   const ctx = useSiteContext();
@@ -32,14 +33,100 @@
   const site = $derived(ctx.site!);
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
+  const queryClient = useQueryClient();
   const canWriteSites = $derived(authStore.isAllowed('Sites.Write'));
   const canDeleteSites = $derived(authStore.isAllowed('Sites.Delete'));
 
-  const parentQuery = createQuery(() => ({
-    queryKey: ['sites.byId', site?.parentSiteId],
-    queryFn: () => trpc.sites.byId.query({ id: site!.parentSiteId! }),
-    enabled: !!site?.parentSiteId,
+  const groupsQuery = createQuery(() => ({
+    queryKey: ['siteGroups.forSite', site?.id],
+    queryFn: () => trpc.siteGroups.forSite.query({ siteId: site!.id }),
+    enabled: !!site?.id,
   }));
+
+  const allGroupsQuery = createQuery(() => ({
+    queryKey: ['siteGroups.list'],
+    queryFn: () => trpc.siteGroups.list.query(),
+  }));
+
+  const memberGroupIds = $derived(new Set((groupsQuery.data ?? []).map((g) => g.id)));
+  const availableGroupOptions = $derived(
+    (allGroupsQuery.data ?? [])
+      .filter((g) => !memberGroupIds.has(g.id))
+      .map((g) => ({ value: g.id, label: g.name }))
+  );
+
+  let groupDialogOpen = $state(false);
+  let groupDialogMode = $state<'add' | 'create'>('add');
+  let selectedGroupId = $state('');
+  let newGroupName = $state('');
+  let newGroupDescription = $state('');
+  let savingGroup = $state(false);
+
+  async function refreshGroups() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['siteGroups.forSite', site.id] }),
+      queryClient.invalidateQueries({ queryKey: ['siteGroups.list'] }),
+    ]);
+  }
+
+  function openGroupDialog() {
+    groupDialogMode = availableGroupOptions.length ? 'add' : 'create';
+    selectedGroupId = '';
+    newGroupName = '';
+    newGroupDescription = '';
+    groupDialogOpen = true;
+  }
+
+  async function saveGroupSelection() {
+    if (!site) return;
+    savingGroup = true;
+    try {
+      if (groupDialogMode === 'add') {
+        if (!selectedGroupId) {
+          toast.error('Select a group to add');
+          return;
+        }
+        await trpc.siteGroups.addMember.mutate({
+          siteId: site.id,
+          siteGroupId: selectedGroupId,
+        });
+      } else {
+        const name = newGroupName.trim();
+        if (!name) {
+          toast.error('Group name is required');
+          return;
+        }
+        const created = await trpc.siteGroups.create.mutate({
+          name,
+          description: newGroupDescription.trim() || null,
+        });
+        await trpc.siteGroups.addMember.mutate({
+          siteId: site.id,
+          siteGroupId: created.id,
+        });
+      }
+      await refreshGroups();
+      groupDialogOpen = false;
+      toast.success('Group membership updated');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to update groups');
+    } finally {
+      savingGroup = false;
+    }
+  }
+
+  async function removeGroup(groupId: string) {
+    if (!site) return;
+    try {
+      await trpc.siteGroups.removeMember.mutate({
+        siteId: site.id,
+        siteGroupId: groupId,
+      });
+      await refreshGroups();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to remove group');
+    }
+  }
 
   const catalogQuery = createQuery(() => ({
     queryKey: ['siteProfile.catalog'],
@@ -475,30 +562,58 @@
         {/if}
       </SectionPanel>
 
-      <SectionPanel code="↳" title="HIERARCHY">
-        <div class="space-y-2 text-sm">
-          {#if site.parentSiteId}
-            <div class="flex items-center gap-2 border-b border-border/40 pb-2">
-              <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
-                >PARENT</span
-              >
-              <a
-                href={`/sites/${site.parentSiteId}`}
-                class="ml-auto inline-flex items-center gap-1 text-sm text-primary hover:underline"
-              >
-                {parentQuery.data?.name ?? 'Loading…'}
-                <ArrowUpRight class="size-3" />
-              </a>
-            </div>
-          {:else}
-            <div class="flex items-center justify-between">
-              <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
-                >PARENT</span
-              >
-              <span class="font-mono text-xs text-muted-foreground/60">— top-level —</span>
-            </div>
+      <SectionPanel code="§" title="GROUPS">
+        {#snippet aside()}
+          {#if canWriteSites}
+            <button
+              type="button"
+              class="inline-flex size-5 items-center justify-center border border-border bg-background text-foreground hover:border-primary hover:text-primary"
+              aria-label="Add site to group"
+              title="Add to group"
+              onclick={openGroupDialog}
+            >
+              <Plus class="size-3.5" />
+            </button>
           {/if}
-        </div>
+        {/snippet}
+        {#if groupsQuery.isLoading}
+          <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
+            loading…
+          </p>
+        {:else if (groupsQuery.data ?? []).length}
+          <div class="space-y-1">
+            {#each groupsQuery.data ?? [] as group (group.id)}
+              <div
+                class="flex items-center justify-between gap-2 border-b border-border/40 py-1.5 text-sm last:border-b-0"
+              >
+                <a
+                  href={`/groups/${group.id}`}
+                  class="min-w-0 flex-1 hover:text-primary"
+                >
+                  <div class="truncate">{group.name}</div>
+                  {#if group.description}
+                    <div class="truncate text-xs text-muted-foreground">{group.description}</div>
+                  {/if}
+                </a>
+                {#if canWriteSites}
+                  <button
+                    type="button"
+                    class="inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground hover:text-destructive"
+                    aria-label={`Remove from ${group.name}`}
+                    title="Remove from group"
+                    onclick={() => removeGroup(group.id)}
+                  >
+                    <X class="size-3.5" />
+                  </button>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
+            not a member of any group
+          </p>
+        {/if}
       </SectionPanel>
 
       <SectionPanel code="≡" title="INTEGRATIONS">
@@ -606,6 +721,102 @@
         onclick={addSelectedItem}
       >
         Add
+      </button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={groupDialogOpen}>
+  <Dialog.Content class="sm:max-w-[420px]">
+    <Dialog.Header>
+      <Dialog.Title>
+        {groupDialogMode === 'add' ? 'Add to group' : 'Create group'}
+      </Dialog.Title>
+      <Dialog.Description>
+        {groupDialogMode === 'add'
+          ? 'Add this site to an existing group.'
+          : 'Create a new group and add this site to it.'}
+      </Dialog.Description>
+    </Dialog.Header>
+    <Separator />
+    <div class="grid gap-3 p-4">
+      <div class="flex gap-2 text-xs">
+        <button
+          type="button"
+          class={`rounded-sm border px-2 py-1 ${
+            groupDialogMode === 'add'
+              ? 'border-primary bg-primary/10 text-foreground'
+              : 'border-border text-muted-foreground hover:text-foreground'
+          } disabled:opacity-40`}
+          disabled={!availableGroupOptions.length}
+          onclick={() => (groupDialogMode = 'add')}
+        >
+          Existing
+        </button>
+        <button
+          type="button"
+          class={`rounded-sm border px-2 py-1 ${
+            groupDialogMode === 'create'
+              ? 'border-primary bg-primary/10 text-foreground'
+              : 'border-border text-muted-foreground hover:text-foreground'
+          }`}
+          onclick={() => (groupDialogMode = 'create')}
+        >
+          New group
+        </button>
+      </div>
+
+      {#if groupDialogMode === 'add'}
+        {#if availableGroupOptions.length}
+          <SingleSelect
+            options={availableGroupOptions}
+            bind:selected={selectedGroupId}
+            placeholder="Select group..."
+            searchPlaceholder="Search groups..."
+          />
+        {:else}
+          <p class="text-xs text-muted-foreground">
+            No other groups available. Create a new one.
+          </p>
+        {/if}
+      {:else}
+        <label class="grid gap-1 text-xs font-medium text-muted-foreground">
+          Name
+          <input
+            type="text"
+            bind:value={newGroupName}
+            class="rounded-sm border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+            placeholder="e.g. Northeast region"
+          />
+        </label>
+        <label class="grid gap-1 text-xs font-medium text-muted-foreground">
+          Description
+          <textarea
+            bind:value={newGroupDescription}
+            rows="2"
+            class="rounded-sm border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+            placeholder="Optional"
+          ></textarea>
+        </label>
+      {/if}
+    </div>
+
+    <Dialog.Footer>
+      <button
+        type="button"
+        class="rounded-sm px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+        onclick={() => (groupDialogOpen = false)}
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        class="rounded-sm bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-40"
+        disabled={savingGroup ||
+          (groupDialogMode === 'add' ? !selectedGroupId : !newGroupName.trim())}
+        onclick={saveGroupSelection}
+      >
+        {groupDialogMode === 'add' ? 'Add' : 'Create'}
       </button>
     </Dialog.Footer>
   </Dialog.Content>

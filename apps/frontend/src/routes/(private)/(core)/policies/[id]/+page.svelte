@@ -56,7 +56,6 @@
   let savingFrameworks = $state(false);
   let scopeType = $state<ScopeType>('global');
   let targetId = $state('');
-  let includeChildren = $state(true);
   let assignmentEnabled = $state(true);
   let savingAssignment = $state(false);
   let deletingAssignmentId = $state<string | null>(null);
@@ -184,7 +183,6 @@
         siteId: scopeType === 'site' ? targetId : null,
         siteGroupId: scopeType === 'site_group' ? targetId : null,
         linkId: scopeType === 'integration_link' ? targetId : null,
-        includeChildSites: includeChildren,
         enabled: assignmentEnabled,
         parameters: {},
       });
@@ -563,13 +561,6 @@
                 >
                   <Switch bind:checked={assignmentEnabled} /> Assignment enabled
                 </label>
-                {#if scopeType === 'site'}
-                  <label
-                    class="flex items-center gap-3 rounded-md border px-3 py-2 text-sm font-medium"
-                  >
-                    <Switch bind:checked={includeChildren} /> Include child sites
-                  </label>
-                {/if}
                 <Button onclick={saveAssignment} disabled={savingAssignment} class="gap-2">
                   <Plus class="size-4" />
                   Add Assignment
@@ -593,13 +584,6 @@
                       <div class="truncate text-sm font-medium">{assignmentTarget(assignment)}</div>
                       <div class="mt-1 flex flex-wrap gap-2">
                         <Badge variant="outline">{assignment.scopeType}</Badge>
-                        {#if assignment.scopeType === 'site'}
-                          <Badge variant="secondary"
-                            >{assignment.includeChildSites
-                              ? 'Includes child sites'
-                              : 'Direct site only'}</Badge
-                          >
-                        {/if}
                         <Badge variant={assignment.enabled ? 'default' : 'secondary'}
                           >{assignment.enabled ? 'Enabled' : 'Disabled'}</Badge
                         >

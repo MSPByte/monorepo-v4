@@ -57,7 +57,6 @@ const assignmentInputSchema = z
     siteId: z.string().uuid().optional().nullable(),
     siteGroupId: z.string().uuid().optional().nullable(),
     linkId: z.string().uuid().optional().nullable(),
-    includeChildSites: z.boolean().default(true),
     enabled: z.boolean().default(true),
     parameters: z.record(z.string(), z.unknown()).default({}),
   })
@@ -328,7 +327,6 @@ export const policiesRouter = t.router({
           siteGroupId:
             input.scopeType === "site_group" ? input.siteGroupId : null,
           linkId: input.scopeType === "integration_link" ? input.linkId : null,
-          includeChildSites: input.includeChildSites,
           enabled: input.enabled,
           parameters: input.parameters,
         })
@@ -367,7 +365,6 @@ export const policiesRouter = t.router({
           siteGroupName: siteGroups.name,
           linkId: policyAssignments.linkId,
           linkName: integrationLinks.name,
-          includeChildSites: policyAssignments.includeChildSites,
           enabled: policyAssignments.enabled,
           updatedAt: policyAssignments.updatedAt,
         })

@@ -5,7 +5,6 @@ export type SiteRecord = {
   id: string;
   name: string;
   description: string | null;
-  parentSiteId: string | null;
   attributes: Record<string, unknown>;
   assetCount: number;
   peopleCount: number;

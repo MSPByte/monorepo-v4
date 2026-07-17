@@ -511,7 +511,6 @@ export const sitesRouter = t.router({
           id: site.id,
           name: site.name,
           description: site.description,
-          parentSiteId: site.parentSiteId,
           createdAt: site.createdAt,
           updatedAt: site.updatedAt
         },
@@ -641,8 +640,7 @@ export const sitesRouter = t.router({
         userAgent: ctx.userAgent,
         metadata: {
           name: existing.name,
-          description: existing.description,
-          parentSiteId: existing.parentSiteId
+          description: existing.description
         }
       });
 

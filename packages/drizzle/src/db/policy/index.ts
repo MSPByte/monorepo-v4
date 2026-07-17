@@ -115,7 +115,6 @@ export const policyAssignments = policySchema.table(
     linkId: uuid('link_id').references(() => integrationLinks.id, {
       onDelete: 'cascade'
     }),
-    includeChildSites: boolean('include_child_sites').notNull().default(true),
     enabled: boolean('enabled').notNull().default(true),
     parameters: jsonb('parameters').notNull().default({}),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })

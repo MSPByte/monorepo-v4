@@ -3,7 +3,6 @@ import { integer, pgView, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const sitesWithCounts = pgView('sites_with_counts', {
   id: uuid('id').notNull(),
-  parentSiteId: uuid('parent_site_id'),
   name: text('name').notNull(),
   description: text('description'),
   assetCount: integer('asset_count').notNull(),
@@ -18,7 +17,6 @@ export const sitesWithCounts = pgView('sites_with_counts', {
 }).with({ securityInvoker: true }).as(sql`
     select
       s.id,
-      s.parent_site_id,
       s.name,
       s.description,
       coalesce(a.asset_count, 0)::int as asset_count,

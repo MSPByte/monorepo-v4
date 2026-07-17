@@ -51,7 +51,6 @@
   let savingMembership = $state(false);
   let scopeType = $state<'global' | 'site' | 'site_group' | 'integration_link'>('global');
   let targetId = $state('');
-  let includeChildren = $state(true);
   let assignmentEnabled = $state(true);
   let savingAssignment = $state(false);
   let deletingAssignmentId = $state<string | null>(null);
@@ -120,7 +119,6 @@
         siteId: scopeType === 'site' ? targetId : null,
         siteGroupId: scopeType === 'site_group' ? targetId : null,
         linkId: scopeType === 'integration_link' ? targetId : null,
-        includeChildSites: includeChildren,
         enabled: assignmentEnabled,
         parameters: {}
       });
@@ -226,11 +224,6 @@
               <label class="flex items-center gap-3 rounded-md border px-3 py-2 text-sm font-medium">
                 <Switch bind:checked={assignmentEnabled} /> Enabled
               </label>
-              {#if scopeType === 'site'}
-                <label class="flex items-center gap-3 rounded-md border px-3 py-2 text-sm font-medium">
-                  <Switch bind:checked={includeChildren} /> Include child sites
-                </label>
-              {/if}
               <Button onclick={saveAssignment} disabled={savingAssignment} class="gap-2">
                 <Plus class="size-4" />
                 Add Mapping

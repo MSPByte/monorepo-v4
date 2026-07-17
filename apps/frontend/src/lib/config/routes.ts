@@ -25,6 +25,11 @@ const ROUTES: Route[] = [
     permission: 'Sites.Read',
   },
   {
+    label: 'Groups',
+    href: '/groups',
+    permission: 'Sites.Read',
+  },
+  {
     label: 'Assets',
     href: '/assets',
     permission: 'Assets.Read',

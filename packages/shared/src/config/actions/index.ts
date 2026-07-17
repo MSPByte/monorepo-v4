@@ -6,6 +6,11 @@ export enum ActionLabels {
   FindingUnsuppress = 'finding.unsuppress',
   SiteRename = 'site.rename',
   SiteDelete = 'site.delete',
+  SiteGroupCreate = 'site_group.create',
+  SiteGroupUpdate = 'site_group.update',
+  SiteGroupDelete = 'site_group.delete',
+  SiteGroupMemberAdd = 'site_group.member.add',
+  SiteGroupMemberRemove = 'site_group.member.remove',
   SiteProfileFactCreate = 'site_profile.fact.create',
   SiteProfileFactUpdate = 'site_profile.fact.update',
   SiteProfileFactDelete = 'site_profile.fact.delete',
@@ -50,6 +55,26 @@ export const ActionResources = {
   [ActionLabels.SiteDelete]: {
     label: ActionLabels.SiteDelete,
     name: 'Site delete'
+  },
+  [ActionLabels.SiteGroupCreate]: {
+    label: ActionLabels.SiteGroupCreate,
+    name: 'Site group create'
+  },
+  [ActionLabels.SiteGroupUpdate]: {
+    label: ActionLabels.SiteGroupUpdate,
+    name: 'Site group update'
+  },
+  [ActionLabels.SiteGroupDelete]: {
+    label: ActionLabels.SiteGroupDelete,
+    name: 'Site group delete'
+  },
+  [ActionLabels.SiteGroupMemberAdd]: {
+    label: ActionLabels.SiteGroupMemberAdd,
+    name: 'Site group member add'
+  },
+  [ActionLabels.SiteGroupMemberRemove]: {
+    label: ActionLabels.SiteGroupMemberRemove,
+    name: 'Site group member remove'
   },
   [ActionLabels.SiteProfileFactCreate]: {
     label: ActionLabels.SiteProfileFactCreate,

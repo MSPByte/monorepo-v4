@@ -357,38 +357,19 @@ async function loadAssignmentsForRun(
   params: { linkId: string; siteId?: string }
 ): Promise<AssignmentRow[]> {
   const rows = await db.select().from(policyAssignments).where(eq(policyAssignments.enabled, true));
-  const siteIds = params.siteId ? await siteScopeIds(db, params.siteId) : new Set<string>();
   const groupIds = params.siteId ? await siteGroupIdsForSite(db, params.siteId) : new Set<string>();
 
   return rows.filter((assignment: AssignmentRow) => {
     if (assignment.scopeType === 'global') return true;
     if (assignment.scopeType === 'integration_link') return assignment.linkId === params.linkId;
     if (assignment.scopeType === 'site') {
-      if (!params.siteId || !assignment.siteId) return false;
-      if (assignment.siteId === params.siteId) return true;
-      return assignment.includeChildSites && siteIds.has(assignment.siteId);
+      return !!params.siteId && assignment.siteId === params.siteId;
     }
     if (assignment.scopeType === 'site_group') {
       return !!assignment.siteGroupId && groupIds.has(assignment.siteGroupId);
     }
     return false;
   });
-}
-
-async function siteScopeIds(db: Db, currentSiteId: string): Promise<Set<string>> {
-  const allSites = await db.select({ id: sites.id, parentSiteId: sites.parentSiteId }).from(sites);
-  const ancestors = new Set<string>([currentSiteId]);
-  let cursor: string | null | undefined = currentSiteId;
-
-  while (cursor) {
-    const site = allSites.find(
-      (row: { id: string; parentSiteId: string | null }) => row.id === cursor
-    );
-    cursor = site?.parentSiteId;
-    if (cursor) ancestors.add(cursor);
-  }
-
-  return ancestors;
 }
 
 async function siteGroupIdsForSite(db: Db, siteId: string): Promise<Set<string>> {

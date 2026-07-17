@@ -1,25 +1,10 @@
 import { crudPolicy, authenticatedRole } from 'drizzle-orm/neon';
-import type { AnyPgColumn } from 'drizzle-orm/pg-core';
-import {
-  boolean,
-  index,
-  integer,
-  jsonb,
-  pgEnum,
-  pgTable,
-  text,
-  timestamp,
-  unique,
-  uuid
-} from 'drizzle-orm/pg-core';
+import { index, jsonb, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 
 export const sites = pgTable(
   'sites',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    parentSiteId: uuid('parent_site_id').references((): AnyPgColumn => sites.id, {
-      onDelete: 'set null'
-    }),
     name: text('name').notNull(),
     description: text('description'),
     attributes: jsonb('attributes').notNull().default({}),
@@ -30,10 +15,7 @@ export const sites = pgTable(
       .notNull()
       .defaultNow()
   },
-  (t) => [
-    index('sites_parent_site_idx').on(t.parentSiteId),
-    crudPolicy({ role: authenticatedRole, read: true, modify: true })
-  ]
+  () => [crudPolicy({ role: authenticatedRole, read: true, modify: true })]
 );
 
 export const siteGroups = pgTable(

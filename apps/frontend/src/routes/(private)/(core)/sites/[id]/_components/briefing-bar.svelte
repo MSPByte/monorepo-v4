@@ -15,8 +15,6 @@
     profile: SiteProfileResponse;
   } = $props();
 
-  const siteCode = $derived(siteId.replace(/-/g, '').slice(0, 4).toUpperCase());
-
   const RIBBON_KEYS = [
     'people',
     'workstations',
@@ -96,12 +94,6 @@
           <p class="mt-0.5 max-w-3xl truncate text-xs text-muted-foreground">{description}</p>
         {/if}
       </div>
-      <span
-        class="rounded-[3px] border border-foreground/30 bg-foreground/4 px-1.5 py-px font-mono text-[11px] font-semibold tracking-[0.18em] text-foreground"
-        title="Site callsign — first 4 chars of UUID"
-      >
-        SITE·{siteCode}
-      </span>
     </div>
     <SiteActionsMenu {siteId} {siteName} />
   </div>

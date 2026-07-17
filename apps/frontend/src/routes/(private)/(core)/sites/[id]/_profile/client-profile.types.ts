@@ -106,7 +106,6 @@ export type SiteProfileResponse = {
     id: string;
     name: string;
     description: string | null;
-    parentSiteId: string | null;
     createdAt: string;
     updatedAt: string;
   };
