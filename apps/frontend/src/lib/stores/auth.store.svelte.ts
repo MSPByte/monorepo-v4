@@ -2,7 +2,6 @@ import { goto } from '$app/navigation';
 import { PersistedState } from 'runed';
 import type { db } from '$lib/db';
 import { type Permission, hasPermission } from '@mspbyte/shared';
-import { PUBLIC_DEV_ORG } from '$env/static/public';
 
 type User = typeof db.users.$inferSelect;
 type Role = typeof db.roles.$inferSelect;
