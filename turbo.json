@@ -5,7 +5,19 @@
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**", "!.next/dev/**"]
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**", "!.next/dev/**"],
+      "env": [
+        "MICROSOFT_CLIENT_ID",
+        "MICROSOFT_CLIENT_SECRET",
+        "ENCRYPTION_KEY",
+        "BETTER_AUTH_SECRET",
+        "BETTER_AUTH_URL",
+        "BETTER_AUTH_TRUSTED_ORIGINS",
+        "CATALOG_DATABASE_URL",
+        "PUBLIC_ORIGIN",
+        "MICROSOFT_AUTH_CLIENT_ID",
+        "MICROSOFT_AUTH_CLIENT_SECRET"
+      ]
     },
     "lint": {
       "dependsOn": ["^lint"]
