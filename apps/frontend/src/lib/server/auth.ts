@@ -1,7 +1,6 @@
 import { getRequestEvent } from '$app/server';
 import { env } from '$env/dynamic/private';
 import { BETTER_AUTH_SECRET, CATALOG_DATABASE_URL } from '$env/static/private';
-import { PUBLIC_API_URL } from '$env/static/public';
 import { createCatalogDb } from '@mspbyte/drizzle-catalog';
 import * as authSchema from '@mspbyte/drizzle-catalog/catalog';
 import { betterAuth } from 'better-auth';
@@ -9,8 +8,7 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { organization as organizationPlugin } from 'better-auth/plugins';
 import { sveltekitCookies } from 'better-auth/svelte-kit';
 
-const trustedOrigins = (env.BETTER_AUTH_TRUSTED_ORIGINS ?? PUBLIC_API_URL)
-  .split(',')
+const trustedOrigins = env.BETTER_AUTH_TRUSTED_ORIGINS.split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
 

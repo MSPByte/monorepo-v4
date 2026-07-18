@@ -11,5 +11,6 @@ export const load: LayoutServerLoad = async ({ locals }) => {
     role: locals.role,
     orgId: locals.org.id,
     orgName: locals.org.name,
+    orgDev: locals.org.isDev,
   };
 };

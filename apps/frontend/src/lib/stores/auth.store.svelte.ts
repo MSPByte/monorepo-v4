@@ -20,6 +20,10 @@ function createAuthStore() {
     storage: 'session',
     syncTabs: false,
   });
+  const orgDev = new PersistedState<boolean | null>('current_org_dev', null, {
+    storage: 'session',
+    syncTabs: false,
+  });
 
   return {
     get currentUser() {
@@ -40,9 +44,12 @@ function createAuthStore() {
     set currentOrg(o: string | null) {
       org.current = o;
     },
+    set currentOrgDev(d: boolean | null) {
+      orgDev.current = d;
+    },
 
     isDev: () => {
-      return org.current === PUBLIC_DEV_ORG;
+      return orgDev.current;
     },
 
     isAllowed: (p: Permission) => {

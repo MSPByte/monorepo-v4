@@ -36,6 +36,7 @@
     authStore.currentUser = data.user;
     authStore.currentRole = data.role;
     authStore.currentOrg = data.orgId;
+    authStore.currentOrgDev = data.orgDev;
   });
 
   $effect(() => {

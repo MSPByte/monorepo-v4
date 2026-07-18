@@ -12,7 +12,6 @@ import {
 } from '$env/static/private';
 import { svelteKitHandler } from 'better-auth/svelte-kit';
 import { sequence } from '@sveltejs/kit/hooks';
-import { PUBLIC_DEV_ORG } from '$env/static/public';
 
 const isPublicRoute = (route: string): boolean => {
   return route.startsWith('/auth') || route.startsWith('/api/auth') || route === '/';
