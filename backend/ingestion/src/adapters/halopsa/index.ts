@@ -6,8 +6,7 @@ import type {
   FetchResultCursor,
   IngestionAdapter,
   IngestionAdapterContext,
-  RawRecordEnvelope,
-  ResolveLinkMetaContext
+  RawRecordEnvelope
 } from '@mspbyte/pipeline';
 import { requireEncryptionKey } from '../../env.js';
 import { logger } from '../../logger.js';
@@ -32,27 +31,14 @@ export const haloPsaAdapter: IngestionAdapter = {
     const connector = createConnector(context);
     const invoices = await fetchRecurringInvoices(connector, context);
     yield page(facet, flattenRecurringItems(invoices));
-  },
-
-  async resolveLinkMeta(ctx: ResolveLinkMetaContext): Promise<Record<string, unknown>> {
-    const connector = createConnectorFromConfig(ctx.integrationConfig, ctx.linkId);
-    const sites = await connector.site.list();
-    const externalIdStr = String(ctx.externalId);
-    const site = sites.find((s) => String(s.id) === externalIdStr);
-    if (!site) {
-      throw new Error(
-        `HaloPSA site ${ctx.externalId} not found while resolving link meta for link ${ctx.linkId}`
-      );
-    }
-    return { clientId: site.client_id };
   }
 };
 
 function createConnector(context: IngestionAdapterContext): HaloPSAConnector {
-  return createConnectorFromConfig(context.integrationConfig, context.linkId);
+  return createHaloPsaConnector(context.integrationConfig, context.linkId);
 }
 
-function createConnectorFromConfig(
+function createHaloPsaConnector(
   integrationConfig: Record<string, unknown> | undefined,
   linkId: string
 ): HaloPSAConnector {

@@ -25,7 +25,6 @@ import {
   recordFetchSuccess,
   startStage,
 } from "../db/stages.js";
-import { healLinkMeta } from "../db/link-meta.js";
 import { serializeError } from "../errors.js";
 
 export function createIngestionWorker(
@@ -107,21 +106,10 @@ export function createIngestionWorker(
           stage: "ingest",
         });
 
-        const resolvedLinkMeta = await healLinkMeta({
-          db,
-          redis,
-          adapter,
-          linkId: data.linkId,
-          orgId: data.orgId,
-          provider: data.provider,
-          jobLinkMeta: data.linkMeta,
-          integrationConfig: data.integrationConfig,
-        });
-
         const pages = adapter.fetch(data.type, data.mode, data.cursor, {
           orgId: data.orgId,
           linkId: data.linkId,
-          linkMeta: resolvedLinkMeta,
+          linkMeta: data.linkMeta,
           integrationConfig: data.integrationConfig,
           tenantDb: db,
         });
