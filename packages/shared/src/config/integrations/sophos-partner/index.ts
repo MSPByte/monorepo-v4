@@ -1,11 +1,14 @@
 import type { Integration } from "../../../types/integration.js";
 import { ProviderFacet } from "../../../types/provider.js";
 import { SyncIntervals } from "../intervals.js";
+import { passthroughLinkMetaSchema } from "../link-meta-passthrough.js";
 import {
   SophosEndpointsShape,
   SophosFirewallsShape,
   SophosLicensesShape,
 } from "./shapes.js";
+
+const SOPHOS_PARTNER_LINK_META_VERSION = 1;
 
 export const SOPHOS_PARTNER_CONFIG: Integration = {
   id: "sophos-partner",
@@ -62,4 +65,6 @@ export const SOPHOS_PARTNER_CONFIG: Integration = {
     { label: "Firewalls", route: "/firewalls", isNullable: false },
     { label: "Licenses", route: "/licenses", isNullable: false },
   ],
+  linkMetaSchema: passthroughLinkMetaSchema,
+  linkMetaVersion: SOPHOS_PARTNER_LINK_META_VERSION,
 };

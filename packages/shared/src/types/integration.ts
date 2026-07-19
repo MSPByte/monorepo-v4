@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import type { ProviderFacet, ProviderId } from "./provider.js";
 import type { SchemaFields } from "./schema-registry.js";
 
@@ -38,6 +39,10 @@ export type IntegrationNavItem = {
   isNullable: boolean;
 };
 
+export const META_VERSION_KEY = "_v" as const;
+
+export type LinkMeta = Record<string, unknown> & { [META_VERSION_KEY]?: number };
+
 export type Integration = {
   id: ProviderId;
   name: string;
@@ -45,4 +50,6 @@ export type Integration = {
   scope: IntegrationScope;
   supportedFacets: IngestTypeConfig[];
   navigation: IntegrationNavItem[];
+  linkMetaSchema: z.ZodTypeAny;
+  linkMetaVersion: number;
 };

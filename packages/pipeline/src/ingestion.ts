@@ -71,6 +71,15 @@ export type IngestionAdapterContext = {
   tenantDb?: unknown;
 };
 
+export type ResolveLinkMetaContext = {
+  orgId: string;
+  linkId: string;
+  externalId: string;
+  currentMeta: Record<string, unknown> | null;
+  integrationConfig?: Record<string, unknown>;
+  tenantDb?: unknown;
+};
+
 export interface IngestionAdapter<TPayload = unknown> {
   readonly providerId: string;
   readonly types: IngestionFacet[];
@@ -80,4 +89,12 @@ export interface IngestionAdapter<TPayload = unknown> {
     cursor: string | undefined,
     context: IngestionAdapterContext,
   ): AsyncGenerator<FetchPage<TPayload>, FetchResultCursor>;
+  /**
+   * Re-derives the link's meta from the vendor when the stored schema version
+   * is stale. Optional: vendors whose meta is user-entered (no vendor source of
+   * truth) can omit this and rely on the frontend to keep meta current on save.
+   */
+  resolveLinkMeta?(
+    context: ResolveLinkMetaContext,
+  ): Promise<Record<string, unknown>>;
 }

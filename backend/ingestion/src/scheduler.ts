@@ -7,7 +7,7 @@ import {
   type SyncMode,
 } from "@mspbyte/pipeline";
 import { INTEGRATIONS, type FacetSyncConfig, type ProviderId } from "@mspbyte/shared";
-import { canProcessOrg, env, hasMicrosoftCredentials, requireEncryptionKey } from "./env.js";
+import { env, hasMicrosoftCredentials, requireEncryptionKey } from "./env.js";
 import { logger } from "./logger.js";
 import type { RedisConnection } from "./redis.js";
 import { maybeGetAdapter } from "./adapters/registry.js";
@@ -108,8 +108,6 @@ export async function enqueueManualIngestion(
   redis: RedisConnection,
   params: EnqueueIngestionParams,
 ): Promise<{ syncRunId: string; jobId: string }> {
-  await assertOrgCanBeProcessed(params.orgId);
-
   const tenant = await getTenantServiceDbByOrgId(
     params.orgId,
     requireEncryptionKey(),
@@ -187,27 +185,6 @@ function activeOrgWhere() {
   }
 
   return and(...filters);
-}
-
-async function assertOrgCanBeProcessed(orgId: string): Promise<void> {
-  const catalogDb = getCatalogDb(env.CATALOG_DATABASE_URL);
-  const [org] = await catalogDb
-    .select({
-      id: organization.id,
-      isDev: organization.isDev,
-      status: organization.status,
-    })
-    .from(organization)
-    .where(eq(organization.id, orgId))
-    .limit(1);
-
-  if (!org) throw new Error(`Org not found: ${orgId}`);
-  if (org.status !== "active") throw new Error(`Org is not active: ${orgId}`);
-  if (!canProcessOrg(org)) {
-    throw new Error(
-      `Org ${orgId} is not marked is_dev; ingestion is restricted to development orgs in ${env.RUNTIME_ENVIRONMENT}`,
-    );
-  }
 }
 
 async function decideSyncMode(

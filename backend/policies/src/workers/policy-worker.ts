@@ -1,7 +1,7 @@
 import { Worker } from "bullmq";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
 import type { PolicyJobData } from "@mspbyte/pipeline";
-import { canProcessOrg, env, requireEncryptionKey } from "../env.js";
+import { env, requireEncryptionKey } from "../env.js";
 import { serializeError } from "../errors.js";
 import { logger } from "../logger.js";
 import type { RedisConnection } from "../redis.js";
@@ -25,11 +25,6 @@ export function createPolicyWorker(
         requireEncryptionKey(),
         env.CATALOG_DATABASE_URL,
       );
-      if (!canProcessOrg(tenant.org)) {
-        throw new Error(
-          `Org ${data.orgId} is not marked is_dev; policy is restricted to development orgs in ${env.RUNTIME_ENVIRONMENT}`,
-        );
-      }
 
       const db = tenant.db;
       const bullmqJobId = String(job.id ?? data.syncRunId);

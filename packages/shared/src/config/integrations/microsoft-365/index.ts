@@ -1,7 +1,10 @@
 import type { Integration } from '../../../types/integration.js';
 import { ProviderFacet } from '../../../types/provider.js';
 import { SyncIntervals } from '../intervals.js';
+import { passthroughLinkMetaSchema } from '../link-meta-passthrough.js';
 import { M365PoliciesShape } from './policies.js';
+
+const M365_LINK_META_VERSION = 1;
 import {
   M365DevicesShape,
   M365GroupsShape,
@@ -152,5 +155,7 @@ export const M365_INTEGRATION_CONFIG: Integration = {
     { label: 'Exchange', route: '/exchange', isNullable: false },
     { label: 'Security', route: '/security', isNullable: false },
     { label: 'Compliance', route: '/compliance', isNullable: false }
-  ]
+  ],
+  linkMetaSchema: passthroughLinkMetaSchema,
+  linkMetaVersion: M365_LINK_META_VERSION
 };

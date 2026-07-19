@@ -444,6 +444,10 @@ function summarizeFiltered(rows: ReconciliationRow[]): FilteredSummary {
     overCount: 0
   };
   for (const row of rows) {
+    // Skip PSA lines with no matching rule — their diff/MRR is always
+    // negative-by-construction (billed vs zero actual) and drowns out the
+    // signal from rows that actually reconcile.
+    if (row.status === 'missing_rule') continue;
     acc.billed += row.billedQuantity;
     acc.actual += row.actualQuantity;
     acc.diff += row.diffQuantity;

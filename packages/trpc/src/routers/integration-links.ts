@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { integrationLinks } from '@mspbyte/drizzle';
 import { eq, and, inArray } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
+import { INTEGRATIONS, META_VERSION_KEY, type ProviderId } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 
 type IntegrationLinkRow = typeof integrationLinks.$inferSelect;
@@ -15,6 +16,32 @@ const saveSiteLinkSchema = z.object({
   note: z.string().optional().nullable(),
   meta: z.record(z.string(), z.unknown()).optional().nullable()
 });
+
+function stampMeta(
+  integrationId: string,
+  meta: Record<string, unknown> | null | undefined
+): Record<string, unknown> | null {
+  if (meta === null || meta === undefined) return meta ?? null;
+  const integration = INTEGRATIONS[integrationId as ProviderId];
+  if (!integration) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: `Unknown integration ${integrationId}`
+    });
+  }
+  const parsed = integration.linkMetaSchema.safeParse(meta);
+  if (!parsed.success) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: `Invalid meta for ${integrationId}: ${parsed.error.message}`
+    });
+  }
+  const value =
+    parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
+      ? (parsed.data as Record<string, unknown>)
+      : {};
+  return { ...value, [META_VERSION_KEY]: integration.linkMetaVersion };
+}
 
 export const integrationLinksRouter = t.router({
   list: authProcedure
@@ -52,6 +79,7 @@ export const integrationLinksRouter = t.router({
       })
     )
     .mutation(async ({ ctx, input }): Promise<IntegrationLinkRow> => {
+      const meta = stampMeta(input.integrationId, input.meta ?? null);
       const [row] = await ctx.db
         .insert(integrationLinks)
         .values({
@@ -62,7 +90,7 @@ export const integrationLinksRouter = t.router({
           status: input.status,
           disposition: input.disposition,
           note: input.note,
-          meta: input.meta
+          meta
         })
         .returning();
       if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
@@ -83,10 +111,24 @@ export const integrationLinksRouter = t.router({
       })
     )
     .mutation(async ({ ctx, input }): Promise<IntegrationLinkRow> => {
-      const { id, ...rest } = input;
+      const { id, meta: metaIn, ...rest } = input;
+      let metaUpdate: Record<string, unknown> | null | undefined = undefined;
+      if (metaIn !== undefined) {
+        const [existing] = await ctx.db
+          .select({ integrationId: integrationLinks.integrationId })
+          .from(integrationLinks)
+          .where(eq(integrationLinks.id, id))
+          .limit(1);
+        if (!existing) throw new TRPCError({ code: 'NOT_FOUND' });
+        metaUpdate = stampMeta(existing.integrationId, metaIn);
+      }
       const [row] = await ctx.db
         .update(integrationLinks)
-        .set({ ...rest, updatedAt: new Date().toISOString() })
+        .set({
+          ...rest,
+          ...(metaUpdate === undefined ? {} : { meta: metaUpdate }),
+          updatedAt: new Date().toISOString()
+        })
         .where(eq(integrationLinks.id, id))
         .returning();
       if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
@@ -152,6 +194,7 @@ export const integrationLinksRouter = t.router({
             continue;
           }
 
+          const meta = stampMeta(input.integrationId, change.meta ?? null);
           const values = {
             integrationId: input.integrationId,
             siteId: change.siteId,
@@ -160,7 +203,7 @@ export const integrationLinksRouter = t.router({
             status: disposition ? ('dispositioned' as const) : ('active' as const),
             disposition,
             note,
-            meta: change.meta ?? null,
+            meta,
             updatedAt: now
           };
 

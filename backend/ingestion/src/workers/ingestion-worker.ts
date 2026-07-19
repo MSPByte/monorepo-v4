@@ -10,7 +10,7 @@ import {
   type IngestionJobData,
   type ProjectionJobData,
 } from "@mspbyte/pipeline";
-import { canProcessOrg, env, requireEncryptionKey } from "../env.js";
+import { env, requireEncryptionKey } from "../env.js";
 import { logger } from "../logger.js";
 import type { RedisConnection } from "../redis.js";
 import { getAdapter } from "../adapters/registry.js";
@@ -25,6 +25,7 @@ import {
   recordFetchSuccess,
   startStage,
 } from "../db/stages.js";
+import { healLinkMeta } from "../db/link-meta.js";
 import { serializeError } from "../errors.js";
 
 export function createIngestionWorker(
@@ -60,11 +61,6 @@ export function createIngestionWorker(
         requireEncryptionKey(),
         env.CATALOG_DATABASE_URL,
       );
-      if (!canProcessOrg(tenant.org)) {
-        throw new Error(
-          `Org ${data.orgId} is not marked is_dev; ingestion is restricted to development orgs in ${env.RUNTIME_ENVIRONMENT}`,
-        );
-      }
 
       const db = tenant.db;
       const bullmqJobId = String(job.id ?? data.syncRunId);
@@ -111,10 +107,21 @@ export function createIngestionWorker(
           stage: "ingest",
         });
 
+        const resolvedLinkMeta = await healLinkMeta({
+          db,
+          redis,
+          adapter,
+          linkId: data.linkId,
+          orgId: data.orgId,
+          provider: data.provider,
+          jobLinkMeta: data.linkMeta,
+          integrationConfig: data.integrationConfig,
+        });
+
         const pages = adapter.fetch(data.type, data.mode, data.cursor, {
           orgId: data.orgId,
           linkId: data.linkId,
-          linkMeta: data.linkMeta,
+          linkMeta: resolvedLinkMeta,
           integrationConfig: data.integrationConfig,
           tenantDb: db,
         });

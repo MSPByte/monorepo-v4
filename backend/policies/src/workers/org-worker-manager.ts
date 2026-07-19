@@ -52,7 +52,6 @@ export function createOrgWorkerManager(redis: RedisConnection) {
 function activeOrgWhere() {
   const filters = [eq(organization.status, "active")];
 
-  if (env.REQUIRE_DEV_ORGS) filters.push(eq(organization.isDev, true));
   if (env.TARGET_ORG_IDS.length > 0) {
     filters.push(inArray(organization.id, env.TARGET_ORG_IDS));
   }

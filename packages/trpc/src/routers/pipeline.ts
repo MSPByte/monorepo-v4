@@ -81,6 +81,87 @@ export const pipelineRouter = t.router({
       return result;
     }),
 
+  enqueueIntegrationSync: authProcedure
+    .input(
+      z.object({
+        integrationId: z.string().min(1),
+        mode: z.enum(['full', 'incremental']).default('full'),
+        force: z.boolean().default(false)
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.redis) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Redis is not configured for this tRPC caller'
+        });
+      }
+
+      const integration = INTEGRATIONS[input.integrationId as ProviderId];
+      if (!integration) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `Unknown integration: ${input.integrationId}`
+        });
+      }
+
+      const rows = await ctx.db
+        .select({
+          link: integrationLinks,
+          integrationConfig: integrations.config
+        })
+        .from(integrationLinks)
+        .innerJoin(integrations, eq(integrations.id, integrationLinks.integrationId))
+        .where(
+          and(
+            eq(integrationLinks.integrationId, input.integrationId),
+            eq(integrationLinks.status, 'active'),
+            isNull(integrations.deletedAt)
+          )
+        );
+
+      const facets = integration.supportedFacets.map((f) => f.facet);
+      const queued: Array<{ linkId: string; type: string; syncRunId: string }> = [];
+      const skipped: Array<{ linkId: string; type: string; reason: string }> = [];
+
+      for (const row of rows) {
+        for (const type of facets) {
+          if (
+            !input.force &&
+            (await hasActiveIngestionRun(ctx.db, row.link.id, type, ACTIVE_RUN_STALE_MS))
+          ) {
+            skipped.push({ linkId: row.link.id, type, reason: 'active-run' });
+            continue;
+          }
+
+          try {
+            const result = await enqueueIngestionJob(ctx.redis, ctx.db, {
+              orgId: ctx.orgId,
+              link: row.link,
+              integrationConfig: row.integrationConfig,
+              type,
+              mode: input.mode
+            });
+            queued.push({ linkId: row.link.id, type, syncRunId: result.syncRunId });
+          } catch (error) {
+            skipped.push({
+              linkId: row.link.id,
+              type,
+              reason: error instanceof Error ? error.message : 'enqueue-failed'
+            });
+          }
+        }
+      }
+
+      return {
+        integrationId: input.integrationId,
+        linkCount: rows.length,
+        facetCount: facets.length,
+        queued,
+        skipped
+      };
+    }),
+
   syncableLinks: authProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db
       .select({

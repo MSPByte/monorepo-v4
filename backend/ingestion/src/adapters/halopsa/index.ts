@@ -6,7 +6,8 @@ import type {
   FetchResultCursor,
   IngestionAdapter,
   IngestionAdapterContext,
-  RawRecordEnvelope
+  RawRecordEnvelope,
+  ResolveLinkMetaContext
 } from '@mspbyte/pipeline';
 import { requireEncryptionKey } from '../../env.js';
 import { logger } from '../../logger.js';
@@ -31,19 +32,50 @@ export const haloPsaAdapter: IngestionAdapter = {
     const connector = createConnector(context);
     const invoices = await fetchRecurringInvoices(connector, context);
     yield page(facet, flattenRecurringItems(invoices));
+  },
+
+  async resolveLinkMeta(ctx: ResolveLinkMetaContext): Promise<Record<string, unknown>> {
+    const connector = createConnectorFromConfig(ctx.integrationConfig, ctx.linkId);
+    const sites = await connector.site.list();
+    const externalIdStr = String(ctx.externalId);
+    const site = sites.find((s) => String(s.id) === externalIdStr);
+    if (!site) {
+      throw new Error(
+        `HaloPSA site ${ctx.externalId} not found while resolving link meta for link ${ctx.linkId}`
+      );
+    }
+    return { clientId: site.client_id };
   }
 };
 
 function createConnector(context: IngestionAdapterContext): HaloPSAConnector {
-  const url = stringConfig(context, 'url').replace(/\/+$/, '');
-  const clientId = stringConfig(context, 'clientId');
-  const clientSecretEnc = stringConfig(context, 'clientSecret');
+  return createConnectorFromConfig(context.integrationConfig, context.linkId);
+}
+
+function createConnectorFromConfig(
+  integrationConfig: Record<string, unknown> | undefined,
+  linkId: string
+): HaloPSAConnector {
+  const url = stringFromConfig(integrationConfig, 'url', linkId).replace(/\/+$/, '');
+  const clientId = stringFromConfig(integrationConfig, 'clientId', linkId);
+  const clientSecretEnc = stringFromConfig(integrationConfig, 'clientSecret', linkId);
   const clientSecret = Encryption.decrypt(clientSecretEnc, requireEncryptionKey());
   if (!clientSecret) {
-    throw new Error(`HaloPSA client secret could not be decrypted for link ${context.linkId}`);
+    throw new Error(`HaloPSA client secret could not be decrypted for link ${linkId}`);
   }
-
   return new HaloPSAConnector(url, clientId, clientSecret);
+}
+
+function stringFromConfig(
+  integrationConfig: Record<string, unknown> | undefined,
+  key: string,
+  linkId: string
+): string {
+  const value = integrationConfig?.[key];
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`HaloPSA integrationConfig.${key} missing for link ${linkId}`);
+  }
+  return value;
 }
 
 async function fetchRecurringInvoices(
@@ -256,14 +288,6 @@ function envelope(facet: ProviderFacet, record: RecurringItemPayload): RawRecord
     op: 'upsert',
     payload: record
   };
-}
-
-function stringConfig(context: IngestionAdapterContext, key: string): string {
-  const value = context.integrationConfig?.[key];
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new Error(`HaloPSA integrationConfig.${key} missing for link ${context.linkId}`);
-  }
-  return value;
 }
 
 function stringMeta(context: IngestionAdapterContext, key: string): string | undefined {

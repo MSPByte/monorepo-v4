@@ -1,7 +1,10 @@
 import type { Integration } from "../../../types/integration.js";
 import { ProviderFacet } from "../../../types/provider.js";
 import { SyncIntervals } from "../intervals.js";
+import { passthroughLinkMetaSchema } from "../link-meta-passthrough.js";
 import { CoveEndpointsShape } from "./shapes.js";
+
+const COVE_LINK_META_VERSION = 1;
 
 export const COVE_CONFIG: Integration = {
   id: "cove",
@@ -21,4 +24,6 @@ export const COVE_CONFIG: Integration = {
     },
   ],
   navigation: [{ label: "Endpoints", route: "/endpoints", isNullable: false }],
+  linkMetaSchema: passthroughLinkMetaSchema,
+  linkMetaVersion: COVE_LINK_META_VERSION,
 };

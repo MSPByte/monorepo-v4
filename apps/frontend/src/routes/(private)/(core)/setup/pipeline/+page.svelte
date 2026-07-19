@@ -11,6 +11,7 @@
   import { Label } from '$lib/components/ui/label';
   import Play from '@lucide/svelte/icons/play';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+  import SingleSelect from '$lib/components/single-select.svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const qc = useQueryClient();
@@ -24,6 +25,37 @@
   let selectedType = $state('');
   let mode = $state<'full' | 'incremental'>('full');
   let force = $state(false);
+
+  let selectedIntegrationId = $state('');
+  let integrationMode = $state<'full' | 'incremental'>('full');
+  let integrationForce = $state(false);
+
+  const linkOptions = $derived.by(() => {
+    return (
+      linksQuery.data?.map((link) => ({
+        label: `${link.integrationName} · ${link.siteName ?? link.name ?? 'unnamed'} · ${link.status}`,
+        value: link.id,
+      })) || []
+    );
+  });
+
+  const integrationOptions = $derived.by(() => {
+    const map = new Map<string, { id: string; name: string; linkCount: number }>();
+    for (const link of linksQuery.data ?? []) {
+      const existing = map.get(link.integrationId);
+      if (existing) existing.linkCount += 1;
+      else
+        map.set(link.integrationId, {
+          id: link.integrationId,
+          name: link.integrationName,
+          linkCount: 1,
+        });
+    }
+    return Array.from(map.values()).map((integration) => ({
+      label: `${integration.name} (${integration.linkCount} link${integration.linkCount === 1 ? '' : 's'})`,
+      value: integration.id,
+    }));
+  });
 
   const selectedLink = $derived.by(() => {
     if (!selectedLinkId) return undefined;
@@ -59,15 +91,32 @@
       toast.success(`Sync queued (run ${result.syncRunId.slice(0, 8)})`);
       qc.invalidateQueries({ queryKey: ['pipeline.recentRuns', selectedLinkId] });
     },
+    onError: (e: unknown) => toast.error(e instanceof Error ? e.message : 'Failed to enqueue sync'),
+  }));
+
+  const enqueueIntegration = createMutation(() => ({
+    mutationFn: () =>
+      trpc.pipeline.enqueueIntegrationSync.mutate({
+        integrationId: selectedIntegrationId,
+        mode: integrationMode,
+        force: integrationForce,
+      }),
+    onSuccess: (result) => {
+      const queuedCount = result.queued.length;
+      const skippedCount = result.skipped.length;
+      const parts = [`${queuedCount} queued across ${result.linkCount} link${result.linkCount === 1 ? '' : 's'}`];
+      if (skippedCount > 0) parts.push(`${skippedCount} skipped`);
+      toast.success(parts.join(' · '));
+      qc.invalidateQueries({ queryKey: ['pipeline.recentRuns'] });
+    },
     onError: (e: unknown) =>
-      toast.error(e instanceof Error ? e.message : 'Failed to enqueue sync'),
+      toast.error(e instanceof Error ? e.message : 'Failed to enqueue integration'),
   }));
 
   function statusClass(status: string) {
     if (status === 'succeeded' || status === 'completed') return 'text-success';
     if (status === 'failed' || status === 'enqueue_failed') return 'text-destructive';
-    if (status === 'running' || status === 'queued' || status === 'pending')
-      return 'text-warning';
+    if (status === 'running' || status === 'queued' || status === 'pending') return 'text-warning';
     return 'text-muted-foreground';
   }
 
@@ -93,24 +142,14 @@
       <div class="py-6"><Loader /></div>
     {:else if !linksQuery.data?.length}
       <div class="py-6 text-center text-sm text-muted-foreground">
-        No active integration links with syncable facets. Configure one under Setup / Integrations first.
+        No active integration links with syncable facets. Configure one under Setup / Integrations
+        first.
       </div>
     {:else}
       <div class="grid gap-4 md:grid-cols-2">
         <div class="space-y-2">
           <Label for="link">Integration link</Label>
-          <select
-            id="link"
-            class="h-9 w-full rounded-md border bg-background px-3 text-sm"
-            bind:value={selectedLinkId}
-          >
-            <option value="">Select a link…</option>
-            {#each linksQuery.data as link (link.id)}
-              <option value={link.id}>
-                {link.integrationName} · {link.siteName ?? link.name ?? 'unnamed'} · {link.status}
-              </option>
-            {/each}
-          </select>
+          <SingleSelect options={linkOptions} bind:selected={selectedLinkId} />
         </div>
 
         <div class="space-y-2">
@@ -160,6 +199,53 @@
     {/if}
   </SectionPanel>
 
+  <SectionPanel code="I" title="ENQUEUE INTEGRATION">
+    {#if linksQuery.isLoading}
+      <div class="py-6"><Loader /></div>
+    {:else if !integrationOptions.length}
+      <div class="py-6 text-center text-sm text-muted-foreground">
+        No integrations with syncable links available.
+      </div>
+    {:else}
+      <div class="grid gap-4 md:grid-cols-2">
+        <div class="space-y-2">
+          <Label for="integration">Integration</Label>
+          <SingleSelect options={integrationOptions} bind:selected={selectedIntegrationId} />
+        </div>
+
+        <div class="space-y-2">
+          <Label for="integration-mode">Mode</Label>
+          <select
+            id="integration-mode"
+            class="h-9 w-full rounded-md border bg-background px-3 text-sm"
+            bind:value={integrationMode}
+          >
+            <option value="full">Full</option>
+            <option value="incremental">Incremental</option>
+          </select>
+        </div>
+
+        <div class="flex items-end gap-3">
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" bind:checked={integrationForce} />
+            Force (skip active-run check)
+          </label>
+        </div>
+      </div>
+
+      <div class="mt-4 flex justify-end">
+        <Button
+          class="gap-2"
+          disabled={!selectedIntegrationId || enqueueIntegration.isPending}
+          onclick={() => enqueueIntegration.mutate()}
+        >
+          <Play class="size-4" />
+          {enqueueIntegration.isPending ? 'Queueing…' : 'Enqueue all links & facets'}
+        </Button>
+      </div>
+    {/if}
+  </SectionPanel>
+
   <SectionPanel code="R" title="RECENT RUNS">
     {#snippet aside()}
       <button
@@ -178,11 +264,11 @@
     {:else if runsQuery.isLoading}
       <div class="py-6"><Loader /></div>
     {:else if !runsQuery.data?.length}
-      <div class="py-6 text-center text-sm text-muted-foreground">
-        No runs yet for this link.
-      </div>
+      <div class="py-6 text-center text-sm text-muted-foreground">No runs yet for this link.</div>
     {:else}
-      <div class="hidden grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] items-center gap-3 border-b border-border/40 pb-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70 md:grid">
+      <div
+        class="hidden grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] items-center gap-3 border-b border-border/40 pb-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70 md:grid"
+      >
         <div>Facet</div>
         <div>Mode</div>
         <div>Status</div>
@@ -197,9 +283,15 @@
           <div class="min-w-0 truncate font-mono text-xs">{run.type}</div>
           <div class="min-w-0 truncate font-mono text-xs text-muted-foreground">{run.mode}</div>
           <div class={`font-mono text-xs uppercase ${statusClass(run.status)}`}>{run.status}</div>
-          <div class="min-w-0 truncate font-mono text-xs text-muted-foreground">{fmtTime(run.startedAt)}</div>
-          <div class="min-w-0 truncate font-mono text-xs text-muted-foreground">{fmtTime(run.finishedAt)}</div>
-          <div class="min-w-0 truncate font-mono text-xs text-muted-foreground">{run.id.slice(0, 8)}</div>
+          <div class="min-w-0 truncate font-mono text-xs text-muted-foreground">
+            {fmtTime(run.startedAt)}
+          </div>
+          <div class="min-w-0 truncate font-mono text-xs text-muted-foreground">
+            {fmtTime(run.finishedAt)}
+          </div>
+          <div class="min-w-0 truncate font-mono text-xs text-muted-foreground">
+            {run.id.slice(0, 8)}
+          </div>
         </div>
       {/each}
     {/if}
