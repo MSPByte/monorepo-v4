@@ -15,15 +15,18 @@ const COMMANDS: Record<string, (args: ReturnType<typeof parseArgs>) => Promise<v
 function usage(): void {
   console.error(
     [
-      "Usage: bun backend/scripts/src/index.ts <command> [flags]",
+      "Usage: bun infra/scripts/src/index.ts <command> [flags]",
       "",
       "Commands:",
       "  tenant-health --org=<uuid>|--all [--fix] [--only=<check1,check2>]",
       "    Runs tenant health checks. Without --fix, reports issues only.",
       "",
       "Checks:",
-      "  link-meta   Reconciles integration_links.meta against each vendor's",
-      "              current schema version. HaloPSA uses one site.list per org.",
+      "  link-meta    Reconciles integration_links.meta against each vendor's",
+      "               current schema version. HaloPSA uses one site.list per org.",
+      "  dead-letter  Replays raw_records with projectionStatus='failed' via",
+      "               projectBatch. Records that now normalize cleanly are",
+      "               marked recovered; still-failing rows keep their new error.",
     ].join("\n"),
   );
 }

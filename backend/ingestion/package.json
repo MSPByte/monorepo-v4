@@ -3,6 +3,13 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./replay": {
+      "types": "./src/db/replay.ts",
+      "bun": "./src/db/replay.ts",
+      "import": "./dist/db/replay.js"
+    }
+  },
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "enqueue:manual": "bun src/manual.ts",

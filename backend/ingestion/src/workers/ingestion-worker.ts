@@ -24,6 +24,10 @@ import {
   startStage,
 } from "../db/stages.js";
 import { projectBatch } from "../db/project.js";
+import {
+  deadLetterBatchFailure,
+  deadLetterPerRecordFailures,
+} from "../db/dead-letter.js";
 import { projectionSteps } from "../contracts/registry.js";
 import { runProjectionSteps } from "../contracts/runner.js";
 import { serializeError } from "../errors.js";
@@ -141,24 +145,46 @@ export function createIngestionWorker(
           const batches = chunk(page.records, env.RAW_BATCH_SIZE);
 
           for (const records of batches) {
-            const metrics = await projectBatch(
-              db,
-              {
-                orgId: data.orgId,
-                linkId: data.linkId,
-                siteId: data.siteId,
-                provider: data.provider,
-                type: data.type,
-                syncRunId: data.syncRunId,
-              },
-              records,
-            );
+            const batchParams = {
+              orgId: data.orgId,
+              linkId: data.linkId,
+              siteId: data.siteId,
+              provider: data.provider,
+              type: data.type,
+              syncRunId: data.syncRunId,
+              mode: data.mode,
+              batchIndex,
+            };
 
-            recordsIn += metrics.recordsIn;
-            projectTotals.recordsOut += metrics.recordsOut;
-            projectTotals.createdCt += metrics.createdCt;
-            projectTotals.updatedCt += metrics.updatedCt;
-            projectTotals.failedCt += metrics.failedCt;
+            try {
+              const metrics = await projectBatch(db, batchParams, records);
+
+              recordsIn += metrics.recordsIn;
+              projectTotals.recordsOut += metrics.recordsOut;
+              projectTotals.createdCt += metrics.createdCt;
+              projectTotals.updatedCt += metrics.updatedCt;
+              projectTotals.failedCt += metrics.failedCt;
+
+              // Per-record failures are deterministic (bad payload → bad
+              // normalize/validate). Dead-letter immediately so they can be
+              // replayed after a code fix; retrying the whole batch wouldn't
+              // help.
+              if (metrics.failures.length > 0) {
+                await deadLetterPerRecordFailures(db, batchParams, metrics.failures);
+              }
+            } catch (batchError) {
+              // Whole-batch failure. On non-final attempts, rethrow so BullMQ
+              // retries the whole facet. On the final attempt, dead-letter
+              // this batch and continue with the next — partial success is
+              // better than losing everything to one bad batch.
+              const attempt = (job.attemptsMade ?? 0) + 1;
+              const maxAttempts = job.opts?.attempts ?? 1;
+              if (attempt < maxAttempts) {
+                throw batchError;
+              }
+              await deadLetterBatchFailure(db, batchParams, records, batchError);
+              projectTotals.failedCt += records.length;
+            }
             batchIndex++;
           }
         }

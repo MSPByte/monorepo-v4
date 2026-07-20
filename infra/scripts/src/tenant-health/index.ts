@@ -5,6 +5,7 @@ import {
   organization,
 } from "@mspbyte/drizzle-catalog";
 import { env, requireEncryptionKey } from "../env.js";
+import { checkDeadLetter } from "./dead-letter.js";
 import { checkLinkMeta } from "./link-meta.js";
 
 export type HealthReport = {
@@ -27,6 +28,7 @@ export type HealthCheck = {
 
 const ALL_CHECKS: HealthCheck[] = [
   { name: "link-meta", run: checkLinkMeta },
+  { name: "dead-letter", run: checkDeadLetter },
 ];
 
 export type RunTenantHealthOptions = {

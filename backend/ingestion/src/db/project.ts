@@ -1,7 +1,12 @@
 import { and, eq, getColumns, inArray, sql } from "drizzle-orm";
-import { syncRunStages, vendorTableRegistry, type VendorTableName } from "@mspbyte/drizzle";
+import {
+  getProjectionSchema,
+  syncRunStages,
+  vendorTableRegistry,
+  type VendorTableName,
+} from "@mspbyte/drizzle";
 import { getFacetTableMap, type ProviderFacet } from "@mspbyte/shared";
-import type { RawRecordEnvelope } from "@mspbyte/pipeline";
+import type { RawRecordEnvelope, SyncMode } from "@mspbyte/pipeline";
 import { logger } from "../logger.js";
 import { normalizeVendorRecord } from "../adapters/normalize.js";
 import { stablePayloadHash } from "./hash.js";
@@ -22,6 +27,8 @@ type ProjectionResult = {
 };
 type ProjectionFailure = {
   externalId: string;
+  op: "upsert" | "delete";
+  payload: unknown;
   error: unknown;
 };
 
@@ -35,6 +42,15 @@ export type ProjectBatchParams = {
   provider: string;
   type: string;
   syncRunId: string;
+  mode: SyncMode;
+  batchIndex: number;
+};
+
+export type ProjectBatchFailure = {
+  externalId: string;
+  op: "upsert" | "delete";
+  payload: unknown;
+  error: unknown;
 };
 
 export type ProjectBatchMetrics = {
@@ -43,6 +59,7 @@ export type ProjectBatchMetrics = {
   createdCt: number;
   updatedCt: number;
   failedCt: number;
+  failures: ProjectBatchFailure[];
 };
 
 const EMPTY_METRICS: ProjectBatchMetrics = {
@@ -51,6 +68,7 @@ const EMPTY_METRICS: ProjectBatchMetrics = {
   createdCt: 0,
   updatedCt: 0,
   failedCt: 0,
+  failures: [],
 };
 
 /**
@@ -64,7 +82,7 @@ export async function projectBatch(
   params: ProjectBatchParams,
   records: readonly RawRecordEnvelope[],
 ): Promise<ProjectBatchMetrics> {
-  if (records.length === 0) return { ...EMPTY_METRICS };
+  if (records.length === 0) return { ...EMPTY_METRICS, failures: [] };
 
   const withHashes = records.map((record) => ({
     externalId: record.externalId,
@@ -98,6 +116,7 @@ export async function projectBatch(
     createdCt: result.createdCt,
     updatedCt: result.updatedCt,
     failedCt: failures.length,
+    failures,
   };
 }
 
@@ -125,11 +144,20 @@ async function projectRowsBatch(
       projected: Record<string, unknown>;
     }> = [];
 
+    const schema = projectionSchemaForFacet(params.type);
     for (const row of upsertRows) {
       try {
         const projected = normalizeVendorRecord(params.provider, params.type, row.payload);
         if (typeof projected.externalId !== "string") {
           throw new Error("Projected row missing externalId");
+        }
+        if (schema) {
+          const parsed = schema.safeParse(projected);
+          if (!parsed.success) {
+            throw new Error(
+              `Projection schema validation failed: ${parsed.error.message}`,
+            );
+          }
         }
         projectedRows.push({
           externalId: projected.externalId,
@@ -137,7 +165,12 @@ async function projectRowsBatch(
           projected,
         });
       } catch (error) {
-        failures.push({ externalId: row.externalId, error });
+        failures.push({
+          externalId: row.externalId,
+          op: "upsert",
+          payload: row.payload,
+          error,
+        });
       }
     }
 
@@ -179,7 +212,12 @@ async function projectRowsIndividually(
         result.updatedCt += up.updatedCt;
       }
     } catch (error) {
-      failures.push({ externalId: row.externalId, error });
+      failures.push({
+        externalId: row.externalId,
+        op: row.op === "delete" ? "delete" : "upsert",
+        payload: row.payload,
+        error,
+      });
     }
   }
 
@@ -279,6 +317,15 @@ async function projectUpsertSingle(
   const registry = tableRegistryFor(params.type);
   const now = new Date().toISOString();
   const projected = normalizeVendorRecord(params.provider, params.type, payload);
+  const schema = projectionSchemaForFacet(params.type);
+  if (schema) {
+    const parsed = schema.safeParse(projected);
+    if (!parsed.success) {
+      throw new Error(
+        `Projection schema validation failed: ${parsed.error.message}`,
+      );
+    }
+  }
   const existing = await findExistingVendorRow(db, registry.table, params.linkId, projected.externalId);
   if (existing?.sourceHash === payloadHash) {
     await touchVendorRow(db, registry.table, existing.id);
@@ -392,6 +439,12 @@ function tableRegistryFor(type: string) {
   const registry = vendorTableRegistry[tableName as keyof typeof vendorTableRegistry];
   if (!registry) throw new Error(`No vendor table registered for ${tableName}`);
   return registry;
+}
+
+function projectionSchemaForFacet(type: string) {
+  const tableName = facetTableMap.get(type as ProviderFacet) as VendorTableName | undefined;
+  if (!tableName) return undefined;
+  return getProjectionSchema(tableName);
 }
 
 function vendorUpsertSetClause(table: unknown): Record<string, unknown> {

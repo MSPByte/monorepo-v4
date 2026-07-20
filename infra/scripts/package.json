@@ -15,6 +15,7 @@
     "@mspbyte/encryption": "*",
     "@mspbyte/logging": "*",
     "@mspbyte/shared": "*",
+    "ingestion": "*",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^1.0.0-beta.22"
   },
