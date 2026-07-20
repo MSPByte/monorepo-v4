@@ -217,27 +217,6 @@
         "typescript": "^5.4.0",
       },
     },
-    "backend/projection": {
-      "name": "projection",
-      "version": "0.0.0",
-      "dependencies": {
-        "@mspbyte/drizzle": "*",
-        "@mspbyte/drizzle-catalog": "*",
-        "@mspbyte/logging": "*",
-        "@mspbyte/pipeline": "*",
-        "@mspbyte/shared": "*",
-        "bullmq": "^5.65.1",
-        "dotenv": "^17.4.2",
-        "drizzle-orm": "^1.0.0-beta.22",
-        "ioredis": "^5.8.2",
-        "zod": "^4.4.3",
-      },
-      "devDependencies": {
-        "@mspbyte/typescript-config": "*",
-        "@types/node": "^25.9.3",
-        "typescript": "^5.4.0",
-      },
-    },
     "packages/connectors": {
       "name": "@mspbyte/connectors",
       "version": "0.0.0",
@@ -1841,8 +1820,6 @@
     "process-nextick-args": ["process-nextick-args@2.0.1", "", {}, "sha512-3ouUOpQhtgrbOa17J7+uxOTpITYWaGP7/AhoR3+A+/1e9skrzelGi/dXzEYyvbxubEF6Wn2ypscTKiKJFFn1ag=="],
 
     "process-warning": ["process-warning@5.0.0", "", {}, "sha512-a39t9ApHNx2L4+HBnQKqxxHNs1r7KF+Intd8Q/g1bUh6q0WIp9voPXJ/x0j+ZL45KF1pJd9+q2jLIRMfvEshkA=="],
-
-    "projection": ["projection@workspace:backend/projection"],
 
     "prop-types": ["prop-types@15.8.1", "", { "dependencies": { "loose-envify": "^1.4.0", "object-assign": "^4.1.1", "react-is": "^16.13.1" } }, "sha512-oj87CgZICdulUohogVAR7AjlC0327U4el4L6eAvOqCeudMDVU0NThNaV+b9Df4dXgSP1gXMTnPdhfe/2qDH5cg=="],
 

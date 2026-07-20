@@ -8,45 +8,46 @@ import {
   pipelineJobPriority,
   QUEUES,
   type IngestionJobData,
-  type ProjectionJobData,
+  type NormalizeJobData,
 } from "@mspbyte/pipeline";
 import { env, requireEncryptionKey } from "../env.js";
 import { logger } from "../logger.js";
 import type { RedisConnection } from "../redis.js";
 import { getAdapter } from "../adapters/registry.js";
 import {
+  completeRun,
   completeStage,
-  createRawBatch,
   failRun,
   failStage,
-  insertRawRecords,
-  markRunIngested,
   recordFetchFailure,
   recordFetchSuccess,
   startStage,
 } from "../db/stages.js";
+import { projectBatch } from "../db/project.js";
+import { projectionSteps } from "../contracts/registry.js";
+import { runProjectionSteps } from "../contracts/runner.js";
 import { serializeError } from "../errors.js";
 
 export function createIngestionWorker(
   redis: RedisConnection,
   queueName: string,
 ): Worker {
-  const projectionQueues = new Map<
+  const normalizeQueues = new Map<
     string,
-    Queue<ProjectionJobData, unknown, string>
+    Queue<NormalizeJobData, unknown, string>
   >();
 
-  function getProjectionQueue(
+  function getNormalizeQueue(
     orgId: string,
-  ): Queue<ProjectionJobData, unknown, string> {
-    const name = orgQueueName(QUEUES.PROJECT, orgId);
-    const existing = projectionQueues.get(name);
+  ): Queue<NormalizeJobData, unknown, string> {
+    const name = orgQueueName(QUEUES.NORMALIZE, orgId);
+    const existing = normalizeQueues.get(name);
     if (existing) return existing;
 
-    const queue = new Queue<ProjectionJobData, unknown, string>(name, {
+    const queue = new Queue<NormalizeJobData, unknown, string>(name, {
       connection: redis as never,
     });
-    projectionQueues.set(name, queue);
+    normalizeQueues.set(name, queue);
     return queue;
   }
 
@@ -63,9 +64,16 @@ export function createIngestionWorker(
 
       const db = tenant.db;
       const bullmqJobId = String(job.id ?? data.syncRunId);
-      let stageId: string | undefined;
+      let ingestStageId: string | undefined;
+      let projectStageId: string | undefined;
       let batchIndex = 0;
-      let recordCount = 0;
+      let recordsIn = 0;
+      const projectTotals = {
+        recordsOut: 0,
+        createdCt: 0,
+        updatedCt: 0,
+        failedCt: 0,
+      };
       let nextCursor: string | undefined;
 
       logger.info("Ingestion job started", {
@@ -98,12 +106,19 @@ export function createIngestionWorker(
       }
 
       try {
-        stageId = await startStage(db, {
+        ingestStageId = await startStage(db, {
           syncRunId: data.syncRunId,
           integrationId: data.integrationId,
           bullmqJobId,
           type: data.type,
           stage: "ingest",
+        });
+        projectStageId = await startStage(db, {
+          syncRunId: data.syncRunId,
+          integrationId: data.integrationId,
+          bullmqJobId,
+          type: data.type,
+          stage: "project",
         });
 
         const pages = adapter.fetch(data.type, data.mode, data.cursor, {
@@ -126,35 +141,8 @@ export function createIngestionWorker(
           const batches = chunk(page.records, env.RAW_BATCH_SIZE);
 
           for (const records of batches) {
-            const rawBatchId = await createRawBatch(db, {
-              syncRunId: data.syncRunId,
-              linkId: data.linkId,
-              siteId: data.siteId,
-              provider: data.provider,
-              type: data.type,
-              mode: data.mode,
-              batchIndex,
-              recordCount: records.length,
-              cursorIn: page.cursorIn,
-              cursorOut: page.cursorOut,
-            });
-
-            await insertRawRecords(db, {
-              rawBatchId,
-              syncRunId: data.syncRunId,
-              linkId: data.linkId,
-              siteId: data.siteId,
-              provider: data.provider,
-              type: data.type,
-              records,
-            });
-
-            const projectQueue = getProjectionQueue(data.orgId);
-            await projectQueue.add(
-              assertBullMqName(
-                `project_${data.provider}_${data.type}_${data.syncRunId}_${batchIndex}`,
-                "BullMQ job name",
-              ),
+            const metrics = await projectBatch(
+              db,
               {
                 orgId: data.orgId,
                 linkId: data.linkId,
@@ -162,30 +150,51 @@ export function createIngestionWorker(
                 provider: data.provider,
                 type: data.type,
                 syncRunId: data.syncRunId,
-                rawBatchId,
               },
-              {
-                jobId: assertBullMqName(
-                  `project_${rawBatchId}`,
-                  "BullMQ job id",
-                ),
-                attempts: 3,
-                backoff: { type: "exponential", delay: 5_000 },
-                priority: pipelineJobPriority(data.provider),
-                removeOnComplete: 100,
-                removeOnFail: 500,
-              },
+              records,
             );
 
-            recordCount += records.length;
+            recordsIn += metrics.recordsIn;
+            projectTotals.recordsOut += metrics.recordsOut;
+            projectTotals.createdCt += metrics.createdCt;
+            projectTotals.updatedCt += metrics.updatedCt;
+            projectTotals.failedCt += metrics.failedCt;
             batchIndex++;
           }
         }
 
-        await completeStage(db, stageId, {
-          recordsOut: recordCount,
+        await completeStage(db, ingestStageId, {
+          recordsOut: recordsIn,
           metrics: { batches: batchIndex, nextCursor },
         });
+        ingestStageId = undefined;
+
+        await completeStage(db, projectStageId, {
+          recordsIn,
+          recordsOut: projectTotals.recordsOut,
+          createdCt: projectTotals.createdCt,
+          updatedCt: projectTotals.updatedCt,
+          failedCt: projectTotals.failedCt,
+        });
+        projectStageId = undefined;
+
+        // Post-project contract steps (linkers/enrichers). Run once per facet
+        // after all batches are projected, same trigger as the old projection
+        // worker's runStatus === "completed" branch.
+        await runProjectionSteps(
+          {
+            db,
+            orgId: data.orgId,
+            linkId: data.linkId,
+            provider: data.provider,
+            type: data.type,
+            syncRunId: data.syncRunId,
+            rawBatchId: bullmqJobId,
+          },
+          projectionSteps,
+          bullmqJobId,
+        );
+
         await recordFetchSuccess(db, {
           linkId: data.linkId,
           integrationId: data.integrationId,
@@ -193,7 +202,9 @@ export function createIngestionWorker(
           mode: data.mode,
           cursor: nextCursor,
         });
-        await markRunIngested(db, data.syncRunId);
+        await completeRun(db, data.syncRunId);
+
+        await enqueueNormalizeJob(getNormalizeQueue(data.orgId), data);
 
         logger.info("Ingestion job completed", {
           orgId: data.orgId,
@@ -201,11 +212,13 @@ export function createIngestionWorker(
           provider: data.provider,
           type: data.type,
           syncRunId: data.syncRunId,
-          records: recordCount,
+          recordsIn,
+          projected: projectTotals,
           batches: batchIndex,
         });
       } catch (error) {
-        if (stageId) await failStage(db, stageId, error);
+        if (projectStageId) await failStage(db, projectStageId, error);
+        if (ingestStageId) await failStage(db, ingestStageId, error);
         await recordFetchFailure(db, {
           linkId: data.linkId,
           integrationId: data.integrationId,
@@ -229,6 +242,35 @@ export function createIngestionWorker(
     {
       connection: redis as never,
       concurrency: env.WORKER_CONCURRENCY,
+    },
+  );
+}
+
+async function enqueueNormalizeJob(
+  queue: Queue<NormalizeJobData, unknown, string>,
+  data: IngestionJobData,
+): Promise<void> {
+  const jobId = assertBullMqName(
+    `normalize_${data.syncRunId}_${data.type}`,
+    "BullMQ job id",
+  );
+  await queue.add(
+    "normalize",
+    {
+      orgId: data.orgId,
+      linkId: data.linkId,
+      siteId: data.siteId,
+      provider: data.provider,
+      type: data.type,
+      syncRunId: data.syncRunId,
+    },
+    {
+      jobId,
+      attempts: 3,
+      backoff: { type: "exponential", delay: 5_000 },
+      priority: pipelineJobPriority(data.provider),
+      removeOnComplete: 1_000,
+      removeOnFail: 5_000,
     },
   );
 }

@@ -1,14 +1,7 @@
 import { and, eq } from "drizzle-orm";
-import {
-  rawBatches,
-  rawRecords,
-  syncContext,
-  syncRuns,
-  syncRunStages,
-} from "@mspbyte/drizzle";
-import type { RawRecordEnvelope, SyncMode } from "@mspbyte/pipeline";
+import { syncContext, syncRuns, syncRunStages } from "@mspbyte/drizzle";
+import type { SyncMode } from "@mspbyte/pipeline";
 import { sql } from "drizzle-orm";
-import { stablePayloadHash } from "./hash.js";
 
 type Db = any;
 
@@ -87,112 +80,11 @@ export async function completeRun(db: Db, syncRunId: string): Promise<void> {
     .where(eq(syncRuns.id, syncRunId));
 }
 
-export async function markRunIngested(db: Db, syncRunId: string): Promise<void> {
-  await db.update(syncRuns).set({ status: "ingested" }).where(eq(syncRuns.id, syncRunId));
-}
-
 export async function failRun(db: Db, syncRunId: string, _error: unknown): Promise<void> {
   await db
     .update(syncRuns)
     .set({ status: "failed", finishedAt: new Date().toISOString() })
     .where(eq(syncRuns.id, syncRunId));
-}
-
-export async function createRawBatch(
-  db: Db,
-  params: {
-    syncRunId: string;
-    linkId: string;
-    siteId?: string;
-    provider: string;
-    type: string;
-    mode: SyncMode;
-    batchIndex: number;
-    recordCount: number;
-    cursorIn?: string;
-    cursorOut?: string;
-  },
-): Promise<string> {
-  const [row] = await db
-    .insert(rawBatches)
-    .values({
-      syncRunId: params.syncRunId,
-      linkId: params.linkId,
-      siteId: params.siteId,
-      provider: params.provider,
-      type: params.type,
-      mode: params.mode,
-      batchIndex: params.batchIndex,
-      recordCount: params.recordCount,
-      cursorIn: params.cursorIn,
-      cursorOut: params.cursorOut,
-      status: "pending",
-      projectionError: null,
-    })
-    .onConflictDoUpdate({
-      target: [rawBatches.syncRunId, rawBatches.linkId, rawBatches.type, rawBatches.batchIndex],
-      set: {
-        mode: params.mode,
-        recordCount: params.recordCount,
-        cursorIn: params.cursorIn ?? null,
-        cursorOut: params.cursorOut ?? null,
-        status: "pending",
-        projectionError: null,
-      },
-    })
-    .returning({ id: rawBatches.id });
-
-  return row.id;
-}
-
-export async function insertRawRecords(
-  db: Db,
-  params: {
-    rawBatchId: string;
-    syncRunId: string;
-    linkId: string;
-    siteId?: string;
-    provider: string;
-    type: string;
-    records: Array<RawRecordEnvelope>;
-  },
-): Promise<void> {
-  if (params.records.length === 0) return;
-
-  const rows = params.records.map((record) => {
-    const payload = record.payload ?? {};
-
-    return {
-      rawBatchId: params.rawBatchId,
-      syncRunId: params.syncRunId,
-      linkId: params.linkId,
-      siteId: params.siteId,
-      provider: params.provider,
-      type: params.type,
-      externalId: record.externalId,
-      op: record.op ?? "upsert",
-      schemaVersion: record.schemaVersion ?? "1",
-      payloadHash: stablePayloadHash(payload),
-      payload,
-      projectionStatus: "pending",
-      projectionError: null,
-    };
-  });
-
-  await db
-    .insert(rawRecords)
-    .values(rows)
-    .onConflictDoUpdate({
-      target: [rawRecords.rawBatchId, rawRecords.externalId],
-      set: {
-        op: sql`excluded.op`,
-        schemaVersion: sql`excluded.schema_version`,
-        payloadHash: sql`excluded.payload_hash`,
-        payload: sql`excluded.payload`,
-        projectionStatus: "pending",
-        projectionError: null,
-      },
-    });
 }
 
 export async function recordFetchSuccess(

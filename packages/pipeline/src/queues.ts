@@ -1,7 +1,6 @@
 export const QUEUES = {
   INGEST: "ingest",
   NORMALIZE: "normalize",
-  PROJECT: "project",
   POLICY: "policy",
 } as const;
 

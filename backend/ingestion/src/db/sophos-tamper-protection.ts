@@ -1,7 +1,7 @@
 import { and, eq, getColumns, sql } from "drizzle-orm";
 import { sophosTamperProtection } from "@mspbyte/drizzle";
 import { ProviderFacet } from "@mspbyte/shared";
-import { normalizeVendorRecord } from "../normalizers/index.js";
+import { normalizeVendorRecord } from "../adapters/normalize.js";
 
 type Db = any;
 
