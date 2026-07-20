@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 import { and, count, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import {
   billingPsaItems,
+  billingReconciliationRuleScopes,
   billingReconciliationRules,
   integrationLinks,
   siteGroupMembers,
@@ -46,11 +47,26 @@ const supportedProviders = Array.from(new Set(listBillingFacets().map((f) => f.p
   ...string[]
 ];
 
+const scopeInputSchema = z
+  .object({
+    mode: z.enum(['include', 'exclude']),
+    targetType: z.enum(['site', 'site_group', 'all']),
+    siteId: z.uuid().nullable().optional(),
+    siteGroupId: z.uuid().nullable().optional()
+  })
+  .refine(
+    (s) =>
+      (s.targetType === 'site' && !!s.siteId) ||
+      (s.targetType === 'site_group' && !!s.siteGroupId) ||
+      s.targetType === 'all',
+    { message: 'Scope target id must match target type' }
+  );
+
 const upsertRuleSchema = z.object({
   id: z.uuid().optional(),
   name: z.string().min(1),
   enabled: z.boolean().default(true),
-  siteId: z.uuid().nullable().optional(),
+  scopes: z.array(scopeInputSchema).default([]),
   psaItemMatch: psaItemMatchSchema,
   vendorProvider: z.enum(supportedProviders),
   vendorFacet: z.enum(supportedFacets),
@@ -65,9 +81,54 @@ const reportInputSchema = tableDataInputSchema.extend({
 
 type PsaItem = typeof billingPsaItems.$inferSelect;
 type Rule = typeof billingReconciliationRules.$inferSelect;
+type RuleScope = typeof billingReconciliationRuleScopes.$inferSelect;
 type PsaItemMatch = z.infer<typeof psaItemMatchSchema>;
 type VendorFilter = z.infer<typeof vendorFilterSchema>;
+type ScopeInput = z.infer<typeof scopeInputSchema>;
 type ReportInput = z.infer<typeof reportInputSchema>;
+
+type RuleWithScopes = Rule & { scopes: RuleScope[] };
+
+/**
+ * Resolve a rule's include/exclude scope rows to a concrete Set of site ids.
+ * `null` means "unscoped — matches every site" (used when a rule has no
+ * scope rows at all as a safety net).
+ */
+function resolveEffectiveSites(
+  scopes: Array<{
+    mode: 'include' | 'exclude';
+    targetType: 'site' | 'site_group' | 'all';
+    siteId?: string | null;
+    siteGroupId?: string | null;
+  }>,
+  allSiteIds: Set<string>,
+  siteIdsByGroup: Map<string, string[]>
+): Set<string> | null {
+  if (!scopes.length) return null;
+
+  const included = new Set<string>();
+  const excluded = new Set<string>();
+  let sawAnyInclude = false;
+
+  for (const scope of scopes) {
+    const target =
+      scope.mode === 'include' ? included : excluded;
+    if (scope.mode === 'include') sawAnyInclude = true;
+    if (scope.targetType === 'all') {
+      for (const id of allSiteIds) target.add(id);
+    } else if (scope.targetType === 'site' && scope.siteId) {
+      target.add(scope.siteId);
+    } else if (scope.targetType === 'site_group' && scope.siteGroupId) {
+      const members = siteIdsByGroup.get(scope.siteGroupId) ?? [];
+      for (const id of members) target.add(id);
+    }
+  }
+
+  if (!sawAnyInclude) return new Set();
+
+  for (const id of excluded) included.delete(id);
+  return included;
+}
 
 type ReconciliationRow = {
   siteId: string | null;
@@ -200,24 +261,41 @@ async function loadFacetCountsBySite(
 }
 
 async function buildReport(db: any, input: ReportInput): Promise<BillingReportOutput> {
-  const [items, rules, siteRows, groupMemberRows] = await Promise.all([
-    db.select().from(billingPsaItems).where(isNull(billingPsaItems.deletedAt)),
-    db
-      .select()
-      .from(billingReconciliationRules)
-      .where(eq(billingReconciliationRules.enabled, true)),
-    db.select().from(sites),
-    input.scopeSiteGroupId
-      ? db
-          .select({ siteId: siteGroupMembers.siteId })
-          .from(siteGroupMembers)
-          .where(eq(siteGroupMembers.siteGroupId, input.scopeSiteGroupId))
-      : Promise.resolve([] as { siteId: string }[])
-  ]);
+  const [items, rules, ruleScopes, siteRows, allGroupMemberRows, groupMemberRows] =
+    await Promise.all([
+      db.select().from(billingPsaItems).where(isNull(billingPsaItems.deletedAt)),
+      db
+        .select()
+        .from(billingReconciliationRules)
+        .where(eq(billingReconciliationRules.enabled, true)),
+      db.select().from(billingReconciliationRuleScopes),
+      db.select().from(sites),
+      db.select().from(siteGroupMembers),
+      input.scopeSiteGroupId
+        ? db
+            .select({ siteId: siteGroupMembers.siteId })
+            .from(siteGroupMembers)
+            .where(eq(siteGroupMembers.siteGroupId, input.scopeSiteGroupId))
+        : Promise.resolve([] as { siteId: string }[])
+    ]);
 
   const siteNames = new Map<string, string>(
     (siteRows as (typeof sites.$inferSelect)[]).map((site) => [site.id, site.name])
   );
+  const allSiteIds = new Set<string>(siteNames.keys());
+  const siteIdsByGroup = new Map<string, string[]>();
+  for (const row of allGroupMemberRows as { siteGroupId: string; siteId: string }[]) {
+    const list = siteIdsByGroup.get(row.siteGroupId) ?? [];
+    list.push(row.siteId);
+    siteIdsByGroup.set(row.siteGroupId, list);
+  }
+
+  const scopesByRule = new Map<string, RuleScope[]>();
+  for (const scope of ruleScopes as RuleScope[]) {
+    const list = scopesByRule.get(scope.ruleId) ?? [];
+    list.push(scope);
+    scopesByRule.set(scope.ruleId, list);
+  }
 
   const ruleList = rules as Rule[];
   const psaItems = items as PsaItem[];
@@ -244,49 +322,40 @@ async function buildReport(db: any, input: ReportInput): Promise<BillingReportOu
     const facetLabel = getBillingFacetLabel(rule.vendorFacet);
     const filters = parseVendorFilters(rule.vendorFilters);
     const countsBySite = ruleCounts.get(rule.id) ?? new Map<string, number>();
+    const effective = resolveEffectiveSites(
+      scopesByRule.get(rule.id) ?? [],
+      allSiteIds,
+      siteIdsByGroup
+    );
 
-    const candidateItems = psaItems.filter((item) => {
-      if (rule.siteId && item.siteId !== rule.siteId) return false;
-      return matchesPsaItem(item, match);
-    });
+    // Every site currently in scope for this rule — we emit one row per
+    // effective site, even when no PSA line matches (that becomes missing_psa_line).
+    const scopedSiteIds = effective ?? allSiteIds;
+    const inScope = (siteId: string | null) =>
+      effective === null ? true : siteId != null && effective.has(siteId);
 
-    if (!candidateItems.length) {
-      const siteId = rule.siteId ?? null;
-      const actualQuantity = countsBySite.get(siteId ?? '') ?? 0;
-      rows.push({
-        siteId,
-        siteName: siteId ? (siteNames.get(siteId) ?? 'Unknown site') : 'All sites',
-        psaItemId: null,
-        psaItemName: 'No matching PSA item',
-        ruleId: rule.id,
-        ruleName: rule.name,
-        vendorProvider: rule.vendorProvider,
-        vendorFacet: rule.vendorFacet,
-        vendorFacetLabel: facetLabel,
-        billedQuantity: 0,
-        actualQuantity,
-        diffQuantity: actualQuantity,
-        unitPrice: 0,
-        monthlyDelta: 0,
-        status: 'missing_psa_line',
-        evidence: { psaMatch: match, vendorFilters: filters }
-      });
-      continue;
+    // Group PSA line matches by their site to attribute to each in-scope site.
+    const itemsBySite = new Map<string | null, PsaItem[]>();
+    for (const item of psaItems) {
+      if (!matchesPsaItem(item, match)) continue;
+      if (!inScope(item.siteId)) continue;
+      const key = item.siteId ?? null;
+      const list = itemsBySite.get(key) ?? [];
+      list.push(item);
+      itemsBySite.set(key, list);
     }
 
-    for (const item of candidateItems) {
+    // Unmapped PSA rows (siteId null) — only surface when scope allows global.
+    const unmappedItems = effective === null ? (itemsBySite.get(null) ?? []) : [];
+    for (const item of unmappedItems) {
       matchedPsaItemIds.add(item.id);
-      const siteId = item.siteId ?? rule.siteId ?? null;
-      const actualQuantity = countsBySite.get(siteId ?? '') ?? 0;
+      const actualQuantity = countsBySite.get('') ?? 0;
       const billedQuantity = item.quantity;
       const diffQuantity = actualQuantity - billedQuantity;
       const unitPrice = numberValue(item.unitPrice);
-
       rows.push({
-        siteId,
-        siteName: siteId
-          ? (siteNames.get(siteId) ?? item.customerName ?? 'Unknown site')
-          : 'Unmapped',
+        siteId: null,
+        siteName: item.customerName ?? 'Unmapped',
         psaItemId: item.id,
         psaItemName: item.itemName,
         ruleId: rule.id,
@@ -302,6 +371,63 @@ async function buildReport(db: any, input: ReportInput): Promise<BillingReportOu
         status: ruleStatus(billedQuantity, actualQuantity),
         evidence: { psaMatch: match, vendorFilters: filters }
       });
+    }
+
+    for (const siteId of scopedSiteIds) {
+      const siteItems = itemsBySite.get(siteId) ?? [];
+      const actualQuantity = countsBySite.get(siteId) ?? 0;
+
+      if (!siteItems.length) {
+        // Only emit missing_psa_line rows for sites that actually have vendor
+        // activity — a rule scoped to 40 sites where only 12 have Sophos
+        // installed shouldn't produce 28 noise rows.
+        if (actualQuantity === 0) continue;
+        rows.push({
+          siteId,
+          siteName: siteNames.get(siteId) ?? 'Unknown site',
+          psaItemId: null,
+          psaItemName: 'No matching PSA item',
+          ruleId: rule.id,
+          ruleName: rule.name,
+          vendorProvider: rule.vendorProvider,
+          vendorFacet: rule.vendorFacet,
+          vendorFacetLabel: facetLabel,
+          billedQuantity: 0,
+          actualQuantity,
+          diffQuantity: actualQuantity,
+          unitPrice: 0,
+          monthlyDelta: 0,
+          status: 'missing_psa_line',
+          evidence: { psaMatch: match, vendorFilters: filters }
+        });
+        continue;
+      }
+
+      for (const item of siteItems) {
+        matchedPsaItemIds.add(item.id);
+        const billedQuantity = item.quantity;
+        const diffQuantity = actualQuantity - billedQuantity;
+        const unitPrice = numberValue(item.unitPrice);
+
+        rows.push({
+          siteId,
+          siteName: siteNames.get(siteId) ?? item.customerName ?? 'Unknown site',
+          psaItemId: item.id,
+          psaItemName: item.itemName,
+          ruleId: rule.id,
+          ruleName: rule.name,
+          vendorProvider: rule.vendorProvider,
+          vendorFacet: rule.vendorFacet,
+          vendorFacetLabel: facetLabel,
+          billedQuantity,
+          actualQuantity,
+          diffQuantity,
+          unitPrice,
+          monthlyDelta: diffQuantity * unitPrice,
+          status: ruleStatus(billedQuantity, actualQuantity),
+          evidence: { psaMatch: match, vendorFilters: filters }
+        });
+      }
     }
   }
 
@@ -535,16 +661,35 @@ async function previewRule(
   unitPrice: number;
   monthlyDelta: number;
   facetLabel: string | null;
+  effectiveSiteCount: number | null;
+  matchedItemCount: number;
 }> {
   const facetLabel = isSupportedFacet(input.vendorFacet)
     ? getBillingFacetLabel(input.vendorFacet)
     : null;
-  const allItems = await db.select().from(billingPsaItems).where(isNull(billingPsaItems.deletedAt));
-  const matchedItem =
-    (allItems as PsaItem[]).find((psaItem) => {
-      if (input.siteId && psaItem.siteId !== input.siteId) return false;
-      return matchesPsaItem(psaItem, input.psaItemMatch);
-    }) ?? null;
+
+  const [allItems, siteRows, memberRows] = await Promise.all([
+    db.select().from(billingPsaItems).where(isNull(billingPsaItems.deletedAt)),
+    db.select({ id: sites.id }).from(sites),
+    db.select().from(siteGroupMembers)
+  ]);
+
+  const allSiteIds = new Set<string>((siteRows as { id: string }[]).map((r) => r.id));
+  const siteIdsByGroup = new Map<string, string[]>();
+  for (const row of memberRows as { siteGroupId: string; siteId: string }[]) {
+    const list = siteIdsByGroup.get(row.siteGroupId) ?? [];
+    list.push(row.siteId);
+    siteIdsByGroup.set(row.siteGroupId, list);
+  }
+  const effective = resolveEffectiveSites(input.scopes, allSiteIds, siteIdsByGroup);
+  const inScope = (siteId: string | null) =>
+    effective === null ? true : siteId != null && effective.has(siteId);
+
+  const candidateItems = (allItems as PsaItem[]).filter((psaItem) => {
+    if (!matchesPsaItem(psaItem, input.psaItemMatch)) return false;
+    return inScope(psaItem.siteId);
+  });
+  const matchedItem = candidateItems[0] ?? null;
 
   if (!isSupportedFacet(input.vendorFacet)) {
     return {
@@ -554,11 +699,13 @@ async function previewRule(
       diffQuantity: -(matchedItem?.quantity ?? 0),
       unitPrice: numberValue(matchedItem?.unitPrice ?? 0),
       monthlyDelta: 0,
-      facetLabel
+      facetLabel,
+      effectiveSiteCount: effective === null ? null : effective.size,
+      matchedItemCount: candidateItems.length
     };
   }
 
-  const siteId = matchedItem?.siteId ?? input.siteId ?? null;
+  const siteId = matchedItem?.siteId ?? null;
   const countsBySite = await loadFacetCountsBySite(db, input.vendorFacet, input.vendorFilters);
   const actualQuantity = countsBySite.get(siteId ?? '') ?? 0;
 
@@ -572,7 +719,9 @@ async function previewRule(
     diffQuantity: actualQuantity - billedQuantity,
     unitPrice,
     monthlyDelta: (actualQuantity - billedQuantity) * unitPrice,
-    facetLabel
+    facetLabel,
+    effectiveSiteCount: effective === null ? null : effective.size,
+    matchedItemCount: candidateItems.length
   };
 }
 
@@ -584,10 +733,23 @@ export const billingRouter = t.router({
   }),
 
   rules: authProcedure.query(async ({ ctx }) => {
-    return ctx.db
-      .select()
-      .from(billingReconciliationRules)
-      .orderBy(billingReconciliationRules.name);
+    const [ruleRows, scopeRows] = await Promise.all([
+      ctx.db
+        .select()
+        .from(billingReconciliationRules)
+        .orderBy(billingReconciliationRules.name),
+      ctx.db.select().from(billingReconciliationRuleScopes)
+    ]);
+    const scopesByRule = new Map<string, RuleScope[]>();
+    for (const scope of scopeRows as RuleScope[]) {
+      const list = scopesByRule.get(scope.ruleId) ?? [];
+      list.push(scope);
+      scopesByRule.set(scope.ruleId, list);
+    }
+    return (ruleRows as Rule[]).map<RuleWithScopes>((rule) => ({
+      ...rule,
+      scopes: scopesByRule.get(rule.id) ?? []
+    }));
   }),
 
   facets: authProcedure.query(async () => {
@@ -604,7 +766,6 @@ export const billingRouter = t.router({
     const values = {
       name: input.name,
       enabled: input.enabled,
-      siteId: input.siteId ?? null,
       psaItemMatch: input.psaItemMatch,
       vendorProvider: input.vendorProvider,
       vendorFacet: input.vendorFacet,
@@ -622,6 +783,25 @@ export const billingRouter = t.router({
       : await ctx.db.insert(billingReconciliationRules).values(values).returning();
 
     if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
+
+    if (input.id) {
+      await ctx.db
+        .delete(billingReconciliationRuleScopes)
+        .where(eq(billingReconciliationRuleScopes.ruleId, input.id));
+    }
+    if (input.scopes.length) {
+      await ctx.db.insert(billingReconciliationRuleScopes).values(
+        input.scopes.map((scope: ScopeInput) => ({
+          ruleId: row.id,
+          mode: scope.mode,
+          targetType: scope.targetType,
+          siteId: scope.targetType === 'site' ? (scope.siteId ?? null) : null,
+          siteGroupId:
+            scope.targetType === 'site_group' ? (scope.siteGroupId ?? null) : null
+        }))
+      );
+    }
+
     return row;
   }),
 

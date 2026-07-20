@@ -99,6 +99,41 @@
   );
 
   const siteNameById = $derived(new Map(sites.map((site) => [site.id, site.name])));
+  const siteGroupNameById = $derived(new Map(siteGroups.map((group) => [group.id, group.name])));
+
+  type RuleScope = {
+    mode: 'include' | 'exclude';
+    targetType: 'site' | 'site_group' | 'all';
+    siteId?: string | null;
+    siteGroupId?: string | null;
+  };
+
+  function summarizeScopes(scopes: RuleScope[]): string {
+    if (!scopes.length) return 'Unscoped';
+    const includes = scopes.filter((s) => s.mode === 'include');
+    const excludes = scopes.filter((s) => s.mode === 'exclude');
+    const parts: string[] = [];
+    if (includes.some((s) => s.targetType === 'all')) {
+      parts.push('All sites');
+    } else {
+      const sitesIncluded = includes.filter((s) => s.targetType === 'site');
+      const groupsIncluded = includes.filter((s) => s.targetType === 'site_group');
+      if (sitesIncluded.length === 1 && sitesIncluded[0].siteId) {
+        parts.push(siteNameById.get(sitesIncluded[0].siteId) ?? '1 site');
+      } else if (sitesIncluded.length) {
+        parts.push(`${sitesIncluded.length} sites`);
+      }
+      if (groupsIncluded.length === 1 && groupsIncluded[0].siteGroupId) {
+        parts.push(`group: ${siteGroupNameById.get(groupsIncluded[0].siteGroupId) ?? '?'}`);
+      } else if (groupsIncluded.length) {
+        parts.push(`${groupsIncluded.length} groups`);
+      }
+    }
+    if (excludes.length) {
+      parts.push(`−${excludes.length} excluded`);
+    }
+    return parts.join(' · ') || 'No scope';
+  }
 
   // Bump refreshKey so DataTable re-runs fetchData when scope changes.
   $effect(() => {
@@ -303,11 +338,12 @@
     {
       id: 'actionable',
       label: 'Actionable',
-      description: 'Everything except matched rows and PSA lines without a rule',
+      description: 'Underbilled and overbilled rows — the ones with recoverable MRR',
       isDefault: true,
       filters: [
         { field: 'status', operator: 'neq', value: 'matched' },
         { field: 'status', operator: 'neq', value: 'missing_rule' },
+        { field: 'status', operator: 'neq', value: 'missing_psa_line' },
       ],
       sort: { field: 'monthlyDelta', dir: 'desc' },
     },
@@ -499,7 +535,7 @@
   </span>
 {/snippet}
 
-<RuleEditorSheet bind:open={sheetOpen} {editingRule} {sites} />
+<RuleEditorSheet bind:open={sheetOpen} {editingRule} {sites} {siteGroups} />
 
 <div class="flex size-full flex-col overflow-hidden">
   <div class="flex flex-col gap-5 border-b p-6 pb-4">
@@ -790,9 +826,7 @@
                 {#each filteredRules as rule (rule.id)}
                   <RuleCard
                     rule={rule as any}
-                    siteName={rule.siteId
-                      ? (siteNameById.get(rule.siteId) ?? 'Unknown site')
-                      : 'Any site matched by PSA row'}
+                    scopeSummary={summarizeScopes(rule.scopes ?? [])}
                     facetLabel={facetLabelById.get(rule.vendorFacet) ?? rule.vendorFacet}
                     matchedRows={matchedRowsByRule.get(rule.id) ?? 0}
                     mrrDelta={mrrDeltaByRule.get(rule.id) ?? 0}

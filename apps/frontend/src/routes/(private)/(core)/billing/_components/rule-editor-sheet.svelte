@@ -12,6 +12,7 @@
   import { Switch } from '$lib/components/ui/switch';
   import { Separator } from '$lib/components/ui/separator';
   import SingleSelect from '$lib/components/single-select.svelte';
+  import MultiSelect from '$lib/components/multi-select.svelte';
   import Loader from '$lib/components/transition/loader.svelte';
   import Plus from '@lucide/svelte/icons/plus';
   import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -44,11 +45,20 @@
     value?: string;
   };
 
+  type ScopeMode = 'include' | 'exclude';
+  type ScopeTarget = 'site' | 'site_group' | 'all';
+  type ScopeInput = {
+    mode: ScopeMode;
+    targetType: ScopeTarget;
+    siteId?: string | null;
+    siteGroupId?: string | null;
+  };
+
   type RuleInput = {
     id?: string;
     name: string;
     enabled: boolean;
-    siteId?: string | null;
+    scopes: ScopeInput[];
     psaItemMatch: {
       field: PsaField;
       operator: PsaOperator;
@@ -65,15 +75,19 @@
   };
 
   type SiteOption = { id: string; name: string };
+  type SiteGroupOption = { id: string; name: string; siteIds?: string[] };
+  type EditingRule = Omit<RuleInput, 'scopes'> & { scopes?: ScopeInput[] };
 
   let {
     open = $bindable(),
     editingRule,
     sites: siteList,
+    siteGroups: siteGroupList,
   }: {
     open: boolean;
-    editingRule: RuleInput | null;
+    editingRule: EditingRule | null;
     sites: SiteOption[];
+    siteGroups: SiteGroupOption[];
   } = $props();
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
@@ -91,7 +105,11 @@
 
   let name = $state('');
   let enabled = $state(true);
-  let siteId = $state<string>('');
+  let includeAll = $state(true);
+  let includeSiteIds = $state<string[]>([]);
+  let includeGroupIds = $state<string[]>([]);
+  let excludeSiteIds = $state<string[]>([]);
+  let excludeGroupIds = $state<string[]>([]);
   let psaField = $state<PsaField>('itemName');
   let psaOperator = $state<PsaOperator>('contains');
   let psaValue = $state('');
@@ -143,10 +161,15 @@
     { value: 'true', label: 'true' },
     { value: 'false', label: 'false' },
   ];
-  const siteScopeOptions = $derived([
-    { value: '', label: 'Any site matched by PSA row' },
-    ...siteList.map((site) => ({ value: site.id, label: site.name })),
-  ]);
+  const siteOptions = $derived(
+    siteList.map((site) => ({ value: site.id, label: site.name })),
+  );
+  const groupOptions = $derived(
+    siteGroupList.map((group) => ({
+      value: group.id,
+      label: `${group.name}${group.siteIds ? ` (${group.siteIds.length})` : ''}`,
+    })),
+  );
 
   function makeFilterId() {
     return Math.random().toString(36).slice(2);
@@ -183,12 +206,34 @@
     }));
   }
 
-  function seedFromRule(rule: RuleInput | null, facets: FacetConfig[]) {
+  function applyScopes(scopes: ScopeInput[] | undefined) {
+    includeAll = false;
+    includeSiteIds = [];
+    includeGroupIds = [];
+    excludeSiteIds = [];
+    excludeGroupIds = [];
+    for (const scope of scopes ?? []) {
+      if (scope.mode === 'include') {
+        if (scope.targetType === 'all') includeAll = true;
+        else if (scope.targetType === 'site' && scope.siteId)
+          includeSiteIds = [...includeSiteIds, scope.siteId];
+        else if (scope.targetType === 'site_group' && scope.siteGroupId)
+          includeGroupIds = [...includeGroupIds, scope.siteGroupId];
+      } else {
+        if (scope.targetType === 'site' && scope.siteId)
+          excludeSiteIds = [...excludeSiteIds, scope.siteId];
+        else if (scope.targetType === 'site_group' && scope.siteGroupId)
+          excludeGroupIds = [...excludeGroupIds, scope.siteGroupId];
+      }
+    }
+  }
+
+  function seedFromRule(rule: EditingRule | null, facets: FacetConfig[]) {
     if (rule) {
       editingId = rule.id;
       name = rule.name;
       enabled = rule.enabled;
-      siteId = rule.siteId ?? '';
+      applyScopes(rule.scopes);
       psaField = rule.psaItemMatch.field;
       psaOperator = rule.psaItemMatch.operator;
       psaValue = rule.psaItemMatch.value;
@@ -204,7 +249,11 @@
       editingId = undefined;
       name = '';
       enabled = true;
-      siteId = '';
+      includeAll = true;
+      includeSiteIds = [];
+      includeGroupIds = [];
+      excludeSiteIds = [];
+      excludeGroupIds = [];
       psaField = 'itemName';
       psaOperator = 'contains';
       psaValue = '';
@@ -223,11 +272,39 @@
     openTrack = open;
   });
 
+  const scopeDraft = $derived<ScopeInput[]>([
+    ...(includeAll ? ([{ mode: 'include', targetType: 'all' }] as ScopeInput[]) : []),
+    ...includeSiteIds.map<ScopeInput>((id) => ({
+      mode: 'include',
+      targetType: 'site',
+      siteId: id,
+    })),
+    ...includeGroupIds.map<ScopeInput>((id) => ({
+      mode: 'include',
+      targetType: 'site_group',
+      siteGroupId: id,
+    })),
+    ...excludeSiteIds.map<ScopeInput>((id) => ({
+      mode: 'exclude',
+      targetType: 'site',
+      siteId: id,
+    })),
+    ...excludeGroupIds.map<ScopeInput>((id) => ({
+      mode: 'exclude',
+      targetType: 'site_group',
+      siteGroupId: id,
+    })),
+  ]);
+
+  const hasInclude = $derived(
+    includeAll || includeSiteIds.length > 0 || includeGroupIds.length > 0,
+  );
+
   const ruleDraft = $derived<RuleInput>({
     ...(editingId ? { id: editingId } : {}),
     name: name.trim() || 'Untitled rule',
     enabled,
-    siteId: siteId || null,
+    scopes: scopeDraft,
     psaItemMatch: {
       field: psaField,
       operator: psaOperator,
@@ -246,7 +323,7 @@
   const previewQuery = createQuery(() => ({
     queryKey: ['billing.previewRule', ruleDraft],
     queryFn: () => trpc.billing.previewRule.query(ruleDraft),
-    enabled: psaValue.trim().length > 0 && vendorFacet.length > 0,
+    enabled: psaValue.trim().length > 0 && vendorFacet.length > 0 && hasInclude,
     staleTime: 3_000,
   }));
 
@@ -332,7 +409,10 @@
   }
 
   const canSave = $derived(
-    name.trim().length > 0 && psaValue.trim().length > 0 && vendorFacet.length > 0
+    name.trim().length > 0 &&
+      psaValue.trim().length > 0 &&
+      vendorFacet.length > 0 &&
+      hasInclude,
   );
 </script>
 
@@ -404,18 +484,71 @@
               </div>
             </div>
 
-            <div class="space-y-1.5">
-              <Label>Site scope</Label>
-              <SingleSelect
-                options={siteScopeOptions}
-                bind:selected={siteId}
-                placeholder="Any site matched by PSA row"
-                searchPlaceholder="Search sites…"
-              />
+          </section>
+
+          <Separator />
+
+          <section class="space-y-3">
+            <div>
+              <h3 class="text-sm font-semibold">Site scope</h3>
               <p class="text-xs text-muted-foreground">
-                Leave "Any" to let the PSA row's site drive scope.
+                Effective sites = union of includes, minus union of excludes.
               </p>
             </div>
+
+            <div class="space-y-2 rounded-md border p-3">
+              <div class="flex items-center justify-between">
+                <Label class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Include
+                </Label>
+                <label class="flex items-center gap-2 text-xs">
+                  <Switch bind:checked={includeAll} />
+                  <span>All sites</span>
+                </label>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <MultiSelect
+                  options={siteOptions}
+                  bind:selected={includeSiteIds}
+                  placeholder="Sites…"
+                  searchPlaceholder="Search sites…"
+                  disabled={includeAll}
+                />
+                <MultiSelect
+                  options={groupOptions}
+                  bind:selected={includeGroupIds}
+                  placeholder="Site groups…"
+                  searchPlaceholder="Search groups…"
+                  disabled={includeAll}
+                />
+              </div>
+            </div>
+
+            <div class="space-y-2 rounded-md border p-3">
+              <Label class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Exclude
+              </Label>
+              <div class="grid grid-cols-2 gap-2">
+                <MultiSelect
+                  options={siteOptions}
+                  bind:selected={excludeSiteIds}
+                  placeholder="Sites to exclude…"
+                  searchPlaceholder="Search sites…"
+                />
+                <MultiSelect
+                  options={groupOptions}
+                  bind:selected={excludeGroupIds}
+                  placeholder="Groups to exclude…"
+                  searchPlaceholder="Search groups…"
+                />
+              </div>
+            </div>
+
+            {#if !hasInclude}
+              <p class="text-xs text-amber-600 dark:text-amber-400">
+                Add at least one include target — this rule matches no sites yet.
+              </p>
+            {/if}
           </section>
 
           <Separator />
@@ -606,19 +739,31 @@
                     </div>
                   </div>
                 </div>
-                <div class="mt-3 border-t pt-2 text-xs text-muted-foreground">
+                <div class="mt-3 space-y-1 border-t pt-2 text-xs text-muted-foreground">
+                  <div>
+                    Scope:
+                    <span class="font-medium text-foreground">
+                      {p.effectiveSiteCount == null
+                        ? 'all sites (unscoped)'
+                        : `${p.effectiveSiteCount} site${p.effectiveSiteCount === 1 ? '' : 's'}`}
+                    </span>
+                    · <span class="font-medium text-foreground">{p.matchedItemCount}</span>
+                    matching PSA row{p.matchedItemCount === 1 ? '' : 's'}
+                  </div>
                   {#if p.matchedItem}
-                    Matched PSA row: <span class="font-medium text-foreground"
-                      >{p.matchedItem.itemName}</span
-                    >
-                    {#if p.matchedItem.customerName}
-                      · {p.matchedItem.customerName}
-                    {/if}
-                    {#if p.facetLabel}
-                      · counted against <span class="font-medium text-foreground"
-                        >{p.facetLabel}</span
+                    <div>
+                      Preview row: <span class="font-medium text-foreground"
+                        >{p.matchedItem.itemName}</span
                       >
-                    {/if}
+                      {#if p.matchedItem.customerName}
+                        · {p.matchedItem.customerName}
+                      {/if}
+                      {#if p.facetLabel}
+                        · counted against <span class="font-medium text-foreground"
+                          >{p.facetLabel}</span
+                        >
+                      {/if}
+                    </div>
                   {:else}
                     <span class="text-amber-600 dark:text-amber-400"
                       >No PSA row currently matches this rule.</span

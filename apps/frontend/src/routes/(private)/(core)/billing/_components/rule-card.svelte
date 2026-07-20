@@ -11,11 +11,18 @@
     value?: string | boolean;
   };
 
+  type RuleScope = {
+    mode: 'include' | 'exclude';
+    targetType: 'site' | 'site_group' | 'all';
+    siteId?: string | null;
+    siteGroupId?: string | null;
+  };
+
   type Rule = {
     id: string;
     name: string;
     enabled: boolean;
-    siteId: string | null;
+    scopes?: RuleScope[];
     psaItemMatch: { field: string; operator: string; value: string };
     vendorProvider: string;
     vendorFacet: string;
@@ -24,7 +31,7 @@
 
   let {
     rule,
-    siteName,
+    scopeSummary,
     facetLabel,
     matchedRows,
     mrrDelta = 0,
@@ -33,7 +40,7 @@
     deletePending = false,
   }: {
     rule: Rule;
-    siteName: string;
+    scopeSummary: string;
     facetLabel: string;
     matchedRows: number;
     mrrDelta?: number;
@@ -71,7 +78,7 @@
           <Badge variant="outline" class="text-[10px]">Disabled</Badge>
         {/if}
       </div>
-      <div class="mt-0.5 text-xs text-muted-foreground">{siteName}</div>
+      <div class="mt-0.5 text-xs text-muted-foreground">{scopeSummary}</div>
     </div>
     <div class="flex opacity-0 transition-opacity group-hover:opacity-100">
       <Button variant="ghost" size="icon" class="size-7" onclick={onEdit} aria-label="Edit rule">

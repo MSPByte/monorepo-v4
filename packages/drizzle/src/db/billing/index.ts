@@ -11,7 +11,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { crudPolicy, authenticatedRole } from 'drizzle-orm/neon';
 import { billingSchema } from '../schemas.js';
-import { integrationLinks, sites } from '../public/index.js';
+import { integrationLinks, siteGroups, sites } from '../public/index.js';
 
 const rls = crudPolicy({ role: authenticatedRole, read: true, modify: true });
 
@@ -74,6 +74,29 @@ export const billingReconciliationRules = billingSchema.table(
   (t) => [index('billing_reconciliation_rules_site_idx').on(t.siteId), rls]
 );
 
+export const billingReconciliationRuleScopes = billingSchema.table(
+  'reconciliation_rule_scopes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ruleId: uuid('rule_id')
+      .notNull()
+      .references(() => billingReconciliationRules.id, { onDelete: 'cascade' }),
+    mode: text('mode', { enum: ['include', 'exclude'] }).notNull(),
+    targetType: text('target_type', { enum: ['site', 'site_group', 'all'] }).notNull(),
+    siteId: uuid('site_id').references(() => sites.id, { onDelete: 'cascade' }),
+    siteGroupId: uuid('site_group_id').references(() => siteGroups.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow()
+  },
+  (t) => [
+    index('billing_reconciliation_rule_scopes_rule_idx').on(t.ruleId),
+    index('billing_reconciliation_rule_scopes_site_idx').on(t.siteId),
+    index('billing_reconciliation_rule_scopes_group_idx').on(t.siteGroupId),
+    rls
+  ]
+);
+
 export const billingReconciliationRuns = billingSchema.table(
   'reconciliation_runs',
   {
@@ -123,5 +146,6 @@ export const billingReconciliationResults = billingSchema.table(
 
 export type BillingPsaItem = typeof billingPsaItems.$inferSelect;
 export type BillingReconciliationRule = typeof billingReconciliationRules.$inferSelect;
+export type BillingReconciliationRuleScope = typeof billingReconciliationRuleScopes.$inferSelect;
 export type BillingReconciliationRun = typeof billingReconciliationRuns.$inferSelect;
 export type BillingReconciliationResult = typeof billingReconciliationResults.$inferSelect;
