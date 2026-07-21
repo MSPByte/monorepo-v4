@@ -12,6 +12,18 @@ function integer(name: string, fallback: number): number {
   return parsed;
 }
 
+function ratio(name: string, fallback: number): number {
+  const value = process.env[name];
+  if (!value) return fallback;
+
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    throw new Error(`${name} must be a number between 0 and 1`);
+  }
+
+  return parsed;
+}
+
 function boolean(name: string, fallback: boolean): boolean {
   const value = process.env[name];
   if (!value) return fallback;
@@ -54,6 +66,8 @@ export const env = {
   FULL_SYNC_INTERVAL_MS: integer("INGESTION_FULL_SYNC_INTERVAL_MS", 24 * 60 * 60 * 1000),
   INCREMENTAL_SYNC_INTERVAL_MS: integer("INGESTION_INCREMENTAL_SYNC_INTERVAL_MS", 15 * 60 * 1000),
   RAW_BATCH_SIZE: integer("INGESTION_RAW_BATCH_SIZE", 100),
+  DEAD_LETTER_FAILURE_RATIO: ratio("INGESTION_DEAD_LETTER_FAILURE_RATIO", 0.5),
+  DEAD_LETTER_MIN_SAMPLES: integer("INGESTION_DEAD_LETTER_MIN_SAMPLES", 10),
   ENABLE_DEV_ADAPTER: boolean("INGESTION_ENABLE_DEV_ADAPTER", false),
   REQUIRE_DEV_ORGS: boolean("INGESTION_REQUIRE_DEV_ORGS", !IS_PRODUCTION),
   TARGET_ORG_IDS: stringList("INGESTION_ORG_IDS", process.env.PIPELINE_ORG_IDS),

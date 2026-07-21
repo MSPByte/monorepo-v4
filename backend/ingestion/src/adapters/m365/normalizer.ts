@@ -61,7 +61,7 @@ export function normalizeM365(facet: string, raw: unknown): RecordValue {
 }
 
 function normalizeIdentity(raw: M365User): RecordValue {
-  const userType = raw.userType ?? 'service';
+  const userType = (raw.userType ?? 'service').toLowerCase();
 
   const normalized: RecordValue = {
     externalId: raw.id,

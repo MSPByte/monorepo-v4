@@ -195,6 +195,19 @@ export function createIngestionWorker(
         });
         ingestStageId = undefined;
 
+        // Escalate if too much of the job dead-lettered — a broken projector
+        // (e.g. schema drift) can otherwise silently send 100% of records to
+        // dead-letter and complete "successfully". Records are still
+        // preserved for replay after the fix.
+        if (
+          recordsIn >= env.DEAD_LETTER_MIN_SAMPLES &&
+          projectTotals.failedCt / recordsIn > env.DEAD_LETTER_FAILURE_RATIO
+        ) {
+          throw new UnrecoverableError(
+            `Projection failure rate ${projectTotals.failedCt}/${recordsIn} exceeds threshold ${env.DEAD_LETTER_FAILURE_RATIO} for ${data.provider}/${data.type}`,
+          );
+        }
+
         await completeStage(db, projectStageId, {
           recordsIn,
           recordsOut: projectTotals.recordsOut,

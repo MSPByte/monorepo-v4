@@ -1,19 +1,19 @@
-import { and, eq, getColumns, inArray, sql } from "drizzle-orm";
+import { and, eq, getColumns, inArray, sql } from 'drizzle-orm';
 import {
   getProjectionSchema,
   syncRunStages,
   vendorTableRegistry,
-  type VendorTableName,
-} from "@mspbyte/drizzle";
-import { getFacetTableMap, type ProviderFacet } from "@mspbyte/shared";
-import type { RawRecordEnvelope, SyncMode } from "@mspbyte/pipeline";
-import { logger } from "../logger.js";
-import { normalizeVendorRecord } from "../adapters/normalize.js";
-import { stablePayloadHash } from "./hash.js";
+  type VendorTableName
+} from '@mspbyte/drizzle';
+import { getFacetTableMap, type ProviderFacet } from '@mspbyte/shared';
+import type { RawRecordEnvelope, SyncMode } from '@mspbyte/pipeline';
+import { logger } from '../logger.js';
+import { normalizeVendorRecord } from '../adapters/normalize.js';
+import { stablePayloadHash } from './hash.js';
 import {
   isSophosTamperProtectionFacet,
-  projectSophosTamperProtection,
-} from "./sophos-tamper-protection.js";
+  projectSophosTamperProtection
+} from './sophos-tamper-protection.js';
 
 type Db = any;
 type VendorRowState = {
@@ -27,13 +27,13 @@ type ProjectionResult = {
 };
 type ProjectionFailure = {
   externalId: string;
-  op: "upsert" | "delete";
+  op: 'upsert' | 'delete';
   payload: unknown;
   error: unknown;
 };
 
 const facetTableMap = getFacetTableMap();
-const skipOnUpdate = new Set(["id", "linkId", "externalId", "createdAt"]);
+const skipOnUpdate = new Set(['id', 'linkId', 'externalId', 'createdAt']);
 
 export type ProjectBatchParams = {
   orgId: string;
@@ -48,7 +48,7 @@ export type ProjectBatchParams = {
 
 export type ProjectBatchFailure = {
   externalId: string;
-  op: "upsert" | "delete";
+  op: 'upsert' | 'delete';
   payload: unknown;
   error: unknown;
 };
@@ -68,7 +68,7 @@ const EMPTY_METRICS: ProjectBatchMetrics = {
   createdCt: 0,
   updatedCt: 0,
   failedCt: 0,
-  failures: [],
+  failures: []
 };
 
 /**
@@ -80,15 +80,15 @@ const EMPTY_METRICS: ProjectBatchMetrics = {
 export async function projectBatch(
   db: Db,
   params: ProjectBatchParams,
-  records: readonly RawRecordEnvelope[],
+  records: readonly RawRecordEnvelope[]
 ): Promise<ProjectBatchMetrics> {
   if (records.length === 0) return { ...EMPTY_METRICS, failures: [] };
 
   const withHashes = records.map((record) => ({
     externalId: record.externalId,
-    op: record.op ?? "upsert",
+    op: record.op ?? 'upsert',
     payload: record.payload ?? {},
-    payloadHash: stablePayloadHash(record.payload ?? {}),
+    payloadHash: stablePayloadHash(record.payload ?? {})
   }));
 
   const { result, failures } = isSophosTamperProtectionFacet(params.type)
@@ -96,7 +96,7 @@ export async function projectBatch(
     : await projectRowsBatch(db, params, withHashes);
 
   if (failures.length > 0) {
-    logger.warn("Projection completed with row failures", {
+    logger.warn('Projection completed with row failures', {
       orgId: params.orgId,
       linkId: params.linkId,
       provider: params.provider,
@@ -105,8 +105,8 @@ export async function projectBatch(
       failedCt: failures.length,
       failureSamples: failures.slice(0, 5).map((failure) => ({
         externalId: failure.externalId,
-        error: errorMessage(failure.error),
-      })),
+        error: errorMessage(failure.error)
+      }))
     });
   }
 
@@ -116,7 +116,7 @@ export async function projectBatch(
     createdCt: result.createdCt,
     updatedCt: result.updatedCt,
     failedCt: failures.length,
-    failures,
+    failures
   };
 }
 
@@ -130,10 +130,10 @@ type PreparedRow = {
 async function projectRowsBatch(
   db: Db,
   params: ProjectBatchParams,
-  rows: PreparedRow[],
+  rows: PreparedRow[]
 ): Promise<{ result: ProjectionResult; failures: ProjectionFailure[] }> {
-  const upsertRows = rows.filter((row) => row.op !== "delete");
-  const deleteRows = rows.filter((row) => row.op === "delete");
+  const upsertRows = rows.filter((row) => row.op !== 'delete');
+  const deleteRows = rows.filter((row) => row.op === 'delete');
   const failures: ProjectionFailure[] = [];
   const result: ProjectionResult = { recordsOut: 0, createdCt: 0, updatedCt: 0 };
 
@@ -148,28 +148,26 @@ async function projectRowsBatch(
     for (const row of upsertRows) {
       try {
         const projected = normalizeVendorRecord(params.provider, params.type, row.payload);
-        if (typeof projected.externalId !== "string") {
-          throw new Error("Projected row missing externalId");
+        if (typeof projected.externalId !== 'string') {
+          throw new Error('Projected row missing externalId');
         }
         if (schema) {
           const parsed = schema.safeParse(projected);
           if (!parsed.success) {
-            throw new Error(
-              `Projection schema validation failed: ${parsed.error.message}`,
-            );
+            throw new Error(`Projection schema validation failed: ${parsed.error.message}`);
           }
         }
         projectedRows.push({
           externalId: projected.externalId,
           payloadHash: row.payloadHash,
-          projected,
+          projected
         });
       } catch (error) {
         failures.push({
           externalId: row.externalId,
-          op: "upsert",
+          op: 'upsert',
           payload: row.payload,
-          error,
+          error
         });
       }
     }
@@ -193,14 +191,14 @@ async function projectRowsBatch(
 async function projectRowsIndividually(
   db: Db,
   params: ProjectBatchParams,
-  rows: PreparedRow[],
+  rows: PreparedRow[]
 ): Promise<{ result: ProjectionResult; failures: ProjectionFailure[] }> {
   const result: ProjectionResult = { recordsOut: 0, createdCt: 0, updatedCt: 0 };
   const failures: ProjectionFailure[] = [];
 
   for (const row of rows) {
     try {
-      if (row.op === "delete") {
+      if (row.op === 'delete') {
         const del = await projectDelete(db, params, row.externalId);
         result.recordsOut += del.recordsOut;
         result.createdCt += del.createdCt;
@@ -214,9 +212,9 @@ async function projectRowsIndividually(
     } catch (error) {
       failures.push({
         externalId: row.externalId,
-        op: row.op === "delete" ? "delete" : "upsert",
+        op: row.op === 'delete' ? 'delete' : 'upsert',
         payload: row.payload,
-        error,
+        error
       });
     }
   }
@@ -227,7 +225,7 @@ async function projectRowsIndividually(
 async function projectUpsertsBatch(
   db: Db,
   params: ProjectBatchParams,
-  rows: Array<{ externalId: string; payloadHash: string; projected: Record<string, unknown> }>,
+  rows: Array<{ externalId: string; payloadHash: string; projected: Record<string, unknown> }>
 ): Promise<ProjectionResult> {
   if (rows.length === 0) return { recordsOut: 0, createdCt: 0, updatedCt: 0 };
 
@@ -238,7 +236,7 @@ async function projectUpsertsBatch(
     db,
     table,
     params.linkId,
-    rows.map((row) => row.externalId),
+    rows.map((row) => row.externalId)
   );
   const unchangedIds: string[] = [];
   const changedRows: typeof rows = [];
@@ -266,7 +264,7 @@ async function projectUpsertsBatch(
       siteId: params.siteId,
       lastSeenAt: now,
       createdAt: now,
-      updatedAt: now,
+      updatedAt: now
     };
     if (table.sourceHash) insertRow.sourceHash = row.payloadHash;
     return insertRow;
@@ -276,7 +274,7 @@ async function projectUpsertsBatch(
   const returned = await (db.insert(table as never).values(insertRows) as any)
     .onConflictDoUpdate({ target: registry.conflictTarget, set: setClause })
     .returning({ xmax: sql<string>`xmax::text` });
-  const createdCt = returned.filter((row: { xmax?: string }) => row.xmax === "0").length;
+  const createdCt = returned.filter((row: { xmax?: string }) => row.xmax === '0').length;
   const updatedCt = returned.length - createdCt;
 
   return { recordsOut: writeRows.length, createdCt, updatedCt };
@@ -285,7 +283,7 @@ async function projectUpsertsBatch(
 async function projectDeletesBatch(
   db: Db,
   params: { linkId: string; type: string },
-  rows: PreparedRow[],
+  rows: PreparedRow[]
 ): Promise<ProjectionResult> {
   if (rows.length === 0) return { recordsOut: 0, createdCt: 0, updatedCt: 0 };
 
@@ -301,7 +299,7 @@ async function projectDeletesBatch(
   return {
     recordsOut: returned.length,
     createdCt: 0,
-    updatedCt: returned.length,
+    updatedCt: returned.length
   };
 }
 
@@ -309,7 +307,7 @@ async function projectUpsertSingle(
   db: Db,
   params: ProjectBatchParams,
   payload: unknown,
-  payloadHash: string,
+  payloadHash: string
 ): Promise<ProjectionResult> {
   if (isSophosTamperProtectionFacet(params.type)) {
     return projectSophosTamperProtection(db, params, payload);
@@ -321,12 +319,15 @@ async function projectUpsertSingle(
   if (schema) {
     const parsed = schema.safeParse(projected);
     if (!parsed.success) {
-      throw new Error(
-        `Projection schema validation failed: ${parsed.error.message}`,
-      );
+      throw new Error(`Projection schema validation failed: ${parsed.error.message}`);
     }
   }
-  const existing = await findExistingVendorRow(db, registry.table, params.linkId, projected.externalId);
+  const existing = await findExistingVendorRow(
+    db,
+    registry.table,
+    params.linkId,
+    projected.externalId
+  );
   if (existing?.sourceHash === payloadHash) {
     await touchVendorRow(db, registry.table, existing.id);
     return { recordsOut: 0, createdCt: 0, updatedCt: 0 };
@@ -339,7 +340,7 @@ async function projectUpsertSingle(
     siteId: params.siteId,
     lastSeenAt: now,
     createdAt: now,
-    updatedAt: now,
+    updatedAt: now
   };
   if (table.sourceHash) insertRow.sourceHash = payloadHash;
 
@@ -348,18 +349,18 @@ async function projectUpsertSingle(
     .onConflictDoUpdate({ target: registry.conflictTarget, set: setClause })
     .returning({ xmax: sql<string>`xmax::text` });
 
-  const wasCreated = returned[0]?.xmax === "0";
+  const wasCreated = returned[0]?.xmax === '0';
   return {
     recordsOut: 1,
     createdCt: wasCreated ? 1 : 0,
-    updatedCt: wasCreated ? 0 : 1,
+    updatedCt: wasCreated ? 0 : 1
   };
 }
 
 async function projectDelete(
   db: Db,
   params: { linkId: string; type: string },
-  externalId: string,
+  externalId: string
 ): Promise<ProjectionResult> {
   const registry = tableRegistryFor(params.type);
   const table = registry.table as any;
@@ -374,13 +375,13 @@ async function findExistingVendorRow(
   db: Db,
   table: unknown,
   linkId: string,
-  externalId: unknown,
+  externalId: unknown
 ): Promise<VendorRowState | undefined> {
-  if (typeof externalId !== "string") throw new Error("Projected row missing externalId");
+  if (typeof externalId !== 'string') throw new Error('Projected row missing externalId');
   const vendorTable = table as any;
   const selection = {
-    id: requiredColumn(vendorTable, "id"),
-    ...(vendorTable.sourceHash ? { sourceHash: vendorTable.sourceHash } : {}),
+    id: requiredColumn(vendorTable, 'id'),
+    ...(vendorTable.sourceHash ? { sourceHash: vendorTable.sourceHash } : {})
   };
   const [row] = await db
     .select(selection)
@@ -395,24 +396,26 @@ async function findExistingVendorRows(
   db: Db,
   table: unknown,
   linkId: string,
-  externalIds: string[],
+  externalIds: string[]
 ): Promise<Map<string, VendorRowState>> {
   if (externalIds.length === 0) return new Map();
   const vendorTable = table as any;
   const selection = {
-    id: requiredColumn(vendorTable, "id"),
-    externalId: requiredColumn(vendorTable, "externalId"),
-    ...(vendorTable.sourceHash ? { sourceHash: vendorTable.sourceHash } : {}),
+    id: requiredColumn(vendorTable, 'id'),
+    externalId: requiredColumn(vendorTable, 'externalId'),
+    ...(vendorTable.sourceHash ? { sourceHash: vendorTable.sourceHash } : {})
   };
   const rows = await db
     .select(selection)
     .from(vendorTable)
-    .where(and(eq(vendorTable.linkId, linkId), inArray(vendorTable.externalId, unique(externalIds))));
+    .where(
+      and(eq(vendorTable.linkId, linkId), inArray(vendorTable.externalId, unique(externalIds)))
+    );
   return new Map(
     rows.map((row: VendorRowState & { externalId: string }) => [
       row.externalId,
-      { id: row.id, sourceHash: row.sourceHash ?? null },
-    ]),
+      { id: row.id, sourceHash: row.sourceHash ?? null }
+    ])
   );
 }
 
@@ -452,7 +455,7 @@ function vendorUpsertSetClause(table: unknown): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(columns)
       .filter(([key]) => !skipOnUpdate.has(key))
-      .map(([key, column]) => [key, sql.raw(`excluded.${Object(column).name}`)]),
+      .map(([key, column]) => [key, sql.raw(`excluded.${Object(column).name}`)])
   );
 }
 
@@ -485,8 +488,8 @@ export async function startProjectionStepStage(
     provider: string;
     type: string;
     bullmqJobId: string;
-    stage: "enrich" | "link";
-  },
+    stage: 'enrich' | 'link';
+  }
 ): Promise<string> {
   const [row] = await db
     .insert(syncRunStages)
@@ -496,8 +499,8 @@ export async function startProjectionStepStage(
       bullmqJobId: params.bullmqJobId,
       type: params.type,
       stage: params.stage,
-      status: "running",
-      startedAt: new Date().toISOString(),
+      status: 'running',
+      startedAt: new Date().toISOString()
     })
     .returning({ id: syncRunStages.id });
   return row.id;
@@ -506,14 +509,14 @@ export async function startProjectionStepStage(
 export async function completeProjectionStepStage(
   db: Db,
   stageId: string,
-  metrics: { steps: Array<{ ran: boolean; metrics: Record<string, unknown> }> },
+  metrics: { steps: Array<{ ran: boolean; metrics: Record<string, unknown> }> }
 ): Promise<void> {
   await db
     .update(syncRunStages)
     .set({
-      status: "completed",
+      status: 'completed',
       finishedAt: new Date().toISOString(),
-      metrics: metrics as unknown as Record<string, unknown>,
+      metrics: metrics as unknown as Record<string, unknown>
     })
     .where(eq(syncRunStages.id, stageId));
 }
@@ -521,14 +524,14 @@ export async function completeProjectionStepStage(
 export async function failProjectionStepStage(
   db: Db,
   stageId: string,
-  error: unknown,
+  error: unknown
 ): Promise<void> {
   await db
     .update(syncRunStages)
     .set({
-      status: "failed",
+      status: 'failed',
       finishedAt: new Date().toISOString(),
-      error: errorMessage(error),
+      error: errorMessage(error)
     })
     .where(eq(syncRunStages.id, stageId));
 }
