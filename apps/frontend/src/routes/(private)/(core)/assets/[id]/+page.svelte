@@ -4,7 +4,7 @@
   import { createQuery } from '@tanstack/svelte-query';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
-  import { getPolicyTableShape } from '@mspbyte/shared';
+  import { getPolicyTableShape, INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
   import { serializeFilters } from '$lib/components/data-table';
   import SectionPanel from '$lib/components/panel/section-panel.svelte';
   import MetaRow from '$lib/components/panel/meta-row.svelte';
@@ -37,6 +37,7 @@
     linkName?: string | null;
     linkStatus?: string | null;
     integrationId?: string | null;
+    siteId?: string | null;
     confidence?: number;
     matchMethod?: string;
     createdAt?: string;
@@ -48,6 +49,7 @@
     name: string;
     status?: string | null;
     integrationId?: string | null;
+    siteId?: string | null;
     sourceCount: number;
   };
 
@@ -104,10 +106,12 @@
   }
 
   function sourceIntegrationHref(source: SourceRecord): string | null {
-    if (!source.linkId) return null;
-    return source.integrationId
-      ? `/setup/integrations/${source.integrationId}?linkId=${source.linkId}`
-      : `/setup/integrations?linkId=${source.linkId}`;
+    if (!source.integrationId) return null;
+    const params = new URLSearchParams();
+    if (source.linkId) params.set('linkId', source.linkId);
+    if (source.siteId) params.set('siteId', source.siteId);
+    const qs = params.toString();
+    return qs ? `/${source.integrationId}?${qs}` : `/${source.integrationId}`;
   }
 
   function sourceHref(source: SourceRecord): string | null {
@@ -137,9 +141,15 @@
   }
 
   function integrationHref(link: SourceLink): string {
-    return link.integrationId
-      ? `/setup/integrations/${link.integrationId}?linkId=${link.id}`
-      : `/setup/integrations?linkId=${link.id}`;
+    if (!link.integrationId) return `/setup/integrations?linkId=${link.id}`;
+    const params = new URLSearchParams({ linkId: link.id });
+    if (link.siteId) params.set('siteId', link.siteId);
+    return `/${link.integrationId}?${params.toString()}`;
+  }
+
+  function providerName(id?: string | null): string {
+    if (!id) return 'Integration';
+    return INTEGRATIONS[id as ProviderId]?.name ?? id;
   }
 
   function linkStatusDot(value?: string | null): string {
@@ -228,7 +238,7 @@
       <div class="min-w-0">
         <div class="truncate">{link.name}</div>
         <div class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
-          {link.integrationId ?? 'integration link'} · {link.sourceCount} record{link.sourceCount === 1 ? '' : 's'}
+          {providerName(link.integrationId)} · {link.sourceCount} record{link.sourceCount === 1 ? '' : 's'}
         </div>
       </div>
     </div>
@@ -359,7 +369,7 @@
             </div>
           </SectionPanel>
 
-          <SectionPanel code="≡" title="INTEGRATION LINKS">
+          <SectionPanel code="≡" title="INTEGRATIONS">
             {#snippet aside()}
               {sourceLinks.length} attached
             {/snippet}
