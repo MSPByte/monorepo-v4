@@ -411,9 +411,7 @@ function requirePowerShellRequirements(
   return { clientId, certPem, defaultDomain, gdapTenantId };
 }
 
-async function* fetchExchangeConfig(
-  context: IngestionAdapterContext
-): AsyncGenerator<FetchPage> {
+async function* fetchExchangeConfig(context: IngestionAdapterContext): AsyncGenerator<FetchPage> {
   const requirements = requirePowerShellRequirements(
     context,
     ['Exchange Administrator'],
@@ -433,9 +431,7 @@ async function* fetchExchangeConfig(
   };
 }
 
-async function* fetchDomainConfig(
-  context: IngestionAdapterContext
-): AsyncGenerator<FetchPage> {
+async function* fetchDomainConfig(context: IngestionAdapterContext): AsyncGenerator<FetchPage> {
   const requirements = requirePowerShellRequirements(
     context,
     ['Exchange Administrator'],
@@ -553,7 +549,9 @@ async function* fetchInboxRules(
   let activeUpns: string[] = [];
   try {
     const allUsers = await connector.users.listForInboxRules();
-    activeUpns = allUsers.filter((user) => user.accountEnabled).map((user) => user.userPrincipalName);
+    activeUpns = allUsers
+      .filter((user) => user.accountEnabled)
+      .map((user) => user.userPrincipalName);
   } catch (error) {
     logger.warn('Failed to fetch UPN list for M365 inbox_rules; skipping', {
       linkId: context.linkId,
@@ -641,7 +639,9 @@ async function resolveDomainDns(domains: string[]): Promise<Record<string, DnsRe
       const entry: DnsResult = {};
       try {
         const chunks = await dns.promises.resolveTxt(domain);
-        const spf = chunks.map((chunk) => chunk.join('')).find((value) => value.startsWith('v=spf1'));
+        const spf = chunks
+          .map((chunk) => chunk.join(''))
+          .find((value) => value.startsWith('v=spf1'));
         if (spf) {
           entry.spfRecord = spf;
           entry.spfIsPermissive = !spf.includes('-all');

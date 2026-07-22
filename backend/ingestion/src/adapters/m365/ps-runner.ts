@@ -1,3 +1,5 @@
+import { logger } from '../../logger.js';
+
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAILBOX_FORWARDING_TIMEOUT_MS = 180_000;
 const INBOX_RULES_TIMEOUT_MS = 120_000;
@@ -63,27 +65,49 @@ async function runPwsh(
       }
 
       if (code !== 0) {
-        reject(new Error(`PowerShell exited with code ${code}. stderr: ${stderr.slice(0, 500)}`));
+        reject(
+          new Error(
+            `PowerShell exited with code ${code}. stderr: ${stderr.slice(0, 500)}; stdout: ${stdout.slice(0, 500)}`
+          )
+        );
         return;
       }
 
+      if (stderr.trim()) {
+        logger.warn('PowerShell script wrote to stderr with exit 0', {
+          stderr: stderr.slice(0, 1000)
+        });
+      }
+
+      const trimmed = stdout.trim();
+      if (!trimmed) {
+        reject(
+          new Error(
+            `PowerShell produced empty stdout with exit 0. stderr: ${stderr.slice(0, 500)}`
+          )
+        );
+        return;
+      }
+      const jsonStart = trimmed.search(/[{[]/);
+      if (jsonStart < 0) {
+        reject(
+          new Error(
+            `PowerShell output contained no JSON. stdout: ${trimmed.slice(0, 500)}; stderr: ${stderr.slice(0, 500)}`
+          )
+        );
+        return;
+      }
+      const startChar = trimmed[jsonStart];
+      const endChar = startChar === '{' ? '}' : ']';
+      const jsonEnd = trimmed.lastIndexOf(endChar);
       try {
-        const trimmed = stdout.trim();
-        if (!trimmed) {
-          resolve(null);
-          return;
-        }
-        const jsonStart = trimmed.search(/[{[]/);
-        if (jsonStart < 0) {
-          resolve(null);
-          return;
-        }
-        const startChar = trimmed[jsonStart];
-        const endChar = startChar === '{' ? '}' : ']';
-        const jsonEnd = trimmed.lastIndexOf(endChar);
         resolve(JSON.parse(trimmed.slice(jsonStart, jsonEnd + 1)));
       } catch {
-        reject(new Error(`Failed to parse PowerShell JSON output: ${stdout.slice(0, 500)}`));
+        reject(
+          new Error(
+            `Failed to parse PowerShell JSON output. stdout: ${trimmed.slice(0, 500)}; stderr: ${stderr.slice(0, 500)}`
+          )
+        );
       }
     });
   });
@@ -111,23 +135,17 @@ try {
     -AppId $env:PS_PARAM_CLIENT_ID \`
     -Certificate $cert \`
     -Organization $env:PS_PARAM_ORGANIZATION \`
-    -ShowBanner:$false
+    -ShowBanner:$false *>$null
 
   $result = [ordered]@{}
 
-  try {
-    $orgConfig = Get-OrganizationConfig
-    $result.OrgConfig = @{ RejectDirectSend = [bool]$orgConfig.RejectDirectSend }
-  } catch { $result.OrgConfig = $null }
+  $orgConfig = Get-OrganizationConfig
+  $result.OrgConfig = @{ RejectDirectSend = [bool]$orgConfig.RejectDirectSend }
 
-  try {
-    $spamFilter = Get-HostedOutboundSpamFilterPolicy -Identity Default
-    $result.AutoForwardingMode = [string]$spamFilter.AutoForwardingMode
-  } catch { $result.AutoForwardingMode = $null }
+  $spamFilter = Get-HostedOutboundSpamFilterPolicy -Identity Default
+  $result.AutoForwardingMode = [string]$spamFilter.AutoForwardingMode
 
-  try {
-    $result.AuthPolicies = @(Get-AuthenticationPolicy | Select-Object Name, AllowBasicAuthSmtp)
-  } catch { $result.AuthPolicies = @() }
+  $result.AuthPolicies = @(Get-AuthenticationPolicy | Select-Object Name, AllowBasicAuthSmtp)
 
   $result | ConvertTo-Json -Depth 10
 } finally {
@@ -161,17 +179,12 @@ try {
     -AppId $env:PS_PARAM_CLIENT_ID \`
     -Certificate $cert \`
     -Organization $env:PS_PARAM_ORGANIZATION \`
-    -ShowBanner:$false
+    -ShowBanner:$false *>$null
 
   $result = [ordered]@{}
 
-  try {
-    $result.AcceptedDomains = @(Get-AcceptedDomain | Select-Object DomainName, Default)
-  } catch { $result.AcceptedDomains = @() }
-
-  try {
-    $result.DkimConfigs = @(Get-DkimSigningConfig | Select-Object Domain, Enabled, Selector1PublicKey, Selector2PublicKey)
-  } catch { $result.DkimConfigs = @() }
+  $result.AcceptedDomains = @(Get-AcceptedDomain | Select-Object DomainName, Default)
+  $result.DkimConfigs = @(Get-DkimSigningConfig | Select-Object Domain, Enabled, Selector1PublicKey, Selector2PublicKey)
 
   $result | ConvertTo-Json -Depth 10
 } finally {
@@ -204,27 +217,23 @@ try {
   Connect-MicrosoftTeams \`
     -ApplicationId $env:PS_PARAM_CLIENT_ID \`
     -Certificate $cert \`
-    -TenantId $env:PS_PARAM_TENANT_ID | Out-Null
+    -TenantId $env:PS_PARAM_TENANT_ID *>$null
 
   $result = [ordered]@{}
 
-  try {
-    $result.MeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global |
-      Select-Object AllowAnonymousUsersToJoinMeeting,
-                    AllowExternalParticipantGiveRequestControl,
-                    AllowPSTNUsersToBypassLobby,
-                    AutoAdmittedUsers
-  } catch { $result.MeetingPolicy = $null }
+  $result.MeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global |
+    Select-Object AllowAnonymousUsersToJoinMeeting,
+                  AllowExternalParticipantGiveRequestControl,
+                  AllowPSTNUsersToBypassLobby,
+                  AutoAdmittedUsers
 
-  try {
-    $fed = Get-CsTenantFederationConfiguration
-    $result.FederationConfig = @{
-      AllowFederatedUsers  = [bool]$fed.AllowFederatedUsers
-      AllowPublicUsers     = [bool]$fed.AllowPublicUsers
-      AllowTeamsConsumer   = [bool]$fed.AllowTeamsConsumer
-      AllowedDomains       = @($fed.AllowedDomains.AllowedDomain | ForEach-Object { $_.Domain } | Where-Object { $_ -ne $null })
-    }
-  } catch { $result.FederationConfig = $null }
+  $fed = Get-CsTenantFederationConfiguration
+  $result.FederationConfig = @{
+    AllowFederatedUsers  = [bool]$fed.AllowFederatedUsers
+    AllowPublicUsers     = [bool]$fed.AllowPublicUsers
+    AllowTeamsConsumer   = [bool]$fed.AllowTeamsConsumer
+    AllowedDomains       = @($fed.AllowedDomains.AllowedDomain | ForEach-Object { $_.Domain } | Where-Object { $_ -ne $null })
+  }
 
   $result | ConvertTo-Json -Depth 10
 } finally {
@@ -258,17 +267,15 @@ try {
     -AppId $env:PS_PARAM_CLIENT_ID \`
     -Certificate $cert \`
     -Organization $env:PS_PARAM_ORGANIZATION \`
-    -ShowBanner:$false
+    -ShowBanner:$false *>$null
 
   $result = [ordered]@{}
 
-  try {
-    $result.ForwardingMailboxes = @(
-      Get-EXOMailbox -ResultSize Unlimited -PropertySets Minimum -Properties ForwardingAddress,ForwardingSmtpAddress,DeliverToMailboxAndForward |
-      Where-Object { $_.ForwardingAddress -ne $null -or $_.ForwardingSmtpAddress -ne $null } |
-      Select-Object UserPrincipalName, ForwardingAddress, ForwardingSmtpAddress, DeliverToMailboxAndForward
-    )
-  } catch { $result.ForwardingMailboxes = @() }
+  $result.ForwardingMailboxes = @(
+    Get-EXOMailbox -ResultSize Unlimited -PropertySets Minimum -Properties ForwardingAddress,ForwardingSmtpAddress,DeliverToMailboxAndForward |
+    Where-Object { $_.ForwardingAddress -ne $null -or $_.ForwardingSmtpAddress -ne $null } |
+    Select-Object UserPrincipalName, ForwardingAddress, ForwardingSmtpAddress, DeliverToMailboxAndForward
+  )
 
   $result | ConvertTo-Json -Depth 10
 } finally {
@@ -308,7 +315,7 @@ try {
     -AppId $env:PS_PARAM_CLIENT_ID \`
     -Certificate $cert \`
     -Organization $env:PS_PARAM_ORGANIZATION \`
-    -ShowBanner:$false
+    -ShowBanner:$false *>$null
 
   $upnList = $env:PS_PARAM_UPNS | ConvertFrom-Json
   $allRules = [System.Collections.Generic.List[object]]::new()
