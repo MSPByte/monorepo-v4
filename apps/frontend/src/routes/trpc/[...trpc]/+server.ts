@@ -20,6 +20,7 @@ const handler: RequestHandler = async (event) => {
       user: event.locals.user as never,
       role: event.locals.role as never,
       connectionString: event.locals.connectionString,
+      encryptionKey: ENCRYPTION_KEY,
       ipAddress: event.getClientAddress(),
       userAgent: event.request.headers.get('user-agent'),
       microsoftCredentials:

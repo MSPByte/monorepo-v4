@@ -96,6 +96,7 @@ export async function createContext({ req, redis }: { req: IncomingRequest; redi
     user: tenantUser,
     role,
     connectionString: org.serviceConnectionString,
+    encryptionKey: process.env.ENCRYPTION_KEY,
     ipAddress:
       headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? headers.get('x-real-ip') ?? null,
     userAgent: headers.get('user-agent') ?? null,

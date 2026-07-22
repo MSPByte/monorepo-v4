@@ -24,6 +24,7 @@ export function createServerCaller(locals: {
     user: locals.user as never,
     role: locals.role as never,
     connectionString: locals.connectionString,
+    encryptionKey: ENCRYPTION_KEY,
     ipAddress: null,
     userAgent: null,
     microsoftCredentials:

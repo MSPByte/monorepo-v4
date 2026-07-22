@@ -164,7 +164,8 @@ function authMethodType(method: Record<string, unknown>): string {
 
 function m365ClientCredentials(
   config: unknown,
-  envCredentials?: { clientId: string; clientSecret: string } | null
+  envCredentials?: { clientId: string; clientSecret: string } | null,
+  encryptionKey?: string
 ): { clientId: string; clientSecret: string } | null {
   const parsed = M365ConfigSchema.safeParse(config);
   const clientId =
@@ -173,7 +174,7 @@ function m365ClientCredentials(
       : (envCredentials?.clientId ?? process.env.MICROSOFT_CLIENT_ID);
   const encryptedSecret = parsed.success ? parsed.data.clientSecret : undefined;
   const clientSecret = encryptedSecret
-    ? (Encryption.decrypt(encryptedSecret, process.env.ENCRYPTION_KEY ?? '') ??
+    ? (Encryption.decrypt(encryptedSecret, encryptionKey ?? process.env.ENCRYPTION_KEY ?? '') ??
       envCredentials?.clientSecret ??
       process.env.MICROSOFT_CLIENT_SECRET)
     : (envCredentials?.clientSecret ?? process.env.MICROSOFT_CLIENT_SECRET);
@@ -305,6 +306,7 @@ export const vendorRouter = t.router({
     .input(z.object({ ids: z.array(z.uuid()).min(1).max(1000) }))
     .mutation(async ({ ctx, input }) => {
       const attrs = (ctx.role.attributes as Record<string, boolean>) ?? null;
+
       if (!hasPermission(attrs, 'Assets.Delete')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Delete permission required' });
       }
@@ -357,10 +359,10 @@ export const vendorRouter = t.router({
           if (typeof apiHost !== 'string' || !apiHost)
             throw new Error('Sophos API host is missing');
 
-          const clientSecret = Encryption.decrypt(
-            config.data.clientSecret,
-            process.env.ENCRYPTION_KEY!
-          );
+          const encryptionKey = ctx.encryptionKey ?? process.env.ENCRYPTION_KEY;
+          if (!encryptionKey) throw new Error('Encryption key is not configured');
+
+          const clientSecret = Encryption.decrypt(config.data.clientSecret, encryptionKey);
           if (!clientSecret) throw new Error('Sophos client secret could not be decrypted');
 
           const connector = new SophosConnector(config.data.clientId, clientSecret);
@@ -494,10 +496,10 @@ export const vendorRouter = t.router({
           if (typeof apiHost !== 'string' || !apiHost)
             throw new Error('Sophos API host is missing');
 
-          const clientSecret = Encryption.decrypt(
-            config.data.clientSecret,
-            process.env.ENCRYPTION_KEY!
-          );
+          const encryptionKey = ctx.encryptionKey ?? process.env.ENCRYPTION_KEY;
+          if (!encryptionKey) throw new Error('Encryption key is not configured');
+
+          const clientSecret = Encryption.decrypt(config.data.clientSecret, encryptionKey);
           if (!clientSecret) throw new Error('Sophos client secret could not be decrypted');
 
           const connector = new SophosConnector(config.data.clientId, clientSecret);
@@ -728,7 +730,11 @@ export const vendorRouter = t.router({
 
       let authMethods: Array<{ id: string; type: string; createdDateTime: string | null }> = [];
       let authMethodsError: string | null = null;
-      const credentials = m365ClientCredentials(link.integrationConfig, ctx.microsoftCredentials);
+      const credentials = m365ClientCredentials(
+        link.integrationConfig,
+        ctx.microsoftCredentials,
+        ctx.encryptionKey
+      );
 
       if (!credentials) {
         authMethodsError = 'Microsoft 365 credentials are not configured for live Graph lookup.';
