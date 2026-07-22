@@ -26,6 +26,7 @@
 
   import Plus from '@lucide/svelte/icons/plus';
   import X from '@lucide/svelte/icons/x';
+  import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
   import Separator from '$lib/components/ui/separator/separator.svelte';
 
   const ctx = useSiteContext();
@@ -158,6 +159,12 @@
 
   function providerName(id: string) {
     return INTEGRATIONS[id as ProviderId]?.name ?? id;
+  }
+
+  function integrationHref(link: { id: string; integrationId: string }) {
+    const params = new URLSearchParams({ linkId: link.id });
+    if (site?.id) params.set('siteId', site.id);
+    return `/${link.integrationId}?${params.toString()}`;
   }
 
   function hasFactValue(fact: ProfileFact) {
@@ -621,10 +628,11 @@
           {profile.integrations.length} linked
         {/snippet}
         {#if profile.integrations.length}
-          <div class="space-y-1">
+          <div>
             {#each profile.integrations as link (link.id)}
-              <div
-                class="flex items-baseline justify-between gap-2 border-b border-border/40 py-1.5 text-sm last:border-b-0"
+              <a
+                href={integrationHref(link)}
+                class="flex items-center justify-between gap-3 border-b border-border/40 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40"
               >
                 <div class="flex min-w-0 items-baseline gap-2">
                   <span
@@ -636,12 +644,15 @@
                           : 'bg-muted-foreground'
                     }`}
                   ></span>
-                  <span class="truncate">{link.name ?? providerName(link.integrationId)}</span>
+                  <div class="min-w-0">
+                    <div class="truncate">{link.name ?? providerName(link.integrationId)}</div>
+                    <div class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+                      {providerName(link.integrationId)}
+                    </div>
+                  </div>
                 </div>
-                <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {providerName(link.integrationId)}
-                </span>
-              </div>
+                <ArrowUpRight class="size-3 shrink-0 text-muted-foreground" />
+              </a>
             {/each}
           </div>
         {:else}
