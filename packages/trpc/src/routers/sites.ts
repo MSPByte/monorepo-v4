@@ -72,7 +72,6 @@ const SUPPORTED_METRIC_KEYS = [
   'workstations',
   'servers',
   'networkAssets',
-  'mobileDevices',
   'openFindings',
   'connectedIntegrations'
 ] as const;
@@ -85,7 +84,6 @@ const METRIC_LABELS: Record<MetricKey, string> = {
   workstations: 'Workstations',
   servers: 'Servers',
   networkAssets: 'Network Assets',
-  mobileDevices: 'Mobile Devices',
   openFindings: 'Open Findings',
   connectedIntegrations: 'Connected Integrations'
 };
@@ -96,7 +94,6 @@ const METRIC_ORIGINS: Record<MetricKey, string> = {
   workstations: 'canonical.assets',
   servers: 'canonical.assets',
   networkAssets: 'canonical.assets',
-  mobileDevices: 'canonical.assets',
   openFindings: 'policy.findings',
   connectedIntegrations: 'integration_links'
 };
@@ -368,7 +365,6 @@ export const sitesRouter = t.router({
         workstations: assetTypeCounts.get('workstation') ?? 0,
         servers: assetTypeCounts.get('server') ?? 0,
         networkAssets: assetTypeCounts.get('network') ?? 0,
-        mobileDevices: assetTypeCounts.get('mobile') ?? 0,
         openFindings: Number(openFindingsRow[0]?.count ?? 0),
         connectedIntegrations
       };

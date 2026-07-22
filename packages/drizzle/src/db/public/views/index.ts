@@ -46,10 +46,10 @@ export const sitesWithCounts = pgView('sites_with_counts', {
         and pf.status in ('open', 'acknowledged', 'regressed')
     ) f on true
     left join lateral (
-      select array_agg(distinct es.provider order by es.provider) as sources
-      from canonical.entity_sources es
-      where es.site_id = s.id
-        and es.status = 'confirmed'
+      select array_agg(distinct il.integration_id order by il.integration_id) as sources
+      from public.integration_links il
+      where il.site_id = s.id
+        and il.status = 'active'
     ) src on true
   `);
 
