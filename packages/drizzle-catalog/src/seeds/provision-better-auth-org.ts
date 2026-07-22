@@ -51,26 +51,50 @@ try {
     `;
   });
 
+  // Bootstrap Owner role. Broader system-role catalog (Auditor..Global
+  // Administrator) is seeded by the `tenant-seed` CLI in infra/scripts;
+  // this script only mints the account holding the keys.
   const [role] = await tenant`
-    insert into "roles" ("name", "description", "level", "attributes", "created_at", "updated_at")
-    values (${roleName}, 'Provisioned owner role', 100, ${JSON.stringify({ "*": true })}::jsonb, now(), now())
+    insert into "roles" ("name", "description", "level", "permissions", "is_system", "attributes", "created_at", "updated_at")
+    values (
+      ${roleName},
+      'Provisioned owner role',
+      100,
+      ${['*']}::text[],
+      true,
+      '{}'::jsonb,
+      now(),
+      now()
+    )
     on conflict ("name") do update set
       "description" = excluded."description",
-      "level" = excluded."level",
-      "attributes" = excluded."attributes",
+      "level"       = excluded."level",
+      "permissions" = excluded."permissions",
+      "is_system"   = true,
+      "updated_at"  = now()
+    returning "id"
+  `;
+
+  const [tenantUser] = await tenant`
+    insert into "users" ("auth_user_id", "email", "name", "role_id", "created_at", "updated_at")
+    values (${authUserId}, ${userEmail}, ${userName}, ${role?.id}, now(), now())
+    on conflict ("auth_user_id") do update set
+      "email"      = excluded."email",
+      "name"       = excluded."name",
+      "role_id"    = excluded."role_id",
       "updated_at" = now()
     returning "id"
   `;
 
-  await tenant`
-    insert into "users" ("auth_user_id", "email", "name", "role_id", "created_at", "updated_at")
-    values (${authUserId}, ${userEmail}, ${userName}, ${role?.id}, now(), now())
-    on conflict ("auth_user_id") do update set
-      "email" = excluded."email",
-      "name" = excluded."name",
-      "role_id" = excluded."role_id",
-      "updated_at" = now()
-  `;
+  // Grant the Owner role at scope 'all'. Idempotent via the unique index on
+  // (user_id, role_id, scope_kind, scope_ids).
+  if (tenantUser?.id && role?.id) {
+    await tenant`
+      insert into "user_role_grants" ("user_id", "role_id", "scope_kind", "scope_ids", "created_at", "updated_at")
+      values (${tenantUser.id}, ${role.id}, 'all', ${[]}::uuid[], now(), now())
+      on conflict on constraint "user_role_grants_uniq" do nothing
+    `;
+  }
 
   console.log(`Provisioned ${orgName} for ${userEmail}`);
 } finally {

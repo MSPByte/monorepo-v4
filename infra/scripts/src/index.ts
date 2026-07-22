@@ -1,6 +1,7 @@
 import { parseArgs } from "./args.js";
 import { runTenantHealth } from "./tenant-health/index.js";
 import { runTenantMigrate } from "./tenant-migrate/index.js";
+import { runTenantSeed } from "./tenant-seed/index.js";
 
 const COMMANDS: Record<string, (args: ReturnType<typeof parseArgs>) => Promise<void>> = {
   "tenant-health": async (args) => {
@@ -17,6 +18,13 @@ const COMMANDS: Record<string, (args: ReturnType<typeof parseArgs>) => Promise<v
       all: args.flags.all === true,
     });
   },
+  "tenant-seed": async (args) => {
+    await runTenantSeed({
+      orgId: typeof args.flags.org === "string" ? args.flags.org : undefined,
+      all: args.flags.all === true,
+      only: typeof args.flags.only === "string" ? args.flags.only : undefined,
+    });
+  },
 };
 
 function usage(): void {
@@ -30,6 +38,8 @@ function usage(): void {
       "  tenant-migrate --org=<uuid>|--all",
       "    Runs pending drizzle migrations against each tenant DB. Auto-stamps",
       "    the baseline for tenants that pre-date committed migrations.",
+      "  tenant-seed --org=<uuid>|--all [--only=<seed1,seed2>]",
+      "    Reconciles tenant catalogs from @mspbyte/shared. Idempotent.",
       "",
       "Checks:",
       "  link-meta    Reconciles integration_links.meta against each vendor's",
@@ -37,6 +47,10 @@ function usage(): void {
       "  dead-letter  Replays raw_records with projectionStatus='failed' via",
       "               projectBatch. Records that now normalize cleanly are",
       "               marked recovered; still-failing rows keep their new error.",
+      "",
+      "Seeds:",
+      "  system-roles  Upserts the canonical role catalog (Auditor..Global",
+      "                Administrator) from SYSTEM_ROLES in @mspbyte/shared.",
     ].join("\n"),
   );
 }
