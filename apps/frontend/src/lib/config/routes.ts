@@ -17,7 +17,7 @@ const ROUTES: Route[] = [
   {
     label: 'Findings',
     href: '/findings',
-    permission: 'Assets.Read',
+    permission: 'Findings.Read',
   },
   {
     label: 'Sites',
@@ -37,28 +37,27 @@ const ROUTES: Route[] = [
   {
     label: 'People',
     href: '/people',
-    permission: 'Assets.Read',
+    permission: 'People.Read',
   },
   {
     label: 'Policies',
     href: '/policies',
-    permission: 'Assets.Read',
+    permission: 'Policies.Read',
   },
   {
     label: 'Frameworks',
     href: '/frameworks',
-    permission: 'Assets.Read',
+    permission: 'Frameworks.Read',
   },
   {
     label: 'Billing',
     href: '/billing',
-    permission: 'Assets.Read',
+    permission: 'Billing.Read',
   },
   {
     label: 'Wiki',
     href: '/wiki',
-    devOnly: true,
-    permission: 'Assets.Read',
+    permission: 'Wiki.Read',
   },
   {
     label: 'Users',
@@ -69,13 +68,12 @@ const ROUTES: Route[] = [
   {
     label: 'Roles',
     href: '/setup/roles',
-    permission: 'Users.Read',
+    permission: 'Roles.Read',
     group: 'Setup',
   },
   {
     label: 'Sites',
     href: '/setup/sites',
-    devOnly: true,
     permission: 'Sites.Write',
     group: 'Setup',
   },
@@ -88,7 +86,7 @@ const ROUTES: Route[] = [
   {
     label: 'Audit',
     href: '/setup/audit',
-    permission: 'Global.Admin',
+    permission: 'Audit.Read',
     group: 'Setup',
   },
   {
