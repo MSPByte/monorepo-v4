@@ -3,7 +3,8 @@ import { redirect, type Handle } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
 import { auth } from '$lib/server/auth';
 import { getTenantServiceDbByOrgId } from '@mspbyte/drizzle-catalog';
-import { roles, users } from '@mspbyte/drizzle';
+import { roles, users, userRoleGrants } from '@mspbyte/drizzle';
+import type { PermissionGrant, Scope } from '@mspbyte/shared';
 import {
   BETTER_AUTH_SECRET,
   BETTER_AUTH_URL,
@@ -82,6 +83,8 @@ const handleAuth: Handle = async ({ event, resolve }) => {
       throw { message: 'Role not found', state: 'invalid' };
     }
 
+    const grants = await loadGrants(db, user.id, role);
+
     event.locals.auth = {
       userId: session.user.id,
       orgId: org.id,
@@ -89,6 +92,7 @@ const handleAuth: Handle = async ({ event, resolve }) => {
     };
     event.locals.user = user;
     event.locals.role = role;
+    event.locals.grants = grants;
     event.locals.org = org;
     event.locals.connectionString = org.serviceConnectionString;
   } catch (err: unknown) {
@@ -115,3 +119,43 @@ const handleDev: Handle = async ({ event, resolve }) => {
 };
 
 export const handle = sequence(handleAuth, handleDev);
+
+async function loadGrants(
+  db: Awaited<ReturnType<typeof getTenantServiceDbByOrgId>>['db'],
+  tenantUserId: string,
+  role: { permissions: string[] | null; attributes: unknown },
+): Promise<PermissionGrant[]> {
+  const rows = await db
+    .select({
+      permissions: roles.permissions,
+      scopeKind: userRoleGrants.scopeKind,
+      scopeIds: userRoleGrants.scopeIds,
+    })
+    .from(userRoleGrants)
+    .innerJoin(roles, eq(userRoleGrants.roleId, roles.id))
+    .where(eq(userRoleGrants.userId, tenantUserId));
+
+  if (rows.length > 0) {
+    return rows.map(
+      (r): PermissionGrant => ({
+        permissions: r.permissions ?? [],
+        scope: toScope(r.scopeKind, r.scopeIds),
+      }),
+    );
+  }
+
+  if (role.permissions && role.permissions.length > 0) {
+    return [{ permissions: role.permissions, scope: { kind: 'all' } }];
+  }
+  const attrs = (role.attributes as Record<string, boolean> | null) ?? {};
+  const legacyPerms = Object.entries(attrs)
+    .filter(([, v]) => v === true)
+    .map(([k]) => (k === 'Global.Admin' || k === '*' ? '*' : k));
+  return [{ permissions: legacyPerms, scope: { kind: 'all' } }];
+}
+
+function toScope(kind: string | null, ids: string[] | null): Scope {
+  if (kind === 'sites') return { kind: 'sites', ids: ids ?? [] };
+  if (kind === 'groups') return { kind: 'groups', ids: ids ?? [] };
+  return { kind: 'all' };
+}

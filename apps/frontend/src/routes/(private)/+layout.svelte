@@ -35,6 +35,7 @@
   $effect(() => {
     authStore.currentUser = data.user;
     authStore.currentRole = data.role;
+    authStore.currentGrants = data.grants;
     authStore.currentOrg = data.orgId;
     authStore.currentOrgDev = data.orgDev;
   });

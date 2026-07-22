@@ -1,7 +1,12 @@
 import { goto } from '$app/navigation';
 import { PersistedState } from 'runed';
 import type { db } from '$lib/db';
-import { type Permission, hasPermission } from '@mspbyte/shared';
+import {
+  type Permission,
+  type PermissionGrant,
+  hasPermission,
+  hasAnyPermissionUnder,
+} from '@mspbyte/shared';
 
 type User = typeof db.users.$inferSelect;
 type Role = typeof db.roles.$inferSelect;
@@ -12,6 +17,10 @@ function createAuthStore() {
     syncTabs: false,
   });
   const role = new PersistedState<Role | null>('current_role', null, {
+    storage: 'session',
+    syncTabs: false,
+  });
+  const grants = new PersistedState<PermissionGrant[]>('current_grants', [], {
     storage: 'session',
     syncTabs: false,
   });
@@ -31,6 +40,9 @@ function createAuthStore() {
     get currentRole() {
       return role.current;
     },
+    get currentGrants() {
+      return grants.current;
+    },
     get currentOrg() {
       return org.current;
     },
@@ -39,6 +51,9 @@ function createAuthStore() {
     },
     set currentRole(r: Role | null) {
       role.current = r;
+    },
+    set currentGrants(g: PermissionGrant[]) {
+      grants.current = g;
     },
     set currentOrg(o: string | null) {
       org.current = o;
@@ -52,13 +67,26 @@ function createAuthStore() {
     },
 
     isAllowed: (p: Permission) => {
+      if (grants.current && grants.current.length > 0) {
+        return hasPermission(grants.current, p);
+      }
+      // Legacy fallback while Stage 4a rolls; Stage 4d removes this branch.
       const attrs = (role.current?.attributes as Record<string, boolean> | null) ?? null;
       return hasPermission(attrs, p);
+    },
+
+    canUnder: (prefix: string) => {
+      if (grants.current && grants.current.length > 0) {
+        return hasAnyPermissionUnder(grants.current, prefix);
+      }
+      const attrs = (role.current?.attributes as Record<string, boolean> | null) ?? null;
+      return hasAnyPermissionUnder(attrs, prefix);
     },
 
     logout: (signOutFn?: () => void) => {
       user.current = null;
       role.current = null;
+      grants.current = [];
       if (signOutFn) {
         signOutFn();
       } else {

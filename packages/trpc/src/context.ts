@@ -1,8 +1,15 @@
 import { TRPCError } from '@trpc/server';
 import { getTenantServiceDbByOrgId } from '@mspbyte/drizzle-catalog';
-import { roles, users } from '@mspbyte/drizzle';
+import { roles, users, userRoleGrants } from '@mspbyte/drizzle';
 import { eq } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
+import {
+  hasPermission,
+  hasAnyPermissionUnder,
+  type Permission,
+  type PermissionGrant,
+  type Scope
+} from '@mspbyte/shared';
 import { auth } from './auth.js';
 
 // Generic enough for both Fastify and other HTTP frameworks
@@ -88,6 +95,8 @@ export async function createContext({ req, redis }: { req: IncomingRequest; redi
     throw new TRPCError({ code: 'FORBIDDEN', message: 'User role is not provisioned' });
   }
 
+  const grants = await loadGrants(db, tenantUser.id, role);
+
   return {
     userId,
     orgId: org.id,
@@ -95,6 +104,9 @@ export async function createContext({ req, redis }: { req: IncomingRequest; redi
     org,
     user: tenantUser,
     role,
+    grants,
+    can: (permission: Permission) => hasPermission(grants, permission),
+    canUnder: (prefix: string) => hasAnyPermissionUnder(grants, prefix),
     connectionString: org.serviceConnectionString,
     encryptionKey: process.env.ENCRYPTION_KEY,
     ipAddress:
@@ -112,3 +124,53 @@ export async function createContext({ req, redis }: { req: IncomingRequest; redi
 }
 
 export type Context = Awaited<ReturnType<typeof createContext>>;
+
+/**
+ * Resolves the caller's PermissionGrant[]. Prefers rows from user_role_grants
+ * (Stage 2+). Falls back to synthesizing a single grant from the legacy
+ * user.role_id → role.attributes path if grants is empty — this keeps Stage 4a
+ * non-breaking for any tenant not yet fully migrated. Stage 4d removes the
+ * fallback and drops the legacy columns.
+ */
+async function loadGrants(
+  db: Awaited<ReturnType<typeof getTenantServiceDbByOrgId>>['db'],
+  tenantUserId: string,
+  role: { permissions: string[] | null; attributes: unknown }
+): Promise<PermissionGrant[]> {
+  const rows = await db
+    .select({
+      permissions: roles.permissions,
+      scopeKind: userRoleGrants.scopeKind,
+      scopeIds: userRoleGrants.scopeIds
+    })
+    .from(userRoleGrants)
+    .innerJoin(roles, eq(userRoleGrants.roleId, roles.id))
+    .where(eq(userRoleGrants.userId, tenantUserId));
+
+  if (rows.length > 0) {
+    return rows.map(
+      (r): PermissionGrant => ({
+        permissions: r.permissions ?? [],
+        scope: toScope(r.scopeKind, r.scopeIds)
+      })
+    );
+  }
+
+  // Legacy fallback — synthesize one 'all'-scoped grant from role.permissions
+  // (already populated by Stage 2 migration) or from the raw attributes bag.
+  if (role.permissions && role.permissions.length > 0) {
+    return [{ permissions: role.permissions, scope: { kind: 'all' } }];
+  }
+
+  const attrs = (role.attributes as Record<string, boolean> | null) ?? {};
+  const legacyPerms = Object.entries(attrs)
+    .filter(([, v]) => v === true)
+    .map(([k]) => (k === 'Global.Admin' || k === '*' ? '*' : k));
+  return [{ permissions: legacyPerms, scope: { kind: 'all' } }];
+}
+
+function toScope(kind: string | null, ids: string[] | null): Scope {
+  if (kind === 'sites') return { kind: 'sites', ids: ids ?? [] };
+  if (kind === 'groups') return { kind: 'groups', ids: ids ?? [] };
+  return { kind: 'all' };
+}

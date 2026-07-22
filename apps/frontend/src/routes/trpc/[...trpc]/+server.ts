@@ -3,10 +3,12 @@ import { appRouter } from '@mspbyte/trpc';
 import { createTenantDb } from '@mspbyte/drizzle-catalog';
 import { ENCRYPTION_KEY, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET } from '$env/static/private';
 import { getRedis } from '$lib/server/redis';
+import { hasPermission, hasAnyPermissionUnder, type Permission } from '@mspbyte/shared';
 import type { RequestHandler } from './$types';
 
 const handler: RequestHandler = async (event) => {
   const db = createTenantDb(event.locals.connectionString, ENCRYPTION_KEY);
+  const grants = event.locals.grants ?? [];
 
   return fetchRequestHandler({
     endpoint: '/trpc',
@@ -19,6 +21,9 @@ const handler: RequestHandler = async (event) => {
       org: event.locals.org,
       user: event.locals.user as never,
       role: event.locals.role as never,
+      grants,
+      can: (p: Permission) => hasPermission(grants, p),
+      canUnder: (prefix: string) => hasAnyPermissionUnder(grants, prefix),
       connectionString: event.locals.connectionString,
       encryptionKey: ENCRYPTION_KEY,
       ipAddress: event.getClientAddress(),
