@@ -1,5 +1,6 @@
 import { parseArgs } from "./args.js";
 import { runTenantHealth } from "./tenant-health/index.js";
+import { runTenantMigrate } from "./tenant-migrate/index.js";
 
 const COMMANDS: Record<string, (args: ReturnType<typeof parseArgs>) => Promise<void>> = {
   "tenant-health": async (args) => {
@@ -8,6 +9,12 @@ const COMMANDS: Record<string, (args: ReturnType<typeof parseArgs>) => Promise<v
       all: args.flags.all === true,
       fix: args.flags.fix === true,
       only: typeof args.flags.only === "string" ? args.flags.only : undefined,
+    });
+  },
+  "tenant-migrate": async (args) => {
+    await runTenantMigrate({
+      orgId: typeof args.flags.org === "string" ? args.flags.org : undefined,
+      all: args.flags.all === true,
     });
   },
 };
@@ -20,6 +27,9 @@ function usage(): void {
       "Commands:",
       "  tenant-health --org=<uuid>|--all [--fix] [--only=<check1,check2>]",
       "    Runs tenant health checks. Without --fix, reports issues only.",
+      "  tenant-migrate --org=<uuid>|--all",
+      "    Runs pending drizzle migrations against each tenant DB. Auto-stamps",
+      "    the baseline for tenants that pre-date committed migrations.",
       "",
       "Checks:",
       "  link-meta    Reconciles integration_links.meta against each vendor's",
