@@ -17,7 +17,11 @@ export enum ActionLabels {
   SiteProfileStackUpdate = 'site_profile.stack.update',
   SiteProfileNoteCreate = 'site_profile.note.create',
   SiteProfileNoteUpdate = 'site_profile.note.update',
-  SiteProfileNoteDelete = 'site_profile.note.delete'
+  SiteProfileNoteDelete = 'site_profile.note.delete',
+  EntitySourceLink = 'entity_source.link',
+  EntitySourceUnlink = 'entity_source.unlink',
+  EntitySourceConfirm = 'entity_source.confirm',
+  EntitySourceReject = 'entity_source.reject'
 }
 
 export type ActionLabel = `${ActionLabels}`;
@@ -103,6 +107,22 @@ export const ActionResources = {
   [ActionLabels.SiteProfileNoteDelete]: {
     label: ActionLabels.SiteProfileNoteDelete,
     name: 'Site profile note delete'
+  },
+  [ActionLabels.EntitySourceLink]: {
+    label: ActionLabels.EntitySourceLink,
+    name: 'Entity source link'
+  },
+  [ActionLabels.EntitySourceUnlink]: {
+    label: ActionLabels.EntitySourceUnlink,
+    name: 'Entity source unlink'
+  },
+  [ActionLabels.EntitySourceConfirm]: {
+    label: ActionLabels.EntitySourceConfirm,
+    name: 'Entity source confirm'
+  },
+  [ActionLabels.EntitySourceReject]: {
+    label: ActionLabels.EntitySourceReject,
+    name: 'Entity source reject'
   }
 } satisfies Record<ActionLabel, ActionResource>;
 

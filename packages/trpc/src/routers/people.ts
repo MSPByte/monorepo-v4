@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne } from 'drizzle-orm';
 import {
   entitySources,
   findingsWithContext,
@@ -88,7 +88,7 @@ export const peopleRouter = t.router({
           and(
             eq(entitySources.canonicalType, 'person'),
             eq(entitySources.canonicalId, input.id),
-            eq(entitySources.status, 'confirmed')
+            ne(entitySources.status, 'rejected')
           )
         )
         .catch(() => []);
@@ -154,14 +154,18 @@ export const peopleRouter = t.router({
           confidence: source.confidence,
           matchMethod: source.matchMethod,
           matchEvidence: source.matchEvidence,
+          status: source.status,
+          manuallyConfirmedAt: source.manuallyConfirmedAt,
+          manuallyRejectedAt: source.manuallyRejectedAt,
           createdAt: source.createdAt,
           updatedAt: source.updatedAt
         };
       });
 
+      const confirmedEvidence = vendorEvidence.filter((s) => s.status === 'confirmed');
       const sourceLinks = [
         ...new Map(
-          vendorEvidence
+          confirmedEvidence
             .filter((source) => source.linkId)
             .map((source) => [
               source.linkId!,
@@ -171,7 +175,8 @@ export const peopleRouter = t.router({
                 status: source.linkStatus,
                 integrationId: source.integrationId,
                 siteId: source.siteId,
-                sourceCount: vendorEvidence.filter((item) => item.linkId === source.linkId).length
+                sourceCount: confirmedEvidence.filter((item) => item.linkId === source.linkId)
+                  .length
               }
             ])
         ).values()

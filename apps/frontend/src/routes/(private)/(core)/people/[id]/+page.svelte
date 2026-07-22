@@ -4,8 +4,7 @@
   import { createQuery } from '@tanstack/svelte-query';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
-  import { getPolicyTableShape, INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
-  import { serializeFilters } from '$lib/components/data-table';
+  import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
   import SectionPanel from '$lib/components/panel/section-panel.svelte';
   import MetaRow from '$lib/components/panel/meta-row.svelte';
   import FindingSeverityBadge from '$lib/components/domain/finding-severity-badge.svelte';
@@ -16,6 +15,7 @@
 
   import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
   import PersonBriefing from './_components/person-briefing.svelte';
+  import VendorSourceRecords from '$lib/components/domain/vendor-source-records.svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const id = $derived(page.params.id ?? '');
@@ -40,6 +40,9 @@
     siteId?: string | null;
     confidence?: number;
     matchMethod?: string;
+    status?: string;
+    manuallyConfirmedAt?: string | null;
+    manuallyRejectedAt?: string | null;
     createdAt?: string;
     updatedAt?: string;
   };
@@ -111,41 +114,6 @@
     return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
   }
 
-  function sourceIntegrationHref(source: SourceRecord): string | null {
-    if (!source.integrationId) return null;
-    const params = new URLSearchParams();
-    if (source.linkId) params.set('linkId', source.linkId);
-    if (source.siteId) params.set('siteId', source.siteId);
-    const qs = params.toString();
-    return qs ? `/${source.integrationId}?${qs}` : `/${source.integrationId}`;
-  }
-
-  function sourceHref(source: SourceRecord): string | null {
-    if (!source.table || !source.externalId) return null;
-    const route = getPolicyTableShape(source.table)?.route;
-    if (!route) return null;
-    const filters = serializeFilters([
-      {
-        id: 'person-source',
-        field: route.searchField,
-        operator: 'eq',
-        value: source.externalId,
-      },
-      ...(source.linkId
-        ? [
-            {
-              id: 'person-source-link',
-              field: 'linkId',
-              operator: 'eq' as const,
-              value: source.linkId,
-            },
-          ]
-        : []),
-    ]);
-    const params = new URLSearchParams({ filters });
-    return `${route.path}?${params.toString()}`;
-  }
-
   function integrationHref(link: SourceLink): string {
     if (!link.integrationId) return `/setup/integrations?linkId=${link.id}`;
     const params = new URLSearchParams({ linkId: link.id });
@@ -165,49 +133,6 @@
     return 'bg-muted-foreground';
   }
 </script>
-
-{#snippet sourceRow(source: SourceRecord)}
-  {@const href = sourceHref(source)}
-  {@const Tag = href ? 'a' : 'div'}
-  <svelte:element
-    this={Tag}
-    href={href ?? undefined}
-    class={[
-      'grid gap-3 border-b border-border/40 py-2 text-sm last:border-b-0 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto] md:items-center',
-      href ? 'transition-colors hover:bg-muted/40' : '',
-    ].join(' ')}
-  >
-    <div class="flex min-w-0 items-baseline gap-2">
-      <span class={`size-1.5 shrink-0 translate-y-px rounded-full ${linkStatusDot(source.linkStatus)}`}></span>
-      <div class="min-w-0">
-        <div class="truncate">{source.label ?? prettyText(source.table ?? 'Source')}</div>
-        <div class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
-          {source.provider ?? 'provider'}{source.confidence !== undefined ? ` · ${source.confidence}% conf` : ''}
-        </div>
-      </div>
-    </div>
-    <div class="min-w-0 font-mono text-[11.5px] text-muted-foreground">
-      {#if source.linkId}
-        <a
-          href={sourceIntegrationHref(source) ?? '#'}
-          class="truncate hover:underline"
-          onclick={(e) => e.stopPropagation()}
-        >
-          {source.linkName ?? source.linkId}
-        </a>
-      {:else}
-        <span>no link</span>
-      {/if}
-    </div>
-    <div class="flex shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-      {#if href}
-        open <ArrowUpRight class="size-3" />
-      {:else}
-        record
-      {/if}
-    </div>
-  </svelte:element>
-{/snippet}
 
 {#snippet findingRow(finding: Finding)}
   <a
@@ -296,20 +221,13 @@
       <div class="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
         <!-- LEFT COLUMN -->
         <div class="space-y-4">
-          <SectionPanel code="01" title="VENDOR SOURCE RECORDS">
-            {#snippet aside()}
-              {vendorEvidence.length} confirmed
-            {/snippet}
-            <div>
-              {#each vendorEvidence as source}
-                {@render sourceRow(source)}
-              {:else}
-                <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-                  no confirmed vendor records
-                </p>
-              {/each}
-            </div>
-          </SectionPanel>
+          <VendorSourceRecords
+            canonicalType="person"
+            canonicalId={person.id}
+            canonicalLabel={person.displayName || person.primaryEmail}
+            sources={vendorEvidence}
+            queryKey={['people.byId', id]}
+          />
 
           <SectionPanel code="02" title="OPEN FINDINGS">
             {#snippet aside()}
