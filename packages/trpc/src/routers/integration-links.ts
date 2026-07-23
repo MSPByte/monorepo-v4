@@ -53,11 +53,14 @@ export const integrationLinksRouter = t.router({
       })
     )
     .query(async ({ ctx, input }): Promise<IntegrationLinkRow[]> => {
+      const scope = ctx.scopeFor('Integrations.Read');
+      if (scope !== 'all' && scope.length === 0) return [];
       const conditions = [];
       if (input.integrationId)
         conditions.push(eq(integrationLinks.integrationId, input.integrationId));
       if (input.siteId) conditions.push(eq(integrationLinks.siteId, input.siteId));
       if (input.status) conditions.push(eq(integrationLinks.status, input.status));
+      if (scope !== 'all') conditions.push(inArray(integrationLinks.siteId, [...scope]));
       return ctx.db
         .select()
         .from(integrationLinks)

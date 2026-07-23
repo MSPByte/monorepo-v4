@@ -55,14 +55,13 @@ try {
   // Administrator) is seeded by the `tenant-seed` CLI in infra/scripts;
   // this script only mints the account holding the keys.
   const [role] = await tenant`
-    insert into "roles" ("name", "description", "level", "permissions", "is_system", "attributes", "created_at", "updated_at")
+    insert into "roles" ("name", "description", "level", "permissions", "is_system", "created_at", "updated_at")
     values (
       ${roleName},
       'Provisioned owner role',
       100,
       ${['*']}::text[],
       true,
-      '{}'::jsonb,
       now(),
       now()
     )
@@ -76,12 +75,11 @@ try {
   `;
 
   const [tenantUser] = await tenant`
-    insert into "users" ("auth_user_id", "email", "name", "role_id", "created_at", "updated_at")
-    values (${authUserId}, ${userEmail}, ${userName}, ${role?.id}, now(), now())
+    insert into "users" ("auth_user_id", "email", "name", "created_at", "updated_at")
+    values (${authUserId}, ${userEmail}, ${userName}, now(), now())
     on conflict ("auth_user_id") do update set
       "email"      = excluded."email",
       "name"       = excluded."name",
-      "role_id"    = excluded."role_id",
       "updated_at" = now()
     returning "id"
   `;

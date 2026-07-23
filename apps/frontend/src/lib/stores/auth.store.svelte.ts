@@ -66,22 +66,9 @@ function createAuthStore() {
       return orgDev.current;
     },
 
-    isAllowed: (p: Permission) => {
-      if (grants.current && grants.current.length > 0) {
-        return hasPermission(grants.current, p);
-      }
-      // Legacy fallback while Stage 4a rolls; Stage 4d removes this branch.
-      const attrs = (role.current?.attributes as Record<string, boolean> | null) ?? null;
-      return hasPermission(attrs, p);
-    },
+    isAllowed: (p: Permission) => hasPermission(grants.current ?? [], p),
 
-    canUnder: (prefix: string) => {
-      if (grants.current && grants.current.length > 0) {
-        return hasAnyPermissionUnder(grants.current, prefix);
-      }
-      const attrs = (role.current?.attributes as Record<string, boolean> | null) ?? null;
-      return hasAnyPermissionUnder(attrs, prefix);
-    },
+    canUnder: (prefix: string) => hasAnyPermissionUnder(grants.current ?? [], prefix),
 
     logout: (signOutFn?: () => void) => {
       user.current = null;

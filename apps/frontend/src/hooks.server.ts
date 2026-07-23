@@ -74,16 +74,14 @@ const handleAuth: Handle = async ({ event, resolve }) => {
       .where(eq(users.authUserId, session.user.id))
       .limit(1);
 
-    if (!user || !user.roleId) {
+    if (!user) {
       throw { message: 'User not found', state: 'invalid' };
     }
 
-    const [role] = await db.select().from(roles).where(eq(roles.id, user.roleId)).limit(1);
-    if (!role) {
-      throw { message: 'Role not found', state: 'invalid' };
+    const { grants, primaryRole } = await loadGrants(db, user.id);
+    if (grants.length === 0 || !primaryRole) {
+      throw { message: 'No role grants', state: 'invalid' };
     }
-
-    const grants = await loadGrants(db, user.id, role);
 
     event.locals.auth = {
       userId: session.user.id,
@@ -91,7 +89,7 @@ const handleAuth: Handle = async ({ event, resolve }) => {
       email: session.user.email,
     };
     event.locals.user = user;
-    event.locals.role = role;
+    event.locals.role = primaryRole;
     event.locals.grants = grants;
     event.locals.org = org;
     event.locals.connectionString = org.serviceConnectionString;
@@ -123,35 +121,31 @@ export const handle = sequence(handleAuth, handleDev);
 async function loadGrants(
   db: Awaited<ReturnType<typeof getTenantServiceDbByOrgId>>['db'],
   tenantUserId: string,
-  role: { permissions: string[] | null; attributes: unknown },
-): Promise<PermissionGrant[]> {
+): Promise<{ grants: PermissionGrant[]; primaryRole: typeof roles.$inferSelect | null }> {
   const rows = await db
     .select({
       permissions: roles.permissions,
       scopeKind: userRoleGrants.scopeKind,
       scopeIds: userRoleGrants.scopeIds,
+      role: roles,
     })
     .from(userRoleGrants)
     .innerJoin(roles, eq(userRoleGrants.roleId, roles.id))
     .where(eq(userRoleGrants.userId, tenantUserId));
 
-  if (rows.length > 0) {
-    return rows.map(
-      (r): PermissionGrant => ({
-        permissions: r.permissions ?? [],
-        scope: toScope(r.scopeKind, r.scopeIds),
-      }),
-    );
+  const grants = rows.map(
+    (r): PermissionGrant => ({
+      permissions: r.permissions ?? [],
+      scope: toScope(r.scopeKind, r.scopeIds),
+    }),
+  );
+
+  let primaryRole: typeof roles.$inferSelect | null = null;
+  for (const r of rows) {
+    if (!primaryRole || r.role.level > primaryRole.level) primaryRole = r.role;
   }
 
-  if (role.permissions && role.permissions.length > 0) {
-    return [{ permissions: role.permissions, scope: { kind: 'all' } }];
-  }
-  const attrs = (role.attributes as Record<string, boolean> | null) ?? {};
-  const legacyPerms = Object.entries(attrs)
-    .filter(([, v]) => v === true)
-    .map(([k]) => (k === 'Global.Admin' || k === '*' ? '*' : k));
-  return [{ permissions: legacyPerms, scope: { kind: 'all' } }];
+  return { grants, primaryRole };
 }
 
 function toScope(kind: string | null, ids: string[] | null): Scope {

@@ -19,9 +19,6 @@ export const roles = pgTable(
     name: text('name').notNull().unique(),
     description: text('description'),
     level: integer('level').notNull().default(0),
-    // DEPRECATED: legacy boolean-bag attributes. Replaced by `permissions`.
-    // Retained until Stage 4 so the migration path can translate on the fly.
-    attributes: jsonb('attributes').notNull().default({}),
     permissions: text('permissions').array().notNull().default([]),
     isSystem: boolean('is_system').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
@@ -41,9 +38,6 @@ export const users = pgTable(
     authUserId: text('auth_user_id').notNull().unique(),
     email: text('email').notNull(),
     name: text('name').notNull(),
-    // DEPRECATED: single-role FK. Replaced by `user_role_grants`. Retained
-    // until Stage 4 for the migration window; do not read in new code.
-    roleId: uuid('role_id').references(() => roles.id),
     preferences: jsonb('preferences').notNull().default({}),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .notNull()

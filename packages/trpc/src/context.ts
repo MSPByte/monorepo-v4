@@ -12,6 +12,8 @@ import {
 } from '@mspbyte/shared';
 import { auth } from './auth.js';
 
+type TenantDb = Awaited<ReturnType<typeof getTenantServiceDbByOrgId>>['db'];
+
 // Generic enough for both Fastify and other HTTP frameworks
 interface IncomingRequest {
   headers: Record<string, string | string[] | undefined>;
@@ -83,19 +85,20 @@ export async function createContext({ req, redis }: { req: IncomingRequest; redi
   }
 
   const [tenantUser] = await db.select().from(users).where(eq(users.authUserId, userId)).limit(1);
-  if (!tenantUser?.roleId) {
+  if (!tenantUser) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'User is not provisioned for this organization'
     });
   }
 
-  const [role] = await db.select().from(roles).where(eq(roles.id, tenantUser.roleId)).limit(1);
-  if (!role) {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'User role is not provisioned' });
+  const { grants, primaryRole } = await loadGrants(db, tenantUser.id);
+  if (grants.length === 0) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'User has no role grants in this organization'
+    });
   }
-
-  const grants = await loadGrants(db, tenantUser.id, role);
 
   return {
     userId,
@@ -103,7 +106,7 @@ export async function createContext({ req, redis }: { req: IncomingRequest; redi
     db,
     org,
     user: tenantUser,
-    role,
+    role: primaryRole,
     grants,
     can: (permission: Permission) => hasPermission(grants, permission),
     canUnder: (prefix: string) => hasAnyPermissionUnder(grants, prefix),
@@ -127,47 +130,39 @@ export async function createContext({ req, redis }: { req: IncomingRequest; redi
 export type Context = Awaited<ReturnType<typeof createContext>>;
 
 /**
- * Resolves the caller's PermissionGrant[]. Prefers rows from user_role_grants
- * (Stage 2+). Falls back to synthesizing a single grant from the legacy
- * user.role_id → role.attributes path if grants is empty — this keeps Stage 4a
- * non-breaking for any tenant not yet fully migrated. Stage 4d removes the
- * fallback and drops the legacy columns.
+ * Loads all grants for a tenant user (join user_role_grants → roles). Also
+ * returns the highest-level role from those grants as `primaryRole`, used
+ * only for display (nav badge, "logged in as" chips) — real authorization
+ * derives from `grants` and the evaluator.
  */
 async function loadGrants(
-  db: Awaited<ReturnType<typeof getTenantServiceDbByOrgId>>['db'],
-  tenantUserId: string,
-  role: { permissions: string[] | null; attributes: unknown }
-): Promise<PermissionGrant[]> {
+  db: TenantDb,
+  tenantUserId: string
+): Promise<{ grants: PermissionGrant[]; primaryRole: typeof roles.$inferSelect | null }> {
   const rows = await db
     .select({
       permissions: roles.permissions,
       scopeKind: userRoleGrants.scopeKind,
-      scopeIds: userRoleGrants.scopeIds
+      scopeIds: userRoleGrants.scopeIds,
+      role: roles
     })
     .from(userRoleGrants)
     .innerJoin(roles, eq(userRoleGrants.roleId, roles.id))
     .where(eq(userRoleGrants.userId, tenantUserId));
 
-  if (rows.length > 0) {
-    return rows.map(
-      (r): PermissionGrant => ({
-        permissions: r.permissions ?? [],
-        scope: toScope(r.scopeKind, r.scopeIds)
-      })
-    );
+  const grants = rows.map(
+    (r): PermissionGrant => ({
+      permissions: r.permissions ?? [],
+      scope: toScope(r.scopeKind, r.scopeIds)
+    })
+  );
+
+  let primaryRole: typeof roles.$inferSelect | null = null;
+  for (const r of rows) {
+    if (!primaryRole || r.role.level > primaryRole.level) primaryRole = r.role;
   }
 
-  // Legacy fallback — synthesize one 'all'-scoped grant from role.permissions
-  // (already populated by Stage 2 migration) or from the raw attributes bag.
-  if (role.permissions && role.permissions.length > 0) {
-    return [{ permissions: role.permissions, scope: { kind: 'all' } }];
-  }
-
-  const attrs = (role.attributes as Record<string, boolean> | null) ?? {};
-  const legacyPerms = Object.entries(attrs)
-    .filter(([, v]) => v === true)
-    .map(([k]) => (k === 'Global.Admin' || k === '*' ? '*' : k));
-  return [{ permissions: legacyPerms, scope: { kind: 'all' } }];
+  return { grants, primaryRole };
 }
 
 function toScope(kind: string | null, ids: string[] | null): Scope {

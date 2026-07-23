@@ -97,44 +97,9 @@ describe('hasPermission — grant list', () => {
   });
 });
 
-describe('hasPermission — legacy attribute bag', () => {
-  test('null attributes → false', () => {
+describe('hasPermission — null input', () => {
+  test('null grants → false', () => {
     expect(hasPermission(null, 'Sites.Read')).toBe(false);
-  });
-
-  test('empty object → false', () => {
-    expect(hasPermission({}, 'Sites.Read')).toBe(false);
-  });
-
-  test('exact key true', () => {
-    expect(hasPermission({ 'Sites.Read': true }, 'Sites.Read')).toBe(true);
-  });
-
-  test('exact key false', () => {
-    expect(hasPermission({ 'Sites.Read': false }, 'Sites.Read')).toBe(false);
-  });
-
-  test('Write key satisfies Read', () => {
-    expect(hasPermission({ 'Sites.Write': true }, 'Sites.Read')).toBe(true);
-  });
-
-  test('Delete key satisfies Read', () => {
-    expect(hasPermission({ 'Sites.Delete': true }, 'Sites.Read')).toBe(true);
-  });
-
-  test('Delete key satisfies Write (added implication)', () => {
-    expect(hasPermission({ 'Sites.Delete': true }, 'Sites.Write')).toBe(true);
-  });
-
-  test('Global.Admin key satisfies anything', () => {
-    expect(hasPermission({ 'Global.Admin': true }, 'Sites.Read')).toBe(true);
-    expect(hasPermission({ 'Global.Admin': true }, 'Assets.Delete')).toBe(true);
-  });
-
-  test('Owner-seed `*: true` satisfies anything (bug fix)', () => {
-    expect(hasPermission({ '*': true }, 'Sites.Read')).toBe(true);
-    expect(hasPermission({ '*': true }, 'Assets.Delete')).toBe(true);
-    expect(hasPermission({ '*': true }, 'Global.Admin')).toBe(true);
   });
 });
 
@@ -164,11 +129,8 @@ describe('hasAnyPermissionUnder — prefix probing for nav', () => {
     expect(hasAnyPermissionUnder(grantsOf('Vendors.*'), 'Vendors.M365')).toBe(true);
   });
 
-  test('legacy bag with prefix', () => {
-    expect(hasAnyPermissionUnder({ 'Vendors.Read': true }, 'Vendors')).toBe(true);
-    expect(hasAnyPermissionUnder({ 'Sites.Read': true }, 'Vendors')).toBe(false);
-    expect(hasAnyPermissionUnder({ '*': true }, 'Vendors')).toBe(true);
-    expect(hasAnyPermissionUnder({ 'Global.Admin': true }, 'Vendors')).toBe(true);
+  test('Global.Admin grant satisfies any prefix', () => {
+    expect(hasAnyPermissionUnder(grantsOf('Global.Admin'), 'Vendors')).toBe(true);
   });
 
   test('null input', () => {

@@ -37,7 +37,6 @@ export async function seedSystemRoles(ctx: SeedContext): Promise<SeedReport> {
         level: role.level,
         permissions,
         isSystem: true,
-        attributes: {},
       });
       inserted++;
       continue;

@@ -38,10 +38,6 @@ export const PERMISSION_TREE = {
 export const ACTIONS = ['Read', 'Write', 'Delete'] as const;
 export type Action = (typeof ACTIONS)[number];
 
-// Retained for callers that still import RESOURCES. New code should derive from
-// PERMISSION_TREE instead. Removed in Stage 4.
-export const RESOURCES = ['Sites', 'Integrations', 'Users', 'Assets'] as const;
-
 // ---------------------------------------------------------------------------
 // Type derivation — dotted paths from the tree.
 // ---------------------------------------------------------------------------
@@ -70,10 +66,7 @@ export type PermissionGrant = {
   scope: Scope;
 };
 
-export type LegacyAttributes = Record<string, boolean> | null;
-
-// Union accepted by the evaluator. `null` is treated as no grants.
-export type PermissionInput = LegacyAttributes | readonly PermissionGrant[];
+export type PermissionInput = readonly PermissionGrant[] | null;
 
 // ---------------------------------------------------------------------------
 // Levels.
@@ -152,49 +145,21 @@ function grantStringSatisfies(granted: string, required: string): boolean {
   return false;
 }
 
-// Legacy boolean bag path — preserves prior behavior and additionally honors
-// `attributes['*'] === true` as allow-all (fixes the Owner-seed hole).
-function hasPermissionLegacy(attributes: LegacyAttributes, permission: Permission): boolean {
-  if (!attributes) return false;
-  if (attributes['*'] === true) return true;
-  if (attributes['Global.Admin'] === true) return true;
-  if (attributes[permission] === true) return true;
-  if (permission.endsWith('.Read')) {
-    const writePerm = permission.replace('.Read', '.Write');
-    if (attributes[writePerm] === true) return true;
-    const deletePerm = permission.replace('.Read', '.Delete');
-    if (attributes[deletePerm] === true) return true;
+export function hasPermission(input: PermissionInput, required: Permission): boolean {
+  if (!input) return false;
+
+  for (const grant of input) {
+    for (const granted of grant.permissions) {
+      if (grantStringSatisfies(granted, required)) return true;
+    }
   }
-  if (permission.endsWith('.Write')) {
-    const deletePerm = permission.replace('.Write', '.Delete');
-    if (attributes[deletePerm] === true) return true;
+  // Global.Admin as a granted string implies everything.
+  if (required !== 'Global.Admin') {
+    for (const grant of input) {
+      if (grant.permissions.includes('Global.Admin')) return true;
+    }
   }
   return false;
-}
-
-function isGrantList(input: PermissionInput): input is readonly PermissionGrant[] {
-  return Array.isArray(input);
-}
-
-export function hasPermission(input: PermissionInput, required: Permission): boolean {
-  if (input === null || input === undefined) return false;
-
-  if (isGrantList(input)) {
-    for (const grant of input) {
-      for (const granted of grant.permissions) {
-        if (grantStringSatisfies(granted, required)) return true;
-      }
-    }
-    // Global.Admin is a permission string; grants may include it directly.
-    if (required !== 'Global.Admin') {
-      for (const grant of input) {
-        if (grant.permissions.includes('Global.Admin')) return true;
-      }
-    }
-    return false;
-  }
-
-  return hasPermissionLegacy(input, required);
 }
 
 export function hasAnyPermission(input: PermissionInput, permissions: Permission[]): boolean {
@@ -206,29 +171,17 @@ export function hasAnyPermission(input: PermissionInput, permissions: Permission
 // `Vendors.M365`. Used by nav filters so a user with only
 // `Vendors.M365.Identities.Read` still sees the `/vendors` group.
 export function hasAnyPermissionUnder(input: PermissionInput, prefix: string): boolean {
-  if (input === null || input === undefined) return false;
-
-  if (isGrantList(input)) {
-    for (const grant of input) {
-      for (const granted of grant.permissions) {
-        if (granted === '*') return true;
-        if (granted === prefix || granted.startsWith(prefix + '.')) return true;
-        // A wildcard grant at or above the prefix also counts.
-        if (granted.endsWith('.*')) {
-          const wildBase = granted.slice(0, -2);
-          if (prefix === wildBase || prefix.startsWith(wildBase + '.')) return true;
-        }
+  if (!input) return false;
+  for (const grant of input) {
+    for (const granted of grant.permissions) {
+      if (granted === '*' || granted === 'Global.Admin') return true;
+      if (granted === prefix || granted.startsWith(prefix + '.')) return true;
+      // A wildcard grant at or above the prefix also counts.
+      if (granted.endsWith('.*')) {
+        const wildBase = granted.slice(0, -2);
+        if (prefix === wildBase || prefix.startsWith(wildBase + '.')) return true;
       }
     }
-    return false;
-  }
-
-  // Legacy bag — check any key that starts with the prefix.
-  if (input['*'] === true) return true;
-  if (input['Global.Admin'] === true) return true;
-  for (const key of Object.keys(input)) {
-    if (input[key] !== true) continue;
-    if (key === prefix || key.startsWith(prefix + '.')) return true;
   }
   return false;
 }
