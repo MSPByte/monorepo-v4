@@ -200,6 +200,9 @@ export const vendorRouter = t.router({
       })
     )
     .query(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Read permission required' });
+      }
       if (!(input.table in VENDOR_TABLE_MAP)) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
@@ -214,6 +217,27 @@ export const vendorRouter = t.router({
       const baseConditions: ReturnType<typeof sql>[] = [];
       if (input.linkId) {
         baseConditions.push(sql`${sql.identifier('link_id')} = ${input.linkId}`);
+      }
+
+      // Scope filter: every vendor table has a site_id column, so restrict to
+      // the caller's scoped sites when scope !== 'all'. Empty scope short-
+      // circuits to zero rows.
+      const scope = ctx.scopeFor('Vendors.Read');
+      if (scope !== 'all') {
+        if (scope.length === 0) {
+          return {
+            rows: [] as unknown[],
+            total: 0,
+            page: input.page,
+            pageSize: input.pageSize,
+            pageCount: 0
+          };
+        }
+        const idParams = sql.join(
+          scope.map((id) => sql`${id}::uuid`),
+          sql`, `
+        );
+        baseConditions.push(sql`${sql.identifier('site_id')} IN (${idParams})`);
       }
 
       // Apply user-supplied filters
@@ -279,8 +303,8 @@ export const vendorRouter = t.router({
   sophosEndpointTamperProtection: authProcedure
     .input(z.object({ endpointId: z.uuid() }))
     .query(async ({ ctx, input }) => {
-      if (!ctx.can('Assets.Read')) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Read permission required' });
+      if (!ctx.can('Vendors.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Read permission required' });
       }
 
       const [row] = await ctx.db
@@ -298,14 +322,21 @@ export const vendorRouter = t.router({
         .where(eq(sophosTamperProtection.endpointId, input.endpointId))
         .limit(1);
 
+      if (row) {
+        const scope = ctx.scopeFor('Vendors.Read');
+        if (scope !== 'all' && (!row.siteId || !scope.includes(row.siteId))) {
+          throw new TRPCError({ code: 'NOT_FOUND' });
+        }
+      }
+
       return row ?? null;
     }),
 
   deleteSophosEndpoints: authProcedure
     .input(z.object({ ids: z.array(z.uuid()).min(1).max(1000) }))
     .mutation(async ({ ctx, input }) => {
-      if (!ctx.can('Assets.Delete')) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Delete permission required' });
+      if (!ctx.can('Vendors.Delete')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Delete permission required' });
       }
 
       const uniqueIds = [...new Set(input.ids)];
@@ -426,8 +457,8 @@ export const vendorRouter = t.router({
   enableSophosEndpointTamperProtection: authProcedure
     .input(z.object({ ids: z.array(z.uuid()).min(1).max(1000) }))
     .mutation(async ({ ctx, input }) => {
-      if (!ctx.can('Assets.Write')) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Write permission required' });
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
       }
 
       const uniqueIds = [...new Set(input.ids)];

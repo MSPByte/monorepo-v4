@@ -53,14 +53,28 @@ export const integrationLinksRouter = t.router({
       })
     )
     .query(async ({ ctx, input }): Promise<IntegrationLinkRow[]> => {
-      const scope = ctx.scopeFor('Integrations.Read');
-      if (scope !== 'all' && scope.length === 0) return [];
+      // Integration links are pivot metadata: readable by anyone who can view
+      // integration configuration OR vendor data. A scoped Auditor with only
+      // Vendors.Read still needs to resolve the linkId when browsing vendor
+      // pages. Effective scope is the union of both permissions' scopes.
+      const vendorScope = ctx.scopeFor('Vendors.Read');
+      const integrationScope = ctx.scopeFor('Integrations.Read');
+      const noVendor = Array.isArray(vendorScope) && vendorScope.length === 0;
+      const noIntegration = Array.isArray(integrationScope) && integrationScope.length === 0;
+      if (noVendor && noIntegration) return [];
+
+      const scope: 'all' | readonly string[] =
+        vendorScope === 'all' || integrationScope === 'all'
+          ? 'all'
+          : [...new Set([...(vendorScope as string[]), ...(integrationScope as string[])])];
+
       const conditions = [];
       if (input.integrationId)
         conditions.push(eq(integrationLinks.integrationId, input.integrationId));
       if (input.siteId) conditions.push(eq(integrationLinks.siteId, input.siteId));
       if (input.status) conditions.push(eq(integrationLinks.status, input.status));
       if (scope !== 'all') conditions.push(inArray(integrationLinks.siteId, [...scope]));
+
       return ctx.db
         .select()
         .from(integrationLinks)

@@ -22,6 +22,7 @@ export const actions: Actions = {
       org: locals.org,
       user: locals.user,
       role: locals.role,
+      grants: locals.grants,
       connectionString: locals.connectionString,
     });
 

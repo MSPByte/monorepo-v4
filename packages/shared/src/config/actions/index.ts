@@ -21,7 +21,12 @@ export enum ActionLabels {
   EntitySourceLink = 'entity_source.link',
   EntitySourceUnlink = 'entity_source.unlink',
   EntitySourceConfirm = 'entity_source.confirm',
-  EntitySourceReject = 'entity_source.reject'
+  EntitySourceReject = 'entity_source.reject',
+  RoleCreate = 'role.create',
+  RoleUpdate = 'role.update',
+  RoleDelete = 'role.delete',
+  UserGrantAdd = 'user.grant.add',
+  UserGrantRemove = 'user.grant.remove'
 }
 
 export type ActionLabel = `${ActionLabels}`;
@@ -123,6 +128,26 @@ export const ActionResources = {
   [ActionLabels.EntitySourceReject]: {
     label: ActionLabels.EntitySourceReject,
     name: 'Entity source reject'
+  },
+  [ActionLabels.RoleCreate]: {
+    label: ActionLabels.RoleCreate,
+    name: 'Role create'
+  },
+  [ActionLabels.RoleUpdate]: {
+    label: ActionLabels.RoleUpdate,
+    name: 'Role update'
+  },
+  [ActionLabels.RoleDelete]: {
+    label: ActionLabels.RoleDelete,
+    name: 'Role delete'
+  },
+  [ActionLabels.UserGrantAdd]: {
+    label: ActionLabels.UserGrantAdd,
+    name: 'User grant add'
+  },
+  [ActionLabels.UserGrantRemove]: {
+    label: ActionLabels.UserGrantRemove,
+    name: 'User grant remove'
   }
 } satisfies Record<ActionLabel, ActionResource>;
 
