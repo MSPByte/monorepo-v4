@@ -7,7 +7,7 @@ import {
   entitySources,
   users
 } from '@mspbyte/drizzle';
-import { ActionLabels, getPolicyTableShape, hasPermission } from '@mspbyte/shared';
+import { ActionLabels, getPolicyTableShape } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
 import { queryTableData, tableDataInputSchema } from './table-data.js';
@@ -67,23 +67,30 @@ function canonicalHref(resourceType: string, resourceId: string): string | null 
 
 export const findingsRouter = t.router({
   tableData: authProcedure.input(tableDataInputSchema).query(async ({ ctx, input }) => {
+    const scope = ctx.scopeFor('Findings.Read');
+    if (scope !== 'all' && scope.length === 0) {
+      return { rows: [], total: 0, page: input.page, pageSize: input.pageSize, pageCount: 0 };
+    }
+    const scopeWhere =
+      scope === 'all' ? undefined : inArray(findingsWithContext.siteId, [...scope]);
     return queryTableData<typeof findingsWithContext.$inferSelect>(
       ctx.db,
       findingsWithContext,
       input,
       [],
-      {
-        column: 'severity',
-        direction: 'desc'
-      },
-      findingSelection
+      { column: 'severity', direction: 'desc' },
+      findingSelection,
+      scopeWhere
     );
   }),
 
   list: authProcedure.input(listInput).query(async ({ ctx, input }) => {
+    const scope = ctx.scopeFor('Findings.Read');
+    if (scope !== 'all' && scope.length === 0) return [];
     const rows = await ctx.db
       .select(findingSelection)
       .from(findingsWithContext)
+      .where(scope === 'all' ? undefined : inArray(findingsWithContext.siteId, [...scope]))
       .orderBy(desc(findingsWithContext.lastSeenAt))
       .limit(200)
       .catch(() => []);
@@ -124,6 +131,10 @@ export const findingsRouter = t.router({
       .limit(1)
       .catch(() => []);
     if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
+    const scope = ctx.scopeFor('Findings.Read');
+    if (scope !== 'all' && (!row.siteId || !scope.includes(row.siteId))) {
+      throw new TRPCError({ code: 'NOT_FOUND' });
+    }
 
     // Raw evidence payload lives on the base table, not the view.
     const [base] = await ctx.db
@@ -293,8 +304,7 @@ export const findingsRouter = t.router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const attrs = (ctx.role.attributes as Record<string, boolean>) ?? null;
-      if (!hasPermission(attrs, 'Assets.Write')) {
+      if (!ctx.can('Assets.Write')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Write permission required' });
       }
 
@@ -372,8 +382,7 @@ export const findingsRouter = t.router({
     }),
 
   unsuppress: authProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
-    const attrs = (ctx.role.attributes as Record<string, boolean>) ?? null;
-    if (!hasPermission(attrs, 'Assets.Write')) {
+    if (!ctx.can('Assets.Write')) {
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Write permission required' });
     }
 

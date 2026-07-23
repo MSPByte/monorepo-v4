@@ -14,7 +14,7 @@ import {
   sophosEndpoints,
   sophosFirewalls
 } from '@mspbyte/drizzle';
-import { ActionLabels, hasPermission } from '@mspbyte/shared';
+import { ActionLabels } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 import type { Context } from '../context.js';
 
@@ -41,16 +41,14 @@ type VendorCandidate = {
   currentConfidence: number | null;
 };
 
-function requireAssetsWrite(attributes: unknown) {
-  const attrs = (attributes as Record<string, boolean>) ?? null;
-  if (!hasPermission(attrs, 'Assets.Write')) {
+function requireAssetsWrite(ctx: Context) {
+  if (!ctx.can('Assets.Write')) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Write permission required' });
   }
 }
 
-function requireAssetsDelete(attributes: unknown) {
-  const attrs = (attributes as Record<string, boolean>) ?? null;
-  if (!hasPermission(attrs, 'Assets.Delete')) {
+function requireAssetsDelete(ctx: Context) {
+  if (!ctx.can('Assets.Delete')) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Delete permission required' });
   }
 }
@@ -529,7 +527,7 @@ export const entitySourcesRouter = t.router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      requireAssetsWrite(ctx.role.attributes);
+      requireAssetsWrite(ctx);
 
       const allowed = CANONICAL_TABLE_SUPPORT[input.canonicalType];
       if (!allowed.includes(input.vendorTable)) {
@@ -647,7 +645,7 @@ export const entitySourcesRouter = t.router({
   unlink: authProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      requireAssetsDelete(ctx.role.attributes);
+      requireAssetsDelete(ctx);
 
       const [row] = await ctx.db
         .select()
@@ -696,7 +694,7 @@ export const entitySourcesRouter = t.router({
   confirm: authProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      requireAssetsWrite(ctx.role.attributes);
+      requireAssetsWrite(ctx);
 
       const [row] = await ctx.db
         .select()
@@ -756,7 +754,7 @@ export const entitySourcesRouter = t.router({
   reject: authProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      requireAssetsWrite(ctx.role.attributes);
+      requireAssetsWrite(ctx);
 
       const [row] = await ctx.db
         .select()

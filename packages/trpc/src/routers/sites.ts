@@ -21,7 +21,6 @@ import {
   ActionLabels,
   BUILT_IN_PROFILE_FIELDS,
   BUILT_IN_STACK_CATEGORIES,
-  hasPermission,
   type Permission
 } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
@@ -33,8 +32,7 @@ import type { Context } from '../context.js';
 type SiteRow = typeof sites.$inferSelect;
 
 function requireSitePermission(ctx: Context, permission: Permission) {
-  const attrs = (ctx.role.attributes as Record<string, boolean> | null) ?? null;
-  if (!hasPermission(attrs, permission)) {
+  if (!ctx.can(permission)) {
     throw new TRPCError({ code: 'FORBIDDEN', message: `${permission} permission required` });
   }
 }
@@ -100,6 +98,11 @@ const METRIC_ORIGINS: Record<MetricKey, string> = {
 
 export const sitesRouter = t.router({
   tableData: authProcedure.input(tableDataInputSchema).query(async ({ ctx, input }) => {
+    const scope = ctx.scopeFor('Sites.Read');
+    if (scope !== 'all' && scope.length === 0) {
+      return { rows: [], total: 0, page: input.page, pageSize: input.pageSize, pageCount: 0 };
+    }
+    const scopeWhere = scope === 'all' ? undefined : inArray(sitesWithCounts.id, [...scope]);
     const result = await queryTableData<typeof sitesWithCounts.$inferSelect>(
       ctx.db,
       sitesWithCounts,
@@ -108,7 +111,9 @@ export const sitesRouter = t.router({
       {
         column: 'openFindingCount',
         direction: 'desc'
-      }
+      },
+      undefined,
+      scopeWhere
     );
     return {
       ...result,
@@ -122,9 +127,12 @@ export const sitesRouter = t.router({
   }),
 
   list: authProcedure.query(async ({ ctx }) => {
+    const scope = ctx.scopeFor('Sites.Read');
+    if (scope !== 'all' && scope.length === 0) return [];
     const rows = await ctx.db
       .select()
       .from(sitesWithCounts)
+      .where(scope === 'all' ? undefined : inArray(sitesWithCounts.id, [...scope]))
       .orderBy(sitesWithCounts.name)
       .catch(() => []);
     return rows.map((site) => ({
@@ -142,6 +150,10 @@ export const sitesRouter = t.router({
   get: authProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }): Promise<SiteRow> => {
+      const scope = ctx.scopeFor('Sites.Read');
+      if (scope !== 'all' && !scope.includes(input.id)) {
+        throw new TRPCError({ code: 'NOT_FOUND' });
+      }
       const [site] = await ctx.db
         .select()
         .from(sites)
@@ -153,6 +165,10 @@ export const sitesRouter = t.router({
     }),
 
   byId: authProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ ctx, input }) => {
+    const scope = ctx.scopeFor('Sites.Read');
+    if (scope !== 'all' && !scope.includes(input.id)) {
+      throw new TRPCError({ code: 'NOT_FOUND' });
+    }
     const [site] = await ctx.db
       .select()
       .from(sitesWithCounts)
@@ -176,6 +192,10 @@ export const sitesRouter = t.router({
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const siteId = input.id;
+      const scope = ctx.scopeFor('Sites.Read');
+      if (scope !== 'all' && !scope.includes(siteId)) {
+        throw new TRPCError({ code: 'NOT_FOUND' });
+      }
       await ensureCatalogDefaults(ctx.db);
 
       const [site] = await ctx.db

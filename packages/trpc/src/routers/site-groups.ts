@@ -6,15 +6,14 @@ import {
   siteGroups,
   sites
 } from '@mspbyte/drizzle';
-import { ActionLabels, hasPermission, type Permission } from '@mspbyte/shared';
+import { ActionLabels, type Permission } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
 import { queryTableData, tableDataInputSchema } from './table-data.js';
 import type { Context } from '../context.js';
 
 function requirePermission(ctx: Context, permission: Permission) {
-  const attrs = (ctx.role.attributes as Record<string, boolean> | null) ?? null;
-  if (!hasPermission(attrs, permission)) {
+  if (!ctx.can(permission)) {
     throw new TRPCError({ code: 'FORBIDDEN', message: `${permission} permission required` });
   }
 }

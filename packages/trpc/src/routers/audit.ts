@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { and, asc, count, desc, eq, ilike, or, sql, type SQL } from 'drizzle-orm';
 import { customerLogs, sites } from '@mspbyte/drizzle';
-import { hasPermission } from '@mspbyte/shared';
+import type { Context } from '../context.js';
 import { t, authProcedure } from '../trpc.js';
 
 const filterSchema = z.object({
@@ -37,9 +37,8 @@ const FILTER_COLUMNS = {
   userAgent: customerLogs.userAgent
 } as const;
 
-function requireAdmin(attributes: unknown) {
-  const attrs = (attributes as Record<string, boolean>) ?? null;
-  if (!hasPermission(attrs, 'Global.Admin')) {
+function requireAdmin(ctx: Context) {
+  if (!ctx.can('Global.Admin')) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Global.Admin permission required' });
   }
 }
@@ -85,7 +84,7 @@ export const auditRouter = t.router({
       })
     )
     .query(async ({ ctx, input }) => {
-      requireAdmin(ctx.role.attributes);
+      requireAdmin(ctx);
 
       const offset = (input.page - 1) * input.pageSize;
       const conditions: SQL[] = [];

@@ -14,7 +14,7 @@ import {
   sites,
 } from "@mspbyte/drizzle";
 import { TRPCError } from "@trpc/server";
-import { ActionLabels, PolicyTableShapes, hasPermission } from "@mspbyte/shared";
+import { ActionLabels, PolicyTableShapes } from "@mspbyte/shared";
 import { t, authProcedure } from "../trpc.js";
 import { queryTableData, tableDataInputSchema } from "./table-data.js";
 import { shortId } from "../short-id.js";
@@ -235,8 +235,7 @@ export const policiesRouter = t.router({
   delete: authProcedure
     .input(z.object({ ids: z.array(z.string()).min(1).max(1000) }))
     .mutation(async ({ ctx, input }) => {
-      const attrs = (ctx.role.attributes as Record<string, boolean>) ?? null;
-      if (!hasPermission(attrs, "Assets.Delete")) {
+      if (!ctx.can("Assets.Delete")) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Assets.Delete permission required" });
       }
 

@@ -40,7 +40,7 @@ import {
   dattoEndpoints,
   coveEndpoints
 } from '@mspbyte/drizzle';
-import { Encryption, SophosConnector, hasPermission, ActionLabels } from '@mspbyte/shared';
+import { Encryption, SophosConnector, ActionLabels } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 
 const VENDOR_TABLE_MAP = {
@@ -279,8 +279,7 @@ export const vendorRouter = t.router({
   sophosEndpointTamperProtection: authProcedure
     .input(z.object({ endpointId: z.uuid() }))
     .query(async ({ ctx, input }) => {
-      const attrs = (ctx.role.attributes as Record<string, boolean>) ?? null;
-      if (!hasPermission(attrs, 'Assets.Read')) {
+      if (!ctx.can('Assets.Read')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Read permission required' });
       }
 
@@ -305,9 +304,7 @@ export const vendorRouter = t.router({
   deleteSophosEndpoints: authProcedure
     .input(z.object({ ids: z.array(z.uuid()).min(1).max(1000) }))
     .mutation(async ({ ctx, input }) => {
-      const attrs = (ctx.role.attributes as Record<string, boolean>) ?? null;
-
-      if (!hasPermission(attrs, 'Assets.Delete')) {
+      if (!ctx.can('Assets.Delete')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Delete permission required' });
       }
 
@@ -429,8 +426,7 @@ export const vendorRouter = t.router({
   enableSophosEndpointTamperProtection: authProcedure
     .input(z.object({ ids: z.array(z.uuid()).min(1).max(1000) }))
     .mutation(async ({ ctx, input }) => {
-      const attrs = (ctx.role.attributes as Record<string, boolean>) ?? null;
-      if (!hasPermission(attrs, 'Assets.Write')) {
+      if (!ctx.can('Assets.Write')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Write permission required' });
       }
 

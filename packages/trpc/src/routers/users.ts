@@ -3,7 +3,6 @@ import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
-import { hasPermission } from '@mspbyte/shared';
 import {
   getCatalogDb,
   user as catalogUser,
@@ -31,8 +30,7 @@ export const usersRouter = t.router({
       })
     )
     .mutation(async ({ ctx, input }): Promise<UserWithRole> => {
-      const attrs = (ctx.role.attributes as Record<string, boolean>) ?? null;
-      if (!hasPermission(attrs, 'Users.Write')) {
+      if (!ctx.can('Users.Write')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Users.Write permission required' });
       }
 
@@ -104,8 +102,7 @@ export const usersRouter = t.router({
   delete: authProcedure
     .input(z.object({ id: z.uuid() }))
     .mutation(async ({ ctx, input }) => {
-      const attrs = (ctx.role.attributes as Record<string, boolean>) ?? null;
-      if (!hasPermission(attrs, 'Users.Delete')) {
+      if (!ctx.can('Users.Delete')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Users.Delete permission required' });
       }
 

@@ -1,4 +1,4 @@
-import { appRouter } from '@mspbyte/trpc';
+import { appRouter, type EffectiveScope } from '@mspbyte/trpc';
 import { createTenantDb, type organization } from '@mspbyte/drizzle-catalog';
 import type { db } from '$lib/db';
 import { ENCRYPTION_KEY, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET } from '$env/static/private';
@@ -34,6 +34,7 @@ export function createServerCaller(locals: {
     grants,
     can: (p: Permission) => hasPermission(grants, p),
     canUnder: (prefix: string) => hasAnyPermissionUnder(grants, prefix),
+    scopeFor: (p: Permission): EffectiveScope => computeScopeFor(grants, p),
     connectionString: locals.connectionString,
     encryptionKey: ENCRYPTION_KEY,
     ipAddress: null,
@@ -47,4 +48,15 @@ export function createServerCaller(locals: {
         : null,
     redis: getRedis(),
   });
+}
+
+function computeScopeFor(grants: PermissionGrant[], permission: Permission): EffectiveScope {
+  const satisfying = grants.filter((g) => hasPermission([g], permission));
+  if (satisfying.length === 0) return [];
+  if (satisfying.some((g) => g.scope.kind === 'all')) return 'all';
+  const sites = new Set<string>();
+  for (const g of satisfying) {
+    if (g.scope.kind === 'sites') for (const id of g.scope.ids) sites.add(id);
+  }
+  return [...sites];
 }

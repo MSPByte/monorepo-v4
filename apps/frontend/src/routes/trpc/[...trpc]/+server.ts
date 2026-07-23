@@ -1,9 +1,14 @@
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
-import { appRouter } from '@mspbyte/trpc';
+import { appRouter, type EffectiveScope } from '@mspbyte/trpc';
 import { createTenantDb } from '@mspbyte/drizzle-catalog';
 import { ENCRYPTION_KEY, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET } from '$env/static/private';
 import { getRedis } from '$lib/server/redis';
-import { hasPermission, hasAnyPermissionUnder, type Permission } from '@mspbyte/shared';
+import {
+  hasPermission,
+  hasAnyPermissionUnder,
+  type Permission,
+  type PermissionGrant,
+} from '@mspbyte/shared';
 import type { RequestHandler } from './$types';
 
 const handler: RequestHandler = async (event) => {
@@ -24,6 +29,7 @@ const handler: RequestHandler = async (event) => {
       grants,
       can: (p: Permission) => hasPermission(grants, p),
       canUnder: (prefix: string) => hasAnyPermissionUnder(grants, prefix),
+      scopeFor: (p: Permission): EffectiveScope => computeScopeFor(grants, p),
       connectionString: event.locals.connectionString,
       encryptionKey: ENCRYPTION_KEY,
       ipAddress: event.getClientAddress(),
@@ -42,3 +48,14 @@ const handler: RequestHandler = async (event) => {
 
 export const GET = handler;
 export const POST = handler;
+
+function computeScopeFor(grants: PermissionGrant[], permission: Permission): EffectiveScope {
+  const satisfying = grants.filter((g) => hasPermission([g], permission));
+  if (satisfying.length === 0) return [];
+  if (satisfying.some((g) => g.scope.kind === 'all')) return 'all';
+  const sites = new Set<string>();
+  for (const g of satisfying) {
+    if (g.scope.kind === 'sites') for (const id of g.scope.ids) sites.add(id);
+  }
+  return [...sites];
+}

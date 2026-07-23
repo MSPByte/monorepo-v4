@@ -107,6 +107,7 @@ export async function createContext({ req, redis }: { req: IncomingRequest; redi
     grants,
     can: (permission: Permission) => hasPermission(grants, permission),
     canUnder: (prefix: string) => hasAnyPermissionUnder(grants, prefix),
+    scopeFor: (permission: Permission) => scopeFor(grants, permission),
     connectionString: org.serviceConnectionString,
     encryptionKey: process.env.ENCRYPTION_KEY,
     ipAddress:
@@ -173,4 +174,34 @@ function toScope(kind: string | null, ids: string[] | null): Scope {
   if (kind === 'sites') return { kind: 'sites', ids: ids ?? [] };
   if (kind === 'groups') return { kind: 'groups', ids: ids ?? [] };
   return { kind: 'all' };
+}
+
+export type EffectiveScope = 'all' | readonly string[];
+
+/**
+ * Computes the effective site scope for a specific permission. Only grants
+ * that actually satisfy the permission contribute their scope — a user with
+ * `Assets.Read at sites [A,B]` + `Users.Read at all` gets `[A,B]` for
+ * Assets.Read but `'all'` for Users.Read.
+ *
+ * Returns:
+ *   - 'all' if any satisfying grant is unscoped → no WHERE filter needed.
+ *   - readonly string[] of site IDs otherwise (empty = user cannot see any
+ *     site-attached record for this permission → short-circuit to empty list).
+ *
+ * Groups-scope grants are treated as empty in Stage 4c (no site expansion).
+ * Phase 2 wires site_group_members lookup here.
+ */
+function scopeFor(grants: PermissionGrant[], permission: Permission): EffectiveScope {
+  const satisfying = grants.filter((g) => hasPermission([g], permission));
+  if (satisfying.length === 0) return [];
+  if (satisfying.some((g) => g.scope.kind === 'all')) return 'all';
+  const sites = new Set<string>();
+  for (const g of satisfying) {
+    if (g.scope.kind === 'sites') {
+      for (const id of g.scope.ids) sites.add(id);
+    }
+    // g.scope.kind === 'groups' — Phase 2
+  }
+  return [...sites];
 }

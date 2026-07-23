@@ -1,4 +1,4 @@
-import { count, sql } from 'drizzle-orm';
+import { and, count, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 
 export const tableFilterSchema = z.object({
@@ -34,10 +34,11 @@ export async function queryTableData<T extends Record<string, unknown>>(
   input: TableDataInput,
   fallbackRows?: T[],
   defaultSort?: { column: string; direction: 'asc' | 'desc' },
-  selection?: Record<string, unknown>
+  selection?: Record<string, unknown>,
+  extraWhere?: SQL
 ): Promise<TableDataResult<T>> {
   try {
-    return await querySqlTableData(db, table, input, defaultSort, selection);
+    return await querySqlTableData(db, table, input, defaultSort, selection, extraWhere);
   } catch (err) {
     console.error(err);
     return queryMemoryTableData(fallbackRows ?? [], input, defaultSort);
@@ -49,10 +50,13 @@ async function querySqlTableData<T extends Record<string, unknown>>(
   table: unknown,
   input: TableDataInput,
   defaultSort?: { column: string; direction: 'asc' | 'desc' },
-  selection?: Record<string, unknown>
+  selection?: Record<string, unknown>,
+  extraWhere?: SQL
 ): Promise<TableDataResult<T>> {
   const offset = (input.page - 1) * input.pageSize;
-  const whereClause = buildWhereClause(input);
+  const inputWhere = buildWhereClause(input);
+  const whereClause =
+    inputWhere && extraWhere ? and(inputWhere, extraWhere) : (inputWhere ?? extraWhere);
   const orderClause = buildOrderClause(input, defaultSort);
   const baseQuery = selection
     ? db.select(selection).from(table).where(whereClause)

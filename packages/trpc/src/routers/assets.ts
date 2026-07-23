@@ -36,10 +36,20 @@ function tableLabel(table?: string | null): string {
 
 export const assetsRouter = t.router({
   tableData: authProcedure.input(tableDataInputSchema).query(async ({ ctx, input }) => {
-    const result = await queryTableData(ctx.db, assetsWithSites, input, mockAssetRows(), {
-      column: 'openFindingCount',
-      direction: 'desc'
-    });
+    const scope = ctx.scopeFor('Assets.Read');
+    if (scope !== 'all' && scope.length === 0) {
+      return { rows: [], total: 0, page: input.page, pageSize: input.pageSize, pageCount: 0 };
+    }
+    const scopeWhere = scope === 'all' ? undefined : inArray(assetsWithSites.siteId, [...scope]);
+    const result = await queryTableData(
+      ctx.db,
+      assetsWithSites,
+      input,
+      mockAssetRows(),
+      { column: 'openFindingCount', direction: 'desc' },
+      undefined,
+      scopeWhere
+    );
     return {
       ...result,
       rows: result.rows.map((row) => ({
@@ -50,9 +60,12 @@ export const assetsRouter = t.router({
   }),
 
   list: authProcedure.query(async ({ ctx }) => {
+    const scope = ctx.scopeFor('Assets.Read');
+    if (scope !== 'all' && scope.length === 0) return [];
     const rows = await ctx.db
       .select()
       .from(assetsWithSites)
+      .where(scope === 'all' ? undefined : inArray(assetsWithSites.siteId, [...scope]))
       .orderBy(assetsWithSites.displayName)
       .limit(500)
       .catch(() => []);
@@ -81,6 +94,10 @@ export const assetsRouter = t.router({
       .limit(1)
       .catch(() => []);
     if (row) {
+      const scope = ctx.scopeFor('Assets.Read');
+      if (scope !== 'all' && (!row.siteId || !scope.includes(row.siteId))) {
+        throw new TRPCError({ code: 'NOT_FOUND' });
+      }
       const sources = await ctx.db
         .select()
         .from(entitySources)

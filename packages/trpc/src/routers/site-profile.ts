@@ -12,7 +12,6 @@ import {
   ActionLabels,
   BUILT_IN_PROFILE_FIELDS,
   BUILT_IN_STACK_CATEGORIES,
-  hasPermission,
   type Permission
 } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
@@ -129,8 +128,7 @@ function actorLabel(ctx: Context) {
 }
 
 function requireSitePermission(ctx: Context, permission: Permission) {
-  const attrs = (ctx.role.attributes as Record<string, boolean> | null) ?? null;
-  if (!hasPermission(attrs, permission)) {
+  if (!ctx.can(permission)) {
     throw new TRPCError({ code: 'FORBIDDEN', message: `${permission} permission required` });
   }
 }
