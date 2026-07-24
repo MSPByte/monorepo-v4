@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { TRPCError } from '@trpc/server';
 import {
   findings,
   findingsWithContext,
@@ -12,6 +13,29 @@ const OPEN_STATUSES = ['open', 'acknowledged', 'regressed'] as const;
 
 export const overviewRouter = t.router({
   kpis: authProcedure.query(async ({ ctx }) => {
+    if (!ctx.can('Findings.Read') && !ctx.can('Assets.Read')) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Read permission required' });
+    }
+    const findingsScope = ctx.scopeFor('Findings.Read');
+    const integrationsScope = ctx.scopeFor('Integrations.Read');
+    const policiesScope = ctx.scopeFor('Policies.Read');
+
+    const findingsSiteFilter =
+      findingsScope === 'all'
+        ? undefined
+        : findingsScope.length === 0
+          ? sql`false`
+          : inArray(findings.siteId, [...findingsScope]);
+    const linksSiteFilter =
+      integrationsScope === 'all'
+        ? undefined
+        : integrationsScope.length === 0
+          ? sql`false`
+          : inArray(integrationLinks.siteId, [...integrationsScope]);
+    // policiesWithStats aggregates across sites; a scoped user only gets a
+    // meaningful pass-rate for their scope. If no policies access, skip.
+    const policiesAccessible = ctx.can('Policies.Read');
+
     const [severityRows, sitePressureRow, sourceHealthRow, passRateRow] = await Promise.all([
       ctx.db
         .select({
@@ -19,7 +43,9 @@ export const overviewRouter = t.router({
           count: sql<number>`count(*)::int`
         })
         .from(findings)
-        .where(inArray(findings.status, [...OPEN_STATUSES]))
+        .where(
+          and(inArray(findings.status, [...OPEN_STATUSES]), findingsSiteFilter) as never
+        )
         .groupBy(findings.severity)
         .catch(() => [] as { severity: number; count: number }[]),
       ctx.db
@@ -27,22 +53,29 @@ export const overviewRouter = t.router({
           sitesWithOpenFindings: sql<number>`count(distinct ${findings.siteId})::int`
         })
         .from(findings)
-        .where(inArray(findings.status, [...OPEN_STATUSES]))
+        .where(
+          and(inArray(findings.status, [...OPEN_STATUSES]), findingsSiteFilter) as never
+        )
         .catch(() => [{ sitesWithOpenFindings: 0 }]),
-      ctx.db
-        .select({
-          total: sql<number>`count(*)::int`,
-          failed: sql<number>`count(*) filter (where ${integrationLinks.status} = 'error')::int`
-        })
-        .from(integrationLinks)
-        .catch(() => [{ total: 0, failed: 0 }]),
-      ctx.db
-        .select({
-          avgPassRate: sql<number>`coalesce(round(avg(case when ${policiesWithStats.openFindingCount} = 0 then 100 else 0 end)), 0)::int`
-        })
-        .from(policiesWithStats)
-        .where(eq(policiesWithStats.enabled, true))
-        .catch(() => [{ avgPassRate: 0 }])
+      integrationsScope !== 'all' && integrationsScope.length === 0
+        ? Promise.resolve([{ total: 0, failed: 0 }])
+        : ctx.db
+            .select({
+              total: sql<number>`count(*)::int`,
+              failed: sql<number>`count(*) filter (where ${integrationLinks.status} = 'error')::int`
+            })
+            .from(integrationLinks)
+            .where(linksSiteFilter as never)
+            .catch(() => [{ total: 0, failed: 0 }]),
+      policiesAccessible
+        ? ctx.db
+            .select({
+              avgPassRate: sql<number>`coalesce(round(avg(case when ${policiesWithStats.openFindingCount} = 0 then 100 else 0 end)), 0)::int`
+            })
+            .from(policiesWithStats)
+            .where(eq(policiesWithStats.enabled, true))
+            .catch(() => [{ avgPassRate: 0 }])
+        : Promise.resolve([{ avgPassRate: 0 }])
     ]);
 
     const bySeverity = [4, 3, 2, 1].map((severity) => ({
@@ -65,9 +98,16 @@ export const overviewRouter = t.router({
       },
       policyPassRate: passRateRow[0]?.avgPassRate ?? 0
     };
+    void policiesScope;
   }),
 
   findingRollups: authProcedure.query(async ({ ctx }) => {
+    if (!ctx.can('Findings.Read')) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Findings.Read permission required' });
+    }
+    const scope = ctx.scopeFor('Findings.Read');
+    if (scope !== 'all' && scope.length === 0) return [];
+
     const rows = await ctx.db
       .select({
         policyId: findingsWithContext.policyId,
@@ -79,35 +119,56 @@ export const overviewRouter = t.router({
         lastSeenAt: sql<string>`max(${findingsWithContext.lastSeenAt})`
       })
       .from(findingsWithContext)
-      .where(inArray(findingsWithContext.status, [...OPEN_STATUSES]))
-      .groupBy(findingsWithContext.policyId, findingsWithContext.policyName)
-      .orderBy(
-        sql`max(${findingsWithContext.severity}) desc`,
-        sql`count(*) desc`
+      .where(
+        and(
+          inArray(findingsWithContext.status, [...OPEN_STATUSES]),
+          scope === 'all' ? undefined : inArray(findingsWithContext.siteId, [...scope])
+        ) as never
       )
+      .groupBy(findingsWithContext.policyId, findingsWithContext.policyName)
+      .orderBy(sql`max(${findingsWithContext.severity}) desc`, sql`count(*) desc`)
       .limit(50)
-      .catch(() => [] as Array<{
-        policyId: string;
-        policyName: string;
-        maxSeverity: number;
-        count: number;
-        siteCount: number;
-        resourceType: string;
-        lastSeenAt: string;
-      }>);
+      .catch(
+        () =>
+          [] as Array<{
+            policyId: string;
+            policyName: string;
+            maxSeverity: number;
+            count: number;
+            siteCount: number;
+            resourceType: string;
+            lastSeenAt: string;
+          }>
+      );
     return rows;
   }),
 
   sitePressure: authProcedure.query(async ({ ctx }) => {
+    if (!ctx.can('Sites.Read')) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Sites.Read permission required' });
+    }
+    const sitesScope = ctx.scopeFor('Sites.Read');
+    if (sitesScope !== 'all' && sitesScope.length === 0) return [];
+
+    const findingsScope = ctx.scopeFor('Findings.Read');
+
     const siteRows = await ctx.db
       .select()
       .from(sitesWithCounts)
+      .where(sitesScope === 'all' ? undefined : inArray(sitesWithCounts.id, [...sitesScope]))
       .orderBy(desc(sitesWithCounts.openFindingCount), sitesWithCounts.name)
       .limit(500)
       .catch(() => []);
     if (!siteRows.length) return [];
 
     const ids = siteRows.map((row) => row.id);
+    // Findings breakdown — narrow by findings scope (if narrower than sites).
+    const findingsFilter =
+      findingsScope === 'all'
+        ? inArray(findings.siteId, ids)
+        : findingsScope.length === 0
+          ? sql`false`
+          : inArray(findings.siteId, ids.filter((id) => (findingsScope as readonly string[]).includes(id)));
     const severityRows = await ctx.db
       .select({
         siteId: findings.siteId,
@@ -115,14 +176,22 @@ export const overviewRouter = t.router({
         count: sql<number>`count(*)::int`
       })
       .from(findings)
-      .where(and(inArray(findings.status, [...OPEN_STATUSES]), inArray(findings.siteId, ids)))
+      .where(and(inArray(findings.status, [...OPEN_STATUSES]), findingsFilter) as never)
       .groupBy(findings.siteId, findings.severity)
       .catch(() => [] as { siteId: string; severity: number; count: number }[]);
 
-    const bucketBySite = new Map<string, { critical: number; high: number; medium: number; low: number }>();
+    const bucketBySite = new Map<
+      string,
+      { critical: number; high: number; medium: number; low: number }
+    >();
     for (const row of severityRows) {
       if (!row.siteId) continue;
-      const bucket = bucketBySite.get(row.siteId) ?? { critical: 0, high: 0, medium: 0, low: 0 };
+      const bucket = bucketBySite.get(row.siteId) ?? {
+        critical: 0,
+        high: 0,
+        medium: 0,
+        low: 0
+      };
       if (row.severity === 4) bucket.critical += row.count;
       else if (row.severity === 3) bucket.high += row.count;
       else if (row.severity === 2) bucket.medium += row.count;

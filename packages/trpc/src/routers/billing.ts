@@ -727,12 +727,32 @@ async function previewRule(
 
 void inArray;
 
+function requireBillingRead(ctx: { can: (p: 'Billing.Read') => boolean }) {
+  if (!ctx.can('Billing.Read')) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Billing.Read permission required' });
+  }
+}
+
+function requireBillingWrite(ctx: { can: (p: 'Billing.Write') => boolean }) {
+  if (!ctx.can('Billing.Write')) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Billing.Write permission required' });
+  }
+}
+
+function requireBillingDelete(ctx: { can: (p: 'Billing.Delete') => boolean }) {
+  if (!ctx.can('Billing.Delete')) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Billing.Delete permission required' });
+  }
+}
+
 export const billingRouter = t.router({
   psaItems: authProcedure.query(async ({ ctx }) => {
+    requireBillingRead(ctx);
     return ctx.db.select().from(billingPsaItems).where(isNull(billingPsaItems.deletedAt));
   }),
 
   rules: authProcedure.query(async ({ ctx }) => {
+    requireBillingRead(ctx);
     const [ruleRows, scopeRows] = await Promise.all([
       ctx.db
         .select()
@@ -752,7 +772,8 @@ export const billingRouter = t.router({
     }));
   }),
 
-  facets: authProcedure.query(async () => {
+  facets: authProcedure.query(async ({ ctx }) => {
+    requireBillingRead(ctx);
     return listBillingFacets().map((facet) => ({
       facet: facet.facet,
       providerId: facet.providerId,
@@ -763,6 +784,7 @@ export const billingRouter = t.router({
   }),
 
   upsertRule: authProcedure.input(upsertRuleSchema).mutation(async ({ ctx, input }) => {
+    requireBillingWrite(ctx);
     const values = {
       name: input.name,
       enabled: input.enabled,
@@ -806,6 +828,7 @@ export const billingRouter = t.router({
   }),
 
   deleteRule: authProcedure.input(z.object({ id: z.uuid() })).mutation(async ({ ctx, input }) => {
+    requireBillingDelete(ctx);
     const [row] = await ctx.db
       .delete(billingReconciliationRules)
       .where(eq(billingReconciliationRules.id, input.id))
@@ -815,14 +838,45 @@ export const billingRouter = t.router({
   }),
 
   previewRule: authProcedure.input(upsertRuleSchema).query(async ({ ctx, input }) => {
+    requireBillingRead(ctx);
     return previewRule(ctx.db, input);
   }),
 
   report: authProcedure.input(reportInputSchema).query(async ({ ctx, input }) => {
-    return buildReport(ctx.db, input);
+    requireBillingRead(ctx);
+    // Narrow the report to the caller's site scope when they aren't a
+    // full-tenant admin. Scoped users only see reconciliation rows for their
+    // sites; catalog rules and totals reflect the same slice.
+    const scope = ctx.scopeFor('Billing.Read');
+    if (scope !== 'all' && scope.length === 0) {
+      return {
+        rows: [],
+        total: 0,
+        page: input.page,
+        pageSize: input.pageSize,
+        pageCount: 0,
+        summary: {
+          totalRows: 0,
+          underbilledRows: 0,
+          overbilledRows: 0,
+          missingRuleRows: 0,
+          underbilledMrr: 0,
+          overbilledMrr: 0,
+          netMrrDelta: 0
+        },
+        filteredSummary: { billed: 0, actual: 0, diff: 0, mrr: 0, underCount: 0, overCount: 0 },
+        ruleAggregates: {}
+      };
+    }
+    const result = await buildReport(ctx.db, input);
+    if (scope === 'all') return result;
+    const allowed = new Set(scope);
+    const filtered = result.rows.filter((r) => r.siteId != null && allowed.has(r.siteId));
+    return { ...result, rows: filtered, total: filtered.length };
   }),
 
   filterOptions: authProcedure.query(async ({ ctx }) => {
+    requireBillingRead(ctx);
     const [siteRows, groupRows, memberRows] = await Promise.all([
       ctx.db
         .select({ id: sites.id, name: sites.name })

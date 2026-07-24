@@ -13,8 +13,21 @@ const frameworkInputSchema = z.object({
   enabled: z.boolean().default(true)
 });
 
+function requireRead(ctx: { can: (p: 'Frameworks.Read') => boolean }) {
+  if (!ctx.can('Frameworks.Read')) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Frameworks.Read permission required' });
+  }
+}
+
+function requireWrite(ctx: { can: (p: 'Frameworks.Write') => boolean }) {
+  if (!ctx.can('Frameworks.Write')) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Frameworks.Write permission required' });
+  }
+}
+
 export const frameworksRouter = t.router({
   tableData: authProcedure.input(tableDataInputSchema).query(async ({ ctx, input }) => {
+    requireRead(ctx);
     const result = await queryTableData<typeof policySetsWithStats.$inferSelect>(ctx.db, policySetsWithStats, input, [], {
       column: 'openFindings',
       direction: 'desc'
@@ -34,6 +47,7 @@ export const frameworksRouter = t.router({
   }),
 
   list: authProcedure.query(async ({ ctx }) => {
+    requireRead(ctx);
     const rows = await ctx.db
       .select()
       .from(policySetsWithStats)
@@ -55,6 +69,7 @@ export const frameworksRouter = t.router({
   }),
 
   create: authProcedure.input(frameworkInputSchema).mutation(async ({ ctx, input }) => {
+    requireWrite(ctx);
     const [row] = await ctx.db
       .insert(policySets)
       .values({
@@ -73,6 +88,7 @@ export const frameworksRouter = t.router({
   update: authProcedure
     .input(frameworkInputSchema.extend({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      requireWrite(ctx);
       const { id, ...values } = input;
       const [row] = await ctx.db
         .update(policySets)
@@ -86,6 +102,7 @@ export const frameworksRouter = t.router({
   setPolicies: authProcedure
     .input(z.object({ policySetId: z.string().uuid(), policyIds: z.array(z.string()) }))
     .mutation(async ({ ctx, input }) => {
+      requireWrite(ctx);
       await ctx.db.delete(policySetItems).where(eq(policySetItems.policySetId, input.policySetId));
       if (input.policyIds.length > 0) {
         await ctx.db
@@ -101,6 +118,7 @@ export const frameworksRouter = t.router({
     }),
 
   listPolicies: authProcedure.input(z.object({ policySetId: z.string().uuid() })).query(async ({ ctx, input }) => {
+    requireRead(ctx);
     return ctx.db
       .select({
         id: policies.id,
@@ -117,6 +135,7 @@ export const frameworksRouter = t.router({
   }),
 
   byId: authProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
+    requireRead(ctx);
     const [row] = await ctx.db
       .select()
       .from(policySets)

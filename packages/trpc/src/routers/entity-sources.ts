@@ -480,6 +480,9 @@ export const entitySourcesRouter = t.router({
       })
     )
     .query(async ({ ctx, input }) => {
+      if (!ctx.can('Assets.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Read permission required' });
+      }
       const search = input.search?.trim() ?? '';
       const perTable = Math.max(5, Math.ceil(input.limit));
 

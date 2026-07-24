@@ -13,6 +13,17 @@ import { enqueueIngestionJob, hasActiveIngestionRun } from '@mspbyte/pipeline';
 import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 
+// Pipeline endpoints control ingestion — admin-only surface.
+const pipelineProcedure = authProcedure.use(({ ctx, next }) => {
+  if (!ctx.can('Global.Admin')) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Global.Admin permission required'
+    });
+  }
+  return next();
+});
+
 const ACTIVE_RUN_STALE_MS = 2 * 60 * 60 * 1000;
 
 function isSupportedFacet(integrationId: string, facet: string): boolean {
@@ -22,7 +33,7 @@ function isSupportedFacet(integrationId: string, facet: string): boolean {
 }
 
 export const pipelineRouter = t.router({
-  enqueueSync: authProcedure
+  enqueueSync: pipelineProcedure
     .input(
       z.object({
         linkId: z.string().uuid(),
@@ -81,7 +92,7 @@ export const pipelineRouter = t.router({
       return result;
     }),
 
-  enqueueIntegrationSync: authProcedure
+  enqueueIntegrationSync: pipelineProcedure
     .input(
       z.object({
         integrationId: z.string().min(1),
@@ -162,7 +173,7 @@ export const pipelineRouter = t.router({
       };
     }),
 
-  syncableLinks: authProcedure.query(async ({ ctx }) => {
+  syncableLinks: pipelineProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db
       .select({
         id: integrationLinks.id,
@@ -189,7 +200,7 @@ export const pipelineRouter = t.router({
       .filter((row) => row.facets.length > 0);
   }),
 
-  syncStatus: authProcedure
+  syncStatus: pipelineProcedure
     .input(z.object({ linkId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const [contexts, runs] = await Promise.all([
@@ -204,7 +215,7 @@ export const pipelineRouter = t.router({
       return { contexts, recentRuns: runs };
     }),
 
-  recentRuns: authProcedure
+  recentRuns: pipelineProcedure
     .input(
       z.object({
         linkId: z.string().uuid().optional(),
@@ -221,7 +232,7 @@ export const pipelineRouter = t.router({
         .limit(input.limit);
     }),
 
-  failedStages: authProcedure
+  failedStages: pipelineProcedure
     .input(z.object({ limit: z.number().int().min(1).max(100).default(20) }))
     .query(async ({ ctx, input }) => {
       return ctx.db

@@ -113,10 +113,23 @@ function policyDataSource(
   return fallback ?? "Unknown";
 }
 
+function requirePoliciesRead(ctx: { can: (p: 'Policies.Read') => boolean }) {
+  if (!ctx.can('Policies.Read')) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Policies.Read permission required' });
+  }
+}
+
+function requirePoliciesWrite(ctx: { can: (p: 'Policies.Write') => boolean }) {
+  if (!ctx.can('Policies.Write')) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Policies.Write permission required' });
+  }
+}
+
 export const policiesRouter = t.router({
   tableData: authProcedure
     .input(tableDataInputSchema)
     .query(async ({ ctx, input }) => {
+      requirePoliciesRead(ctx);
       const result = await queryTableData<typeof policiesWithStats.$inferSelect>(
         ctx.db,
         policiesWithStats,
@@ -154,6 +167,7 @@ export const policiesRouter = t.router({
     }),
 
   list: authProcedure.query(async ({ ctx }) => {
+    requirePoliciesRead(ctx);
     const rows = await ctx.db
       .select()
       .from(policiesWithStats)
@@ -193,6 +207,7 @@ export const policiesRouter = t.router({
   create: authProcedure
     .input(policyInputSchema)
     .mutation(async ({ ctx, input }) => {
+      requirePoliciesWrite(ctx);
       const idBase = input.name
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
@@ -222,6 +237,7 @@ export const policiesRouter = t.router({
   update: authProcedure
     .input(policyInputSchema.extend({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      requirePoliciesWrite(ctx);
       const { id, ...values } = input;
       const [row] = await ctx.db
         .update(policies)
@@ -235,8 +251,8 @@ export const policiesRouter = t.router({
   delete: authProcedure
     .input(z.object({ ids: z.array(z.string()).min(1).max(1000) }))
     .mutation(async ({ ctx, input }) => {
-      if (!ctx.can("Assets.Delete")) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Assets.Delete permission required" });
+      if (!ctx.can("Policies.Delete")) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Policies.Delete permission required" });
       }
 
       const uniqueIds = [...new Set(input.ids)];
@@ -314,6 +330,7 @@ export const policiesRouter = t.router({
   createAssignment: authProcedure
     .input(assignmentInputSchema)
     .mutation(async ({ ctx, input }) => {
+      requirePoliciesWrite(ctx);
       const [row] = await ctx.db
         .insert(policyAssignments)
         .values({
@@ -344,6 +361,7 @@ export const policiesRouter = t.router({
         .optional(),
     )
     .query(async ({ ctx, input }) => {
+      requirePoliciesRead(ctx);
       const conditions = [];
       if (input?.policyId)
         conditions.push(eq(policyAssignments.policyId, input.policyId));
@@ -384,6 +402,7 @@ export const policiesRouter = t.router({
   deleteAssignment: authProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      requirePoliciesWrite(ctx);
       await ctx.db
         .delete(policyAssignments)
         .where(eq(policyAssignments.id, input.id));
@@ -398,6 +417,7 @@ export const policiesRouter = t.router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      requirePoliciesWrite(ctx);
       await ctx.db
         .delete(policySetItems)
         .where(eq(policySetItems.policyId, input.policyId));
@@ -416,6 +436,7 @@ export const policiesRouter = t.router({
     }),
 
   assignmentOptions: authProcedure.query(async ({ ctx }) => {
+    requirePoliciesRead(ctx);
     const [siteRows, groupRows, linkRows] = await Promise.all([
       ctx.db
         .select({ id: sites.id, name: sites.name })
@@ -444,6 +465,7 @@ export const policiesRouter = t.router({
   byId: authProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
+      requirePoliciesRead(ctx);
       const [row] = await ctx.db
         .select()
         .from(policies)

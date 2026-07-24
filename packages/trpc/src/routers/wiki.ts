@@ -20,6 +20,17 @@ import { shortId } from '../short-id.js';
 import { alias } from 'drizzle-orm/pg-core';
 import type { Context } from '../context.js';
 
+// Wiki-scoped procedure — reads (`.query`) require Wiki.Read; mutations
+// (`.mutation`) require Wiki.Write. Applied to every wiki endpoint by
+// replacing authProcedure with wikiProcedure globally in this file.
+const wikiProcedure = authProcedure.use(({ ctx, next, type }) => {
+  const required = type === 'mutation' ? 'Wiki.Write' : 'Wiki.Read';
+  if (!ctx.can(required)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: `${required} permission required` });
+  }
+  return next();
+});
+
 function formatKbId(kbNumber: number): string {
   return `KB${String(kbNumber).padStart(3, '0')}`;
 }
@@ -41,11 +52,11 @@ async function getLatestArticleVersionId(db: Pick<Context['db'], 'select'>, arti
 // ── Contexts ──────────────────────────────────────────────
 
 const contextsRouter = t.router({
-  list: authProcedure.query(async ({ ctx }) => {
+  list: wikiProcedure.query(async ({ ctx }) => {
     return ctx.db.select().from(contexts).orderBy(asc(contexts.sortOrder), asc(contexts.name));
   }),
 
-  create: authProcedure
+  create: wikiProcedure
     .input(
       z.object({
         name: z.string().min(1),
@@ -75,7 +86,7 @@ const contextsRouter = t.router({
       return row!;
     }),
 
-  update: authProcedure
+  update: wikiProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -103,7 +114,7 @@ const contextsRouter = t.router({
       return row;
     }),
 
-  remove: authProcedure
+  remove: wikiProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const [target] = await ctx.db
@@ -144,7 +155,7 @@ const contextsRouter = t.router({
 // ── Tags ──────────────────────────────────────────────────
 
 const tagsRouter = t.router({
-  list: authProcedure.query(async ({ ctx }) => {
+  list: wikiProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db
       .select({
         id: tags.id,
@@ -163,7 +174,7 @@ const tagsRouter = t.router({
     return rows;
   }),
 
-  create: authProcedure
+  create: wikiProcedure
     .input(
       z.object({
         name: z.string().min(1),
@@ -184,7 +195,7 @@ const tagsRouter = t.router({
       return row!;
     }),
 
-  update: authProcedure
+  update: wikiProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -210,7 +221,7 @@ const tagsRouter = t.router({
       return row;
     }),
 
-  remove: authProcedure
+  remove: wikiProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.delete(tags).where(eq(tags.id, input.id));
@@ -224,7 +235,7 @@ const createdByUser = alias(users, 'createdByUser');
 const draftUpdatedByUser = alias(users, 'draftUpdatedByUser');
 
 const articlesRouter = t.router({
-  list: authProcedure
+  list: wikiProcedure
     .input(
       z
         .object({
@@ -383,7 +394,7 @@ const articlesRouter = t.router({
         });
     }),
 
-  get: authProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ ctx, input }) => {
+  get: wikiProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ ctx, input }) => {
     const primaryCtx = alias(contexts, 'primaryCtx');
 
     const [row] = await ctx.db
@@ -570,7 +581,7 @@ const articlesRouter = t.router({
     };
   }),
 
-  getByKbNumber: authProcedure
+  getByKbNumber: wikiProcedure
     .input(z.object({ kbNumber: z.number().int().positive() }))
     .query(async ({ ctx, input }) => {
       const [row] = await ctx.db
@@ -583,7 +594,7 @@ const articlesRouter = t.router({
       return row;
     }),
 
-  recent: authProcedure
+  recent: wikiProcedure
     .input(z.object({ limit: z.number().int().min(1).max(50).default(6) }).optional())
     .query(async ({ ctx, input }) => {
       const limit = input?.limit ?? 6;
@@ -640,7 +651,7 @@ const articlesRouter = t.router({
       }));
     }),
 
-  create: authProcedure
+  create: wikiProcedure
     .input(
       z.object({
         title: z.string().min(1),
@@ -717,7 +728,7 @@ const articlesRouter = t.router({
       };
     }),
 
-  update: authProcedure
+  update: wikiProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -817,7 +828,7 @@ const articlesRouter = t.router({
       };
     }),
 
-  updateMeta: authProcedure
+  updateMeta: wikiProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -872,7 +883,7 @@ const articlesRouter = t.router({
       });
     }),
 
-  archive: authProcedure
+  archive: wikiProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const [article] = await ctx.db
@@ -893,7 +904,7 @@ const articlesRouter = t.router({
       };
     }),
 
-  remove: authProcedure
+  remove: wikiProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.delete(articles).where(eq(articles.id, input.id));
@@ -915,7 +926,7 @@ const draftPayloadSchema = z.object({
 });
 
 const draftsRouter = t.router({
-  save: authProcedure.input(draftPayloadSchema).mutation(async ({ ctx, input }) => {
+  save: wikiProcedure.input(draftPayloadSchema).mutation(async ({ ctx, input }) => {
     return ctx.db.transaction(async (tx) => {
       let articleId = input.articleId;
       let kbNumber: number;
@@ -1007,7 +1018,7 @@ const draftsRouter = t.router({
     });
   }),
 
-  publish: authProcedure
+  publish: wikiProcedure
     .input(draftPayloadSchema.extend({ articleId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       return ctx.db.transaction(async (tx) => {
@@ -1107,7 +1118,7 @@ const draftsRouter = t.router({
       });
     }),
 
-  remove: authProcedure
+  remove: wikiProcedure
     .input(z.object({ articleId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.delete(articleDrafts).where(eq(articleDrafts.articleId, input.articleId));
@@ -1118,7 +1129,7 @@ const draftsRouter = t.router({
 // ── Overrides ─────────────────────────────────────────────
 
 const overridesRouter = t.router({
-  listForArticle: authProcedure
+  listForArticle: wikiProcedure
     .input(z.object({ articleId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       return ctx.db
@@ -1140,7 +1151,7 @@ const overridesRouter = t.router({
         .orderBy(asc(sites.name));
     }),
 
-  listForSite: authProcedure
+  listForSite: wikiProcedure
     .input(z.object({ siteId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       return ctx.db
@@ -1162,7 +1173,7 @@ const overridesRouter = t.router({
         .orderBy(desc(articleOverrides.updatedAt));
     }),
 
-  create: authProcedure
+  create: wikiProcedure
     .input(
       z.object({
         articleId: z.string().uuid(),
@@ -1203,7 +1214,7 @@ const overridesRouter = t.router({
       return { ...row, siteName: site?.name ?? '' };
     }),
 
-  update: authProcedure
+  update: wikiProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -1238,7 +1249,7 @@ const overridesRouter = t.router({
       return { ...row, siteName: site?.name ?? '' };
     }),
 
-  remove: authProcedure
+  remove: wikiProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.delete(articleOverrides).where(eq(articleOverrides.id, input.id));
@@ -1249,7 +1260,7 @@ const overridesRouter = t.router({
 // ── Versions ──────────────────────────────────────────────
 
 const versionsRouter = t.router({
-  listForArticle: authProcedure
+  listForArticle: wikiProcedure
     .input(z.object({ articleId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       return ctx.db
@@ -1268,7 +1279,7 @@ const versionsRouter = t.router({
         .orderBy(desc(articleVersions.versionNumber));
     }),
 
-  get: authProcedure
+  get: wikiProcedure
     .input(z.object({ id: z.string().uuid(), articleId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const [version] = await ctx.db
@@ -1310,7 +1321,7 @@ const versionsRouter = t.router({
 // ── Edit Locks ────────────────────────────────────────────
 
 const locksRouter = t.router({
-  acquire: authProcedure
+  acquire: wikiProcedure
     .input(
       z.object({
         resourceType: z.enum(['article', 'override']),
@@ -1374,7 +1385,7 @@ const locksRouter = t.router({
       return row!;
     }),
 
-  release: authProcedure
+  release: wikiProcedure
     .input(
       z.object({
         resourceType: z.enum(['article', 'override']),
@@ -1394,7 +1405,7 @@ const locksRouter = t.router({
       return { success: true };
     }),
 
-  heartbeat: authProcedure
+  heartbeat: wikiProcedure
     .input(
       z.object({
         resourceType: z.enum(['article', 'override']),

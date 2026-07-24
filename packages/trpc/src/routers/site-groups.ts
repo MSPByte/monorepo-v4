@@ -12,6 +12,15 @@ import { t, authProcedure } from '../trpc.js';
 import { queryTableData, tableDataInputSchema } from './table-data.js';
 import type { Context } from '../context.js';
 
+// Reads gated on Sites.Read; mutations gated on their explicit permission
+// via requirePermission below.
+const siteGroupProcedure = authProcedure.use(({ ctx, next, type }) => {
+  if (type === 'query' && !ctx.can('Sites.Read')) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Sites.Read permission required' });
+  }
+  return next();
+});
+
 function requirePermission(ctx: Context, permission: Permission) {
   if (!ctx.can(permission)) {
     throw new TRPCError({ code: 'FORBIDDEN', message: `${permission} permission required` });
@@ -50,7 +59,7 @@ async function auditGroupChange(
 }
 
 export const siteGroupsRouter = t.router({
-  tableData: authProcedure.input(tableDataInputSchema).query(async ({ ctx, input }) => {
+  tableData: siteGroupProcedure.input(tableDataInputSchema).query(async ({ ctx, input }) => {
     const result = await queryTableData<typeof siteGroups.$inferSelect>(
       ctx.db,
       siteGroups,
@@ -85,7 +94,7 @@ export const siteGroupsRouter = t.router({
     };
   }),
 
-  list: authProcedure.query(async ({ ctx }) => {
+  list: siteGroupProcedure.query(async ({ ctx }) => {
     return ctx.db
       .select({
         id: siteGroups.id,
@@ -97,7 +106,7 @@ export const siteGroupsRouter = t.router({
       .catch(() => []);
   }),
 
-  byId: authProcedure
+  byId: siteGroupProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const [group] = await ctx.db
@@ -120,7 +129,7 @@ export const siteGroupsRouter = t.router({
       };
     }),
 
-  members: authProcedure
+  members: siteGroupProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const rows = await ctx.db
@@ -138,7 +147,7 @@ export const siteGroupsRouter = t.router({
       return rows;
     }),
 
-  forSite: authProcedure
+  forSite: siteGroupProcedure
     .input(z.object({ siteId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const rows = await ctx.db
@@ -156,7 +165,7 @@ export const siteGroupsRouter = t.router({
       return rows;
     }),
 
-  recentActivity: authProcedure
+  recentActivity: siteGroupProcedure
     .input(z.object({ id: z.string().uuid(), limit: z.number().int().min(1).max(200).default(50) }))
     .query(async ({ ctx, input }) => {
       const rows = await ctx.db
@@ -180,7 +189,7 @@ export const siteGroupsRouter = t.router({
       return rows;
     }),
 
-  create: authProcedure
+  create: siteGroupProcedure
     .input(
       z.object({
         name: z.string().trim().min(1).max(200),
@@ -206,7 +215,7 @@ export const siteGroupsRouter = t.router({
       return row;
     }),
 
-  update: authProcedure
+  update: siteGroupProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -253,7 +262,7 @@ export const siteGroupsRouter = t.router({
       return row;
     }),
 
-  delete: authProcedure
+  delete: siteGroupProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       requirePermission(ctx, 'Sites.Write');
@@ -291,7 +300,7 @@ export const siteGroupsRouter = t.router({
       return { ok: true };
     }),
 
-  addMember: authProcedure
+  addMember: siteGroupProcedure
     .input(z.object({ siteGroupId: z.string().uuid(), siteId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       requirePermission(ctx, 'Sites.Write');
@@ -329,7 +338,7 @@ export const siteGroupsRouter = t.router({
       return { ok: true, changed: true };
     }),
 
-  removeMember: authProcedure
+  removeMember: siteGroupProcedure
     .input(z.object({ siteGroupId: z.string().uuid(), siteId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       requirePermission(ctx, 'Sites.Write');
