@@ -196,6 +196,7 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     targetType: 'vendor',
     providerId: 'microsoft-365',
     facet: ProviderFacet.M365CAPolicies,
+    route: { path: '/microsoft-365/policies', searchField: 'externalId' },
     shape: getFacetShape(ProviderFacet.M365CAPolicies)
   },
   {

@@ -59,9 +59,19 @@ function tableLabel(table?: string | null): string | null {
   return getPolicyTableShape(table)?.label ?? toProper(table.split('.').pop() ?? table);
 }
 
-function canonicalHref(resourceType: string, resourceId: string): string | null {
+function canonicalHref(
+  resourceType: string,
+  resourceId: string,
+  resourceTable: string | null,
+  linkId: string | null
+): string | null {
   if (resourceType === 'person') return `/people/${resourceId}`;
   if (resourceType === 'asset') return `/assets/${resourceId}`;
+  // Vendor-scoped resources (typically integration_link findings like "no CA
+  // policy matches"): deep-link to the vendor table for the tenant so users can
+  // see the underlying records. The (vendors) layout reads ?linkId and sets scope.
+  const route = resourceTable ? getPolicyTableShape(resourceTable)?.route : null;
+  if (route && linkId) return `${route.path}?linkId=${linkId}`;
   return null;
 }
 
@@ -179,12 +189,19 @@ export const findingsRouter = t.router({
     }[] = [];
 
     const canonicalLabel = tableLabel(row.resourceTable) ?? toProper(row.resourceType);
+    // For integration_link-scoped findings (e.g. tenant-wide policy count checks)
+    // the view falls back to the raw resource_id (link UUID) since no canonical
+    // asset/person joined. Prefer the human-readable link name.
+    const canonicalName =
+      row.resourceType === 'integration_link' && row.linkName && row.linkName !== '-'
+        ? row.linkName
+        : row.resourceName;
     dataSources.push({
       kind: 'canonical',
       label: canonicalLabel,
-      table: null,
-      name: row.resourceName,
-      href: canonicalHref(row.resourceType, row.resourceId),
+      table: row.resourceTable ?? null,
+      name: canonicalName,
+      href: canonicalHref(row.resourceType, row.resourceId, row.resourceTable, row.linkId),
       externalId: row.resourceExternalId ?? null,
       provider: null
     });

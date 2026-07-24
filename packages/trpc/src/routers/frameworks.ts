@@ -1,8 +1,16 @@
 import { z } from 'zod';
-import { and, eq } from 'drizzle-orm';
-import { policies, policySetItems, policySets, policySetsWithStats } from '@mspbyte/drizzle';
+import { and, eq, inArray } from 'drizzle-orm';
+import {
+  customerLogs,
+  policies,
+  policySetItems,
+  policySets,
+  policySetsWithStats
+} from '@mspbyte/drizzle';
+import { ActionLabels, INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
+import type { Context } from '../context.js';
 import { queryTableData, tableDataInputSchema } from './table-data.js';
 
 const frameworkInputSchema = z.object({
@@ -23,6 +31,36 @@ function requireWrite(ctx: { can: (p: 'Frameworks.Write') => boolean }) {
   if (!ctx.can('Frameworks.Write')) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Frameworks.Write permission required' });
   }
+}
+
+async function auditFrameworkChange(
+  ctx: Context,
+  input: {
+    frameworkId: string;
+    action: 'create' | 'update' | 'delete';
+    actionLabel: ActionLabels;
+    targetLabel: string;
+    result?: 'success' | 'failure';
+    errorMessage?: string;
+    metadata?: Record<string, unknown>;
+  }
+) {
+  await ctx.db.insert(customerLogs).values({
+    siteId: null,
+    actorType: 'user',
+    actorId: ctx.user.id,
+    actorLabel: ctx.user.name || ctx.user.email,
+    action: input.action,
+    actionLabel: input.actionLabel,
+    targetType: 'framework',
+    targetId: input.frameworkId,
+    targetLabel: input.targetLabel,
+    result: input.result ?? 'success',
+    errorMessage: input.errorMessage,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+    metadata: input.metadata ?? null
+  });
 }
 
 export const frameworksRouter = t.router({
@@ -90,12 +128,62 @@ export const frameworksRouter = t.router({
     .mutation(async ({ ctx, input }) => {
       requireWrite(ctx);
       const { id, ...values } = input;
+      const [existing] = await ctx.db
+        .select()
+        .from(policySets)
+        .where(eq(policySets.id, id))
+        .limit(1);
+      if (!existing) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const nextDescription = values.description ?? null;
+      const nextCategory = values.category ?? null;
+      const nextProviderId = values.providerId ?? null;
+
+      const unchanged =
+        existing.name === values.name &&
+        (existing.description ?? null) === nextDescription &&
+        (existing.category ?? null) === nextCategory &&
+        (existing.providerId ?? null) === nextProviderId &&
+        existing.enabled === values.enabled;
+      if (unchanged) return existing;
+
       const [row] = await ctx.db
         .update(policySets)
-        .set({ ...values, updatedAt: new Date().toISOString() })
+        .set({
+          name: values.name,
+          description: nextDescription,
+          category: nextCategory,
+          providerId: nextProviderId,
+          enabled: values.enabled,
+          updatedAt: new Date().toISOString()
+        })
         .where(eq(policySets.id, id))
         .returning();
-      if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+
+      await auditFrameworkChange(ctx, {
+        frameworkId: row.id,
+        action: 'update',
+        actionLabel: ActionLabels.FrameworkUpdate,
+        targetLabel: row.name,
+        metadata: {
+          previous: {
+            name: existing.name,
+            description: existing.description,
+            category: existing.category,
+            providerId: existing.providerId,
+            enabled: existing.enabled
+          },
+          next: {
+            name: row.name,
+            description: row.description,
+            category: row.category,
+            providerId: row.providerId,
+            enabled: row.enabled
+          }
+        }
+      });
+
       return row;
     }),
 
@@ -103,18 +191,61 @@ export const frameworksRouter = t.router({
     .input(z.object({ policySetId: z.string().uuid(), policyIds: z.array(z.string()) }))
     .mutation(async ({ ctx, input }) => {
       requireWrite(ctx);
+      const [set] = await ctx.db
+        .select({ id: policySets.id, name: policySets.name })
+        .from(policySets)
+        .where(eq(policySets.id, input.policySetId))
+        .limit(1);
+      if (!set) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const existingItems = await ctx.db
+        .select({ policyId: policySetItems.policyId })
+        .from(policySetItems)
+        .where(eq(policySetItems.policySetId, input.policySetId));
+      const previousIds = existingItems.map((item) => item.policyId).sort();
+      const nextIds = [...new Set(input.policyIds)].sort();
+
+      const added = nextIds.filter((id) => !previousIds.includes(id));
+      const removed = previousIds.filter((id) => !nextIds.includes(id));
+      if (added.length === 0 && removed.length === 0) {
+        return { policySetId: input.policySetId, policyIds: nextIds };
+      }
+
       await ctx.db.delete(policySetItems).where(eq(policySetItems.policySetId, input.policySetId));
-      if (input.policyIds.length > 0) {
+      if (nextIds.length > 0) {
         await ctx.db
           .insert(policySetItems)
-          .values(input.policyIds.map((policyId) => ({ policySetId: input.policySetId, policyId })))
+          .values(nextIds.map((policyId) => ({ policySetId: input.policySetId, policyId })))
           .onConflictDoNothing();
       }
       await ctx.db
         .update(policySets)
         .set({ updatedAt: new Date().toISOString() })
         .where(eq(policySets.id, input.policySetId));
-      return { policySetId: input.policySetId, policyIds: input.policyIds };
+
+      const referencedIds = [...new Set([...added, ...removed])];
+      const nameRows = referencedIds.length
+        ? await ctx.db
+            .select({ id: policies.id, name: policies.name })
+            .from(policies)
+            .where(inArray(policies.id, referencedIds))
+        : [];
+      const nameById = new Map(nameRows.map((row) => [row.id, row.name]));
+      const label = (id: string) => ({ id, name: nameById.get(id) ?? id });
+
+      await auditFrameworkChange(ctx, {
+        frameworkId: input.policySetId,
+        action: 'update',
+        actionLabel: ActionLabels.FrameworkSetPolicies,
+        targetLabel: set.name,
+        metadata: {
+          added: added.map(label),
+          removed: removed.map(label),
+          totalAfter: nextIds.length
+        }
+      });
+
+      return { policySetId: input.policySetId, policyIds: nextIds };
     }),
 
   listPolicies: authProcedure.input(z.object({ policySetId: z.string().uuid() })).query(async ({ ctx, input }) => {
@@ -143,6 +274,9 @@ export const frameworksRouter = t.router({
       .limit(1)
       .catch(() => []);
     if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
+    const providerName = row.providerId
+      ? INTEGRATIONS[row.providerId as ProviderId]?.name ?? row.providerId
+      : null;
     const containedPolicies = await ctx.db
       .select({
         id: policies.id,
@@ -164,13 +298,20 @@ export const frameworksRouter = t.router({
       id: row.id,
       name: row.name,
       description: row.description ?? '',
+      category: row.category ?? null,
+      providerId: row.providerId ?? null,
+      providerName,
+      source: row.source,
+      version: row.version,
       enabled: row.enabled,
       policyCount: containedPolicies.length,
       passRate: 100,
       openFindings: 0,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
       lastEvaluation: row.updatedAt,
       policies: containedPolicies.map((policy) => policy.id),
-      sitesAffected: [],
+      sitesAffected: [] as string[],
       containedPolicies,
       recentFailures: [] as Array<{
         id: string;

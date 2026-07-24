@@ -26,7 +26,11 @@ export enum ActionLabels {
   RoleUpdate = 'role.update',
   RoleDelete = 'role.delete',
   UserGrantAdd = 'user.grant.add',
-  UserGrantRemove = 'user.grant.remove'
+  UserGrantRemove = 'user.grant.remove',
+  FrameworkUpdate = 'framework.update',
+  FrameworkSetPolicies = 'framework.set_policies',
+  PolicyAssignmentCreate = 'policy_assignment.create',
+  PolicyAssignmentDelete = 'policy_assignment.delete'
 }
 
 export type ActionLabel = `${ActionLabels}`;
@@ -148,6 +152,22 @@ export const ActionResources = {
   [ActionLabels.UserGrantRemove]: {
     label: ActionLabels.UserGrantRemove,
     name: 'User grant remove'
+  },
+  [ActionLabels.FrameworkUpdate]: {
+    label: ActionLabels.FrameworkUpdate,
+    name: 'Framework update'
+  },
+  [ActionLabels.FrameworkSetPolicies]: {
+    label: ActionLabels.FrameworkSetPolicies,
+    name: 'Framework set policies'
+  },
+  [ActionLabels.PolicyAssignmentCreate]: {
+    label: ActionLabels.PolicyAssignmentCreate,
+    name: 'Policy assignment create'
+  },
+  [ActionLabels.PolicyAssignmentDelete]: {
+    label: ActionLabels.PolicyAssignmentDelete,
+    name: 'Policy assignment delete'
   }
 } satisfies Record<ActionLabel, ActionResource>;
 

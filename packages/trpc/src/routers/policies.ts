@@ -16,6 +16,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { ActionLabels, PolicyTableShapes } from "@mspbyte/shared";
 import { t, authProcedure } from "../trpc.js";
+import type { Context } from "../context.js";
 import { queryTableData, tableDataInputSchema } from "./table-data.js";
 import { shortId } from "../short-id.js";
 
@@ -123,6 +124,36 @@ function requirePoliciesWrite(ctx: { can: (p: 'Policies.Write') => boolean }) {
   if (!ctx.can('Policies.Write')) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Policies.Write permission required' });
   }
+}
+
+async function auditAssignmentChange(
+  ctx: Context,
+  input: {
+    assignmentId: string;
+    subjectType: 'policy' | 'policy_set';
+    subjectId: string | null;
+    subjectLabel: string;
+    action: 'create' | 'delete';
+    actionLabel: ActionLabels;
+    siteId?: string | null;
+    metadata?: Record<string, unknown>;
+  }
+) {
+  await ctx.db.insert(customerLogs).values({
+    siteId: input.siteId ?? null,
+    actorType: 'user',
+    actorId: ctx.user.id,
+    actorLabel: ctx.user.name || ctx.user.email,
+    action: input.action,
+    actionLabel: input.actionLabel,
+    targetType: input.subjectType === 'policy_set' ? 'framework' : 'policy',
+    targetId: input.subjectId ?? input.assignmentId,
+    targetLabel: input.subjectLabel,
+    result: 'success',
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+    metadata: { assignmentId: input.assignmentId, ...(input.metadata ?? {}) }
+  });
 }
 
 export const policiesRouter = t.router({
@@ -348,6 +379,64 @@ export const policiesRouter = t.router({
         })
         .returning();
       if (!row) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      let subjectLabel = "Unknown";
+      if (row.subjectType === "policy_set" && row.policySetId) {
+        const [set] = await ctx.db
+          .select({ name: policySets.name })
+          .from(policySets)
+          .where(eq(policySets.id, row.policySetId))
+          .limit(1);
+        subjectLabel = set?.name ?? row.policySetId;
+      } else if (row.subjectType === "policy" && row.policyId) {
+        const [policy] = await ctx.db
+          .select({ name: policies.name })
+          .from(policies)
+          .where(eq(policies.id, row.policyId))
+          .limit(1);
+        subjectLabel = policy?.name ?? row.policyId;
+      }
+
+      let scopeLabel: string | null = null;
+      if (row.scopeType === "site" && row.siteId) {
+        const [site] = await ctx.db
+          .select({ name: sites.name })
+          .from(sites)
+          .where(eq(sites.id, row.siteId))
+          .limit(1);
+        scopeLabel = site?.name ?? row.siteId;
+      } else if (row.scopeType === "site_group" && row.siteGroupId) {
+        const [group] = await ctx.db
+          .select({ name: siteGroups.name })
+          .from(siteGroups)
+          .where(eq(siteGroups.id, row.siteGroupId))
+          .limit(1);
+        scopeLabel = group?.name ?? row.siteGroupId;
+      } else if (row.scopeType === "integration_link" && row.linkId) {
+        const [link] = await ctx.db
+          .select({ name: integrationLinks.name })
+          .from(integrationLinks)
+          .where(eq(integrationLinks.id, row.linkId))
+          .limit(1);
+        scopeLabel = link?.name ?? row.linkId;
+      }
+
+      await auditAssignmentChange(ctx, {
+        assignmentId: row.id,
+        subjectType: row.subjectType,
+        subjectId: row.policySetId ?? row.policyId,
+        subjectLabel,
+        action: "create",
+        actionLabel: ActionLabels.PolicyAssignmentCreate,
+        siteId: row.siteId,
+        metadata: {
+          scopeType: row.scopeType,
+          scopeLabel,
+          scopeTargetId: row.siteId ?? row.siteGroupId ?? row.linkId,
+          enabled: row.enabled,
+        },
+      });
+
       return row;
     }),
 
@@ -403,9 +492,71 @@ export const policiesRouter = t.router({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       requirePoliciesWrite(ctx);
+
+      const [existing] = await ctx.db
+        .select({
+          id: policyAssignments.id,
+          subjectType: policyAssignments.subjectType,
+          policyId: policyAssignments.policyId,
+          policyName: policies.name,
+          policySetId: policyAssignments.policySetId,
+          policySetName: policySets.name,
+          scopeType: policyAssignments.scopeType,
+          siteId: policyAssignments.siteId,
+          siteName: sites.name,
+          siteGroupId: policyAssignments.siteGroupId,
+          siteGroupName: siteGroups.name,
+          linkId: policyAssignments.linkId,
+          linkName: integrationLinks.name,
+          enabled: policyAssignments.enabled,
+        })
+        .from(policyAssignments)
+        .leftJoin(policies, eq(policyAssignments.policyId, policies.id))
+        .leftJoin(policySets, eq(policyAssignments.policySetId, policySets.id))
+        .leftJoin(sites, eq(policyAssignments.siteId, sites.id))
+        .leftJoin(siteGroups, eq(policyAssignments.siteGroupId, siteGroups.id))
+        .leftJoin(
+          integrationLinks,
+          eq(policyAssignments.linkId, integrationLinks.id),
+        )
+        .where(eq(policyAssignments.id, input.id))
+        .limit(1);
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
+
       await ctx.db
         .delete(policyAssignments)
         .where(eq(policyAssignments.id, input.id));
+
+      const subjectLabel =
+        existing.subjectType === "policy_set"
+          ? existing.policySetName ?? existing.policySetId ?? "Unknown"
+          : existing.policyName ?? existing.policyId ?? "Unknown";
+      const scopeLabel =
+        existing.scopeType === "site"
+          ? existing.siteName ?? existing.siteId
+          : existing.scopeType === "site_group"
+            ? existing.siteGroupName ?? existing.siteGroupId
+            : existing.scopeType === "integration_link"
+              ? existing.linkName ?? existing.linkId
+              : null;
+
+      await auditAssignmentChange(ctx, {
+        assignmentId: existing.id,
+        subjectType: existing.subjectType,
+        subjectId: existing.policySetId ?? existing.policyId,
+        subjectLabel,
+        action: "delete",
+        actionLabel: ActionLabels.PolicyAssignmentDelete,
+        siteId: existing.siteId,
+        metadata: {
+          scopeType: existing.scopeType,
+          scopeLabel,
+          scopeTargetId:
+            existing.siteId ?? existing.siteGroupId ?? existing.linkId,
+          enabled: existing.enabled,
+        },
+      });
+
       return { id: input.id };
     }),
 
