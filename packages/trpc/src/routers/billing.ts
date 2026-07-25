@@ -5,6 +5,7 @@ import {
   billingPsaItems,
   billingReconciliationRuleScopes,
   billingReconciliationRules,
+  customerLogs,
   integrationLinks,
   siteGroupMembers,
   siteGroups,
@@ -19,6 +20,7 @@ import {
   m365Devices
 } from '@mspbyte/drizzle';
 import {
+  ActionLabels,
   BILLING_FACETS,
   getBillingFacetLabel,
   getBillingFilterColumns,
@@ -796,6 +798,7 @@ export const billingRouter = t.router({
       updatedAt: new Date().toISOString()
     };
 
+    const isUpdate = !!input.id;
     const [row] = input.id
       ? await ctx.db
           .update(billingReconciliationRules)
@@ -824,6 +827,28 @@ export const billingRouter = t.router({
       );
     }
 
+    await ctx.db.insert(customerLogs).values({
+      siteId: null,
+      actorType: 'user',
+      actorId: ctx.user.id,
+      actorLabel: ctx.user.name || ctx.user.email,
+      action: isUpdate ? 'update' : 'create',
+      actionLabel: isUpdate ? ActionLabels.BillingRuleUpdate : ActionLabels.BillingRuleCreate,
+      targetType: 'billing_reconciliation_rule',
+      targetId: row.id,
+      targetLabel: row.name,
+      result: 'success',
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+      metadata: {
+        enabled: row.enabled,
+        vendorProvider: row.vendorProvider,
+        vendorFacet: row.vendorFacet,
+        countMode: row.countMode,
+        scopeCount: input.scopes.length
+      }
+    });
+
     return row;
   }),
 
@@ -834,6 +859,26 @@ export const billingRouter = t.router({
       .where(eq(billingReconciliationRules.id, input.id))
       .returning();
     if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
+
+    await ctx.db.insert(customerLogs).values({
+      siteId: null,
+      actorType: 'user',
+      actorId: ctx.user.id,
+      actorLabel: ctx.user.name || ctx.user.email,
+      action: 'delete',
+      actionLabel: ActionLabels.BillingRuleDelete,
+      targetType: 'billing_reconciliation_rule',
+      targetId: row.id,
+      targetLabel: row.name,
+      result: 'success',
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+      metadata: {
+        vendorProvider: row.vendorProvider,
+        vendorFacet: row.vendorFacet
+      }
+    });
+
     return row;
   }),
 

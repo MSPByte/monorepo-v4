@@ -8,6 +8,7 @@ import {
   articleOverrides,
   articleVersions,
   articleReferences,
+  customerLogs,
   editLocks,
   users,
   sites
@@ -15,10 +16,40 @@ import {
 import { eq, and, desc, asc, sql, inArray, or, max, count } from 'drizzle-orm';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
+import { ActionLabels } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 import { shortId } from '../short-id.js';
 import { alias } from 'drizzle-orm/pg-core';
 import type { Context } from '../context.js';
+
+async function auditWikiChange(
+  ctx: Context,
+  input: {
+    action: 'create' | 'update' | 'delete';
+    actionLabel: ActionLabels;
+    targetType: string;
+    targetId: string;
+    targetLabel: string;
+    siteId?: string | null;
+    metadata?: Record<string, unknown>;
+  }
+) {
+  await ctx.db.insert(customerLogs).values({
+    siteId: input.siteId ?? null,
+    actorType: 'user',
+    actorId: ctx.user.id,
+    actorLabel: ctx.user.name || ctx.user.email,
+    action: input.action,
+    actionLabel: input.actionLabel,
+    targetType: input.targetType,
+    targetId: input.targetId,
+    targetLabel: input.targetLabel,
+    result: 'success',
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+    metadata: input.metadata ?? null
+  });
+}
 
 // Wiki-scoped procedure — reads (`.query`) require Wiki.Read; mutations
 // (`.mutation`) require Wiki.Write. Applied to every wiki endpoint by
@@ -83,7 +114,18 @@ const contextsRouter = t.router({
         })
         .returning();
 
-      return row!;
+      if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+
+      await auditWikiChange(ctx, {
+        action: 'create',
+        actionLabel: ActionLabels.WikiContextCreate,
+        targetType: 'wiki_context',
+        targetId: row.id,
+        targetLabel: row.name,
+        metadata: { parentId: row.parentId, description: row.description }
+      });
+
+      return row;
     }),
 
   update: wikiProcedure
@@ -111,6 +153,16 @@ const contextsRouter = t.router({
         .returning();
 
       if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      await auditWikiChange(ctx, {
+        action: 'update',
+        actionLabel: ActionLabels.WikiContextUpdate,
+        targetType: 'wiki_context',
+        targetId: row.id,
+        targetLabel: row.name,
+        metadata: { changedFields: Object.keys(values) }
+      });
+
       return row;
     }),
 
@@ -148,6 +200,16 @@ const contextsRouter = t.router({
       }
 
       await ctx.db.delete(contexts).where(eq(contexts.id, input.id));
+
+      await auditWikiChange(ctx, {
+        action: 'delete',
+        actionLabel: ActionLabels.WikiContextDelete,
+        targetType: 'wiki_context',
+        targetId: target.id,
+        targetLabel: target.name,
+        metadata: { parentId: target.parentId }
+      });
+
       return { success: true };
     })
 });
@@ -192,7 +254,18 @@ const tagsRouter = t.router({
           description: input.description
         })
         .returning();
-      return row!;
+      if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+
+      await auditWikiChange(ctx, {
+        action: 'create',
+        actionLabel: ActionLabels.WikiTagCreate,
+        targetType: 'wiki_tag',
+        targetId: row.id,
+        targetLabel: row.name,
+        metadata: { color: row.color }
+      });
+
+      return row;
     }),
 
   update: wikiProcedure
@@ -218,13 +291,37 @@ const tagsRouter = t.router({
       const [row] = await ctx.db.update(tags).set(values).where(eq(tags.id, id)).returning();
 
       if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      await auditWikiChange(ctx, {
+        action: 'update',
+        actionLabel: ActionLabels.WikiTagUpdate,
+        targetType: 'wiki_tag',
+        targetId: row.id,
+        targetLabel: row.name,
+        metadata: { changedFields: Object.keys(values) }
+      });
+
       return row;
     }),
 
   remove: wikiProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      const [existing] = await ctx.db
+        .select({ id: tags.id, name: tags.name })
+        .from(tags)
+        .where(eq(tags.id, input.id))
+        .limit(1);
       await ctx.db.delete(tags).where(eq(tags.id, input.id));
+      if (existing) {
+        await auditWikiChange(ctx, {
+          action: 'delete',
+          actionLabel: ActionLabels.WikiTagDelete,
+          targetType: 'wiki_tag',
+          targetId: existing.id,
+          targetLabel: existing.name
+        });
+      }
       return { success: true };
     })
 });
@@ -721,6 +818,21 @@ const articlesRouter = t.router({
           : Promise.resolve()
       ]);
 
+      await auditWikiChange(ctx, {
+        action: 'create',
+        actionLabel: ActionLabels.WikiArticleCreate,
+        targetType: 'wiki_article',
+        targetId: article.id,
+        targetLabel: `${formatKbId(kbNumber)} — ${input.title}`,
+        metadata: {
+          kbNumber,
+          status: input.status,
+          primaryContextId: input.primaryContextId,
+          linkedContextCount: linkedIds.length,
+          tagCount: input.tagIds.length
+        }
+      });
+
       return {
         id: article.id,
         kbId: formatKbId(kbNumber),
@@ -821,6 +933,22 @@ const articlesRouter = t.router({
 
       await Promise.all(ops);
 
+      await auditWikiChange(ctx, {
+        action: 'update',
+        actionLabel: ActionLabels.WikiArticleUpdate,
+        targetType: 'wiki_article',
+        targetId: article.id,
+        targetLabel: `${formatKbId(article.kbNumber)} — ${article.title}`,
+        metadata: {
+          kbNumber: article.kbNumber,
+          changedFields: Object.keys(patch).concat(
+            linkedContextIds !== undefined ? ['linkedContextIds'] : [],
+            tagIds !== undefined ? ['tagIds'] : []
+          ),
+          changeNote: changeNote ?? null
+        }
+      });
+
       return {
         id: article.id,
         kbId: formatKbId(article.kbNumber),
@@ -880,6 +1008,21 @@ const articlesRouter = t.router({
           kbId: formatKbId(article.kbNumber),
           kbNumber: article.kbNumber
         };
+      }).then(async (result) => {
+        await auditWikiChange(ctx, {
+          action: 'update',
+          actionLabel: ActionLabels.WikiArticleUpdateMeta,
+          targetType: 'wiki_article',
+          targetId: result.id,
+          targetLabel: `${formatKbId(result.kbNumber)}`,
+          metadata: {
+            kbNumber: result.kbNumber,
+            primaryContextId: input.primaryContextId,
+            linkedContextCount: input.linkedContextIds.length,
+            tagCount: input.tagIds.length
+          }
+        });
+        return result;
       });
     }),
 
@@ -897,6 +1040,15 @@ const articlesRouter = t.router({
 
       if (!article) throw new TRPCError({ code: 'NOT_FOUND' });
 
+      await auditWikiChange(ctx, {
+        action: 'update',
+        actionLabel: ActionLabels.WikiArticleArchive,
+        targetType: 'wiki_article',
+        targetId: article.id,
+        targetLabel: `${formatKbId(article.kbNumber)} — ${article.title}`,
+        metadata: { kbNumber: article.kbNumber }
+      });
+
       return {
         id: article.id,
         kbId: formatKbId(article.kbNumber),
@@ -907,7 +1059,22 @@ const articlesRouter = t.router({
   remove: wikiProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      const [existing] = await ctx.db
+        .select({ id: articles.id, kbNumber: articles.kbNumber, title: articles.title })
+        .from(articles)
+        .where(eq(articles.id, input.id))
+        .limit(1);
       await ctx.db.delete(articles).where(eq(articles.id, input.id));
+      if (existing) {
+        await auditWikiChange(ctx, {
+          action: 'delete',
+          actionLabel: ActionLabels.WikiArticleDelete,
+          targetType: 'wiki_article',
+          targetId: existing.id,
+          targetLabel: `${formatKbId(existing.kbNumber)} — ${existing.title}`,
+          metadata: { kbNumber: existing.kbNumber }
+        });
+      }
       return { success: true };
     })
 });
@@ -1115,13 +1282,38 @@ const draftsRouter = t.router({
           kbId: formatKbId(article.kbNumber),
           kbNumber: article.kbNumber
         };
+      }).then(async (result) => {
+        await auditWikiChange(ctx, {
+          action: 'update',
+          actionLabel: ActionLabels.WikiArticlePublish,
+          targetType: 'wiki_article',
+          targetId: result.id,
+          targetLabel: `${formatKbId(result.kbNumber)} — ${input.title}`,
+          metadata: {
+            kbNumber: result.kbNumber,
+            changeNote: input.changeNote ?? null
+          }
+        });
+        return result;
       });
     }),
 
   remove: wikiProcedure
     .input(z.object({ articleId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      const [article] = await ctx.db
+        .select({ kbNumber: articles.kbNumber, title: articles.title })
+        .from(articles)
+        .where(eq(articles.id, input.articleId))
+        .limit(1);
       await ctx.db.delete(articleDrafts).where(eq(articleDrafts.articleId, input.articleId));
+      await auditWikiChange(ctx, {
+        action: 'delete',
+        actionLabel: ActionLabels.WikiDraftDiscard,
+        targetType: 'wiki_article_draft',
+        targetId: input.articleId,
+        targetLabel: article ? `${formatKbId(article.kbNumber)} — ${article.title}` : input.articleId
+      });
       return { success: true };
     })
 });
@@ -1211,6 +1403,16 @@ const overridesRouter = t.router({
         .where(eq(sites.id, row.siteId))
         .limit(1);
 
+      await auditWikiChange(ctx, {
+        action: 'create',
+        actionLabel: ActionLabels.WikiOverrideCreate,
+        targetType: 'wiki_article_override',
+        targetId: row.id,
+        targetLabel: row.title,
+        siteId: row.siteId,
+        metadata: { articleId: row.articleId, type: row.type }
+      });
+
       return { ...row, siteName: site?.name ?? '' };
     }),
 
@@ -1246,13 +1448,45 @@ const overridesRouter = t.router({
         .where(eq(sites.id, row.siteId))
         .limit(1);
 
+      await auditWikiChange(ctx, {
+        action: 'update',
+        actionLabel: ActionLabels.WikiOverrideUpdate,
+        targetType: 'wiki_article_override',
+        targetId: row.id,
+        targetLabel: row.title,
+        siteId: row.siteId,
+        metadata: { articleId: row.articleId, changedFields: Object.keys(patch) }
+      });
+
       return { ...row, siteName: site?.name ?? '' };
     }),
 
   remove: wikiProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      const [existing] = await ctx.db
+        .select({
+          id: articleOverrides.id,
+          title: articleOverrides.title,
+          siteId: articleOverrides.siteId,
+          articleId: articleOverrides.articleId,
+          type: articleOverrides.type
+        })
+        .from(articleOverrides)
+        .where(eq(articleOverrides.id, input.id))
+        .limit(1);
       await ctx.db.delete(articleOverrides).where(eq(articleOverrides.id, input.id));
+      if (existing) {
+        await auditWikiChange(ctx, {
+          action: 'delete',
+          actionLabel: ActionLabels.WikiOverrideDelete,
+          targetType: 'wiki_article_override',
+          targetId: existing.id,
+          targetLabel: existing.title,
+          siteId: existing.siteId,
+          metadata: { articleId: existing.articleId, type: existing.type }
+        });
+      }
       return { success: true };
     })
 });

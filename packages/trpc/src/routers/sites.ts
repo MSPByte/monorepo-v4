@@ -564,7 +564,17 @@ export const sitesRouter = t.router({
         .insert(sites)
         .values({ name: input.name, description: input.description })
         .returning();
-      return site!;
+      if (!site) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+
+      await auditSiteChange(ctx, {
+        siteId: site.id,
+        action: 'create',
+        actionLabel: ActionLabels.SiteCreate,
+        targetLabel: site.name,
+        metadata: { name: site.name, description: site.description }
+      });
+
+      return site;
     }),
 
   rename: authProcedure

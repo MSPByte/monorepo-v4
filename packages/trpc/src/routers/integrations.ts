@@ -1,7 +1,8 @@
 import { z } from 'zod';
-import { integrations } from '@mspbyte/drizzle';
+import { customerLogs, integrations } from '@mspbyte/drizzle';
 import { eq } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
+import { ActionLabels } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 
 type IntegrationRow = typeof integrations.$inferSelect;
@@ -75,6 +76,26 @@ export const integrationsRouter = t.router({
         })
         .returning();
       if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: null,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email,
+        action: 'update',
+        actionLabel: ActionLabels.IntegrationConfigure,
+        targetType: 'integration',
+        targetId: row.id,
+        targetLabel: row.id,
+        result: 'success',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: {
+          hasCredentialExpiration: !!input.credentialExpiration,
+          configKeys: Object.keys(input.config ?? {})
+        }
+      });
+
       return row;
     }),
 
@@ -93,6 +114,23 @@ export const integrationsRouter = t.router({
         .where(eq(integrations.id, input.id))
         .returning();
       if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: null,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email,
+        action: 'delete',
+        actionLabel: ActionLabels.IntegrationDelete,
+        targetType: 'integration',
+        targetId: row.id,
+        targetLabel: row.id,
+        result: 'success',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: null
+      });
+
       return row;
     })
 });

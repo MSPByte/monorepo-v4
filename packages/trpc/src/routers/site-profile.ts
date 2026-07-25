@@ -183,6 +183,34 @@ async function auditCustomerChange(
   });
 }
 
+async function auditCatalogChange(
+  ctx: Context,
+  input: {
+    action: 'create' | 'update' | 'delete';
+    actionLabel: ActionLabels;
+    targetType: string;
+    targetId: string;
+    targetLabel: string;
+    metadata?: Record<string, unknown>;
+  }
+) {
+  await ctx.db.insert(customerLogs).values({
+    siteId: null,
+    actorType: 'user',
+    actorId: ctx.user.id,
+    actorLabel: actorLabel(ctx),
+    action: input.action,
+    actionLabel: input.actionLabel,
+    targetType: input.targetType,
+    targetId: input.targetId,
+    targetLabel: input.targetLabel,
+    result: 'success',
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+    metadata: input.metadata ?? null
+  });
+}
+
 export const siteProfileRouter = t.router({
   catalog: authProcedure.query(async ({ ctx }) => {
     await ensureCatalogDefaults(ctx.db);
@@ -302,6 +330,20 @@ export const siteProfileRouter = t.router({
           .where(eq(siteProfileFields.id, input.id))
           .returning();
         if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
+        await auditCatalogChange(ctx, {
+          action: 'update',
+          actionLabel: ActionLabels.SiteProfileFieldUpdate,
+          targetType: 'site_profile_field',
+          targetId: row.id,
+          targetLabel: row.label,
+          metadata: {
+            key: row.key,
+            section: row.section,
+            type: row.type,
+            valueMode: row.valueMode,
+            active: row.active
+          }
+        });
         return row;
       }
       const [row] = await ctx.db
@@ -318,6 +360,20 @@ export const siteProfileRouter = t.router({
         })
         .returning();
       if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+      await auditCatalogChange(ctx, {
+        action: 'create',
+        actionLabel: ActionLabels.SiteProfileFieldCreate,
+        targetType: 'site_profile_field',
+        targetId: row.id,
+        targetLabel: row.label,
+        metadata: {
+          key: row.key,
+          section: row.section,
+          type: row.type,
+          valueMode: row.valueMode,
+          active: row.active
+        }
+      });
       return row;
     }),
 
@@ -325,7 +381,22 @@ export const siteProfileRouter = t.router({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       requireSitePermission(ctx, 'Sites.Delete');
+      const [existing] = await ctx.db
+        .select({ id: siteProfileFields.id, key: siteProfileFields.key, label: siteProfileFields.label })
+        .from(siteProfileFields)
+        .where(eq(siteProfileFields.id, input.id))
+        .limit(1);
       await ctx.db.delete(siteProfileFields).where(eq(siteProfileFields.id, input.id));
+      if (existing) {
+        await auditCatalogChange(ctx, {
+          action: 'delete',
+          actionLabel: ActionLabels.SiteProfileFieldDelete,
+          targetType: 'site_profile_field',
+          targetId: existing.id,
+          targetLabel: existing.label,
+          metadata: { key: existing.key }
+        });
+      }
       return { ok: true };
     }),
 
@@ -360,6 +431,18 @@ export const siteProfileRouter = t.router({
           .where(eq(siteStackCategories.id, input.id))
           .returning();
         if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
+        await auditCatalogChange(ctx, {
+          action: 'update',
+          actionLabel: ActionLabels.SiteProfileCategoryUpdate,
+          targetType: 'site_stack_category',
+          targetId: row.id,
+          targetLabel: row.label,
+          metadata: {
+            key: row.key,
+            required: row.required,
+            metadataFieldCount: input.metadataFields.length
+          }
+        });
         return row;
       }
       const [row] = await ctx.db
@@ -374,6 +457,18 @@ export const siteProfileRouter = t.router({
         })
         .returning();
       if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+      await auditCatalogChange(ctx, {
+        action: 'create',
+        actionLabel: ActionLabels.SiteProfileCategoryCreate,
+        targetType: 'site_stack_category',
+        targetId: row.id,
+        targetLabel: row.label,
+        metadata: {
+          key: row.key,
+          required: row.required,
+          metadataFieldCount: input.metadataFields.length
+        }
+      });
       return row;
     }),
 
@@ -381,7 +476,22 @@ export const siteProfileRouter = t.router({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       requireSitePermission(ctx, 'Sites.Delete');
+      const [existing] = await ctx.db
+        .select({ id: siteStackCategories.id, key: siteStackCategories.key, label: siteStackCategories.label })
+        .from(siteStackCategories)
+        .where(eq(siteStackCategories.id, input.id))
+        .limit(1);
       await ctx.db.delete(siteStackCategories).where(eq(siteStackCategories.id, input.id));
+      if (existing) {
+        await auditCatalogChange(ctx, {
+          action: 'delete',
+          actionLabel: ActionLabels.SiteProfileCategoryDelete,
+          targetType: 'site_stack_category',
+          targetId: existing.id,
+          targetLabel: existing.label,
+          metadata: { key: existing.key }
+        });
+      }
       return { ok: true };
     }),
 

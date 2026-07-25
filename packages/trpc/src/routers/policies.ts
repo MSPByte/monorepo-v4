@@ -262,6 +262,30 @@ export const policiesRouter = t.router({
         })
         .returning();
       if (!row) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: null,
+        actorType: "user",
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email,
+        action: "create",
+        actionLabel: ActionLabels.PolicyCreate,
+        targetType: "policy",
+        targetId: row.id,
+        targetLabel: row.name,
+        result: "success",
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: {
+          source: row.source,
+          category: row.category,
+          providerId: row.providerId,
+          targetType: row.targetType,
+          severity: row.severity,
+          enabled: row.enabled
+        }
+      });
+
       return row;
     }),
 
@@ -270,12 +294,49 @@ export const policiesRouter = t.router({
     .mutation(async ({ ctx, input }) => {
       requirePoliciesWrite(ctx);
       const { id, ...values } = input;
+      const [existing] = await ctx.db
+        .select()
+        .from(policies)
+        .where(eq(policies.id, id))
+        .limit(1);
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
+
       const [row] = await ctx.db
         .update(policies)
         .set({ ...values, updatedAt: new Date().toISOString() })
         .where(eq(policies.id, id))
         .returning();
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: null,
+        actorType: "user",
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email,
+        action: "update",
+        actionLabel: ActionLabels.PolicyUpdate,
+        targetType: "policy",
+        targetId: row.id,
+        targetLabel: row.name,
+        result: "success",
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: {
+          previous: {
+            name: existing.name,
+            enabled: existing.enabled,
+            severity: existing.severity,
+            category: existing.category
+          },
+          next: {
+            name: row.name,
+            enabled: row.enabled,
+            severity: row.severity,
+            category: row.category
+          }
+        }
+      });
+
       return row;
     }),
 
@@ -569,6 +630,23 @@ export const policiesRouter = t.router({
     )
     .mutation(async ({ ctx, input }) => {
       requirePoliciesWrite(ctx);
+
+      const [policy] = await ctx.db
+        .select({ id: policies.id, name: policies.name })
+        .from(policies)
+        .where(eq(policies.id, input.policyId))
+        .limit(1);
+      if (!policy) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const existingItems = await ctx.db
+        .select({ policySetId: policySetItems.policySetId })
+        .from(policySetItems)
+        .where(eq(policySetItems.policyId, input.policyId));
+      const previousSetIds = existingItems.map((item) => item.policySetId).sort();
+      const nextSetIds = [...new Set(input.policySetIds)].sort();
+      const added = nextSetIds.filter((id) => !previousSetIds.includes(id));
+      const removed = previousSetIds.filter((id) => !nextSetIds.includes(id));
+
       await ctx.db
         .delete(policySetItems)
         .where(eq(policySetItems.policyId, input.policyId));
@@ -583,6 +661,25 @@ export const policiesRouter = t.router({
           )
           .onConflictDoNothing();
       }
+
+      if (added.length > 0 || removed.length > 0) {
+        await ctx.db.insert(customerLogs).values({
+          siteId: null,
+          actorType: "user",
+          actorId: ctx.user.id,
+          actorLabel: ctx.user.name || ctx.user.email,
+          action: "update",
+          actionLabel: ActionLabels.PolicySetFrameworkMembership,
+          targetType: "policy",
+          targetId: policy.id,
+          targetLabel: policy.name,
+          result: "success",
+          ipAddress: ctx.ipAddress,
+          userAgent: ctx.userAgent,
+          metadata: { added, removed, totalAfter: nextSetIds.length }
+        });
+      }
+
       return { policyId: input.policyId, policySetIds: input.policySetIds };
     }),
 

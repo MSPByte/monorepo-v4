@@ -1,12 +1,41 @@
 // TODO: Findings Implementation
 import { z } from 'zod';
-import { integrationLinks } from '@mspbyte/drizzle';
+import { customerLogs, integrationLinks } from '@mspbyte/drizzle';
 import { eq, and, inArray } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
-import { INTEGRATIONS, META_VERSION_KEY, type ProviderId } from '@mspbyte/shared';
+import { ActionLabels, INTEGRATIONS, META_VERSION_KEY, type ProviderId } from '@mspbyte/shared';
+import type { Context } from '../context.js';
 import { t, authProcedure } from '../trpc.js';
 
 type IntegrationLinkRow = typeof integrationLinks.$inferSelect;
+
+async function auditLinkChange(
+  ctx: Context,
+  input: {
+    linkId: string;
+    action: 'create' | 'update' | 'delete';
+    actionLabel: ActionLabels;
+    targetLabel: string;
+    siteId?: string | null;
+    metadata?: Record<string, unknown>;
+  }
+) {
+  await ctx.db.insert(customerLogs).values({
+    siteId: input.siteId ?? null,
+    actorType: 'user',
+    actorId: ctx.user.id,
+    actorLabel: ctx.user.name || ctx.user.email,
+    action: input.action,
+    actionLabel: input.actionLabel,
+    targetType: 'integration_link',
+    targetId: input.linkId,
+    targetLabel: input.targetLabel,
+    result: 'success',
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+    metadata: input.metadata ?? null
+  });
+}
 
 const saveSiteLinkSchema = z.object({
   siteId: z.string().uuid(),
@@ -111,6 +140,21 @@ export const integrationLinksRouter = t.router({
         })
         .returning();
       if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+
+      await auditLinkChange(ctx, {
+        linkId: row.id,
+        action: 'create',
+        actionLabel: ActionLabels.IntegrationLinkCreate,
+        targetLabel: row.name ?? row.externalId ?? row.id,
+        siteId: row.siteId,
+        metadata: {
+          integrationId: row.integrationId,
+          externalId: row.externalId,
+          status: row.status,
+          disposition: row.disposition
+        }
+      });
+
       return row;
     }),
 
@@ -149,6 +193,19 @@ export const integrationLinksRouter = t.router({
         .where(eq(integrationLinks.id, id))
         .returning();
       if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      await auditLinkChange(ctx, {
+        linkId: row.id,
+        action: 'update',
+        actionLabel: ActionLabels.IntegrationLinkUpdate,
+        targetLabel: row.name ?? row.externalId ?? row.id,
+        siteId: row.siteId,
+        metadata: {
+          integrationId: row.integrationId,
+          changedFields: Object.keys(rest).concat(metaUpdate === undefined ? [] : ['meta'])
+        }
+      });
+
       return row;
     }),
 
@@ -267,6 +324,26 @@ export const integrationLinksRouter = t.router({
           await ctx.db.insert(integrationLinks).values(toCreate).returning();
         }
 
+        await ctx.db.insert(customerLogs).values({
+          siteId: null,
+          actorType: 'user',
+          actorId: ctx.user.id,
+          actorLabel: ctx.user.name || ctx.user.email,
+          action: 'update',
+          actionLabel: ActionLabels.IntegrationLinkSaveBatch,
+          targetType: 'integration',
+          targetId: input.integrationId,
+          targetLabel: input.integrationId,
+          result: 'success',
+          ipAddress: ctx.ipAddress,
+          userAgent: ctx.userAgent,
+          metadata: {
+            created: toCreate.length,
+            updated: toUpdate.length,
+            deleted: toDelete.length
+          }
+        });
+
         return {
           created: toCreate.length,
           updated: toUpdate.length,
@@ -279,6 +356,29 @@ export const integrationLinksRouter = t.router({
     .input(z.object({ ids: z.array(z.uuid()) }))
     .mutation(async ({ ctx, input }): Promise<void> => {
       if (input.ids.length === 0) return;
+
+      const existing = await ctx.db
+        .select({
+          id: integrationLinks.id,
+          name: integrationLinks.name,
+          externalId: integrationLinks.externalId,
+          siteId: integrationLinks.siteId,
+          integrationId: integrationLinks.integrationId
+        })
+        .from(integrationLinks)
+        .where(inArray(integrationLinks.id, input.ids));
+
       await ctx.db.delete(integrationLinks).where(inArray(integrationLinks.id, input.ids));
+
+      for (const row of existing) {
+        await auditLinkChange(ctx, {
+          linkId: row.id,
+          action: 'delete',
+          actionLabel: ActionLabels.IntegrationLinkDelete,
+          targetLabel: row.name ?? row.externalId ?? row.id,
+          siteId: row.siteId,
+          metadata: { integrationId: row.integrationId, externalId: row.externalId }
+        });
+      }
     })
 });

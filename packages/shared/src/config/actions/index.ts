@@ -1,9 +1,13 @@
 export enum ActionLabels {
   SophosEndpointDelete = 'sophos.endpoint.delete',
   SophosEndpointTamperEnable = 'sophos.endpoint.tamper_protection.enable',
+  PolicyCreate = 'policy.create',
+  PolicyUpdate = 'policy.update',
   PolicyDelete = 'policy.delete',
+  PolicySetFrameworkMembership = 'policy.set_framework_membership',
   FindingSuppress = 'finding.suppress',
   FindingUnsuppress = 'finding.unsuppress',
+  SiteCreate = 'site.create',
   SiteRename = 'site.rename',
   SiteDelete = 'site.delete',
   SiteGroupCreate = 'site_group.create',
@@ -18,6 +22,12 @@ export enum ActionLabels {
   SiteProfileNoteCreate = 'site_profile.note.create',
   SiteProfileNoteUpdate = 'site_profile.note.update',
   SiteProfileNoteDelete = 'site_profile.note.delete',
+  SiteProfileFieldCreate = 'site_profile.field.create',
+  SiteProfileFieldUpdate = 'site_profile.field.update',
+  SiteProfileFieldDelete = 'site_profile.field.delete',
+  SiteProfileCategoryCreate = 'site_profile.category.create',
+  SiteProfileCategoryUpdate = 'site_profile.category.update',
+  SiteProfileCategoryDelete = 'site_profile.category.delete',
   EntitySourceLink = 'entity_source.link',
   EntitySourceUnlink = 'entity_source.unlink',
   EntitySourceConfirm = 'entity_source.confirm',
@@ -25,12 +35,40 @@ export enum ActionLabels {
   RoleCreate = 'role.create',
   RoleUpdate = 'role.update',
   RoleDelete = 'role.delete',
+  UserCreate = 'user.create',
+  UserDelete = 'user.delete',
   UserGrantAdd = 'user.grant.add',
   UserGrantRemove = 'user.grant.remove',
+  FrameworkCreate = 'framework.create',
   FrameworkUpdate = 'framework.update',
   FrameworkSetPolicies = 'framework.set_policies',
   PolicyAssignmentCreate = 'policy_assignment.create',
-  PolicyAssignmentDelete = 'policy_assignment.delete'
+  PolicyAssignmentDelete = 'policy_assignment.delete',
+  BillingRuleCreate = 'billing.rule.create',
+  BillingRuleUpdate = 'billing.rule.update',
+  BillingRuleDelete = 'billing.rule.delete',
+  IntegrationConfigure = 'integration.configure',
+  IntegrationDelete = 'integration.delete',
+  IntegrationLinkCreate = 'integration_link.create',
+  IntegrationLinkUpdate = 'integration_link.update',
+  IntegrationLinkSaveBatch = 'integration_link.save_batch',
+  IntegrationLinkDelete = 'integration_link.delete',
+  WikiContextCreate = 'wiki.context.create',
+  WikiContextUpdate = 'wiki.context.update',
+  WikiContextDelete = 'wiki.context.delete',
+  WikiTagCreate = 'wiki.tag.create',
+  WikiTagUpdate = 'wiki.tag.update',
+  WikiTagDelete = 'wiki.tag.delete',
+  WikiArticleCreate = 'wiki.article.create',
+  WikiArticleUpdate = 'wiki.article.update',
+  WikiArticleUpdateMeta = 'wiki.article.update_meta',
+  WikiArticleArchive = 'wiki.article.archive',
+  WikiArticleDelete = 'wiki.article.delete',
+  WikiArticlePublish = 'wiki.article.publish',
+  WikiDraftDiscard = 'wiki.draft.discard',
+  WikiOverrideCreate = 'wiki.override.create',
+  WikiOverrideUpdate = 'wiki.override.update',
+  WikiOverrideDelete = 'wiki.override.delete'
 }
 
 export type ActionLabel = `${ActionLabels}`;
@@ -49,9 +87,21 @@ export const ActionResources = {
     label: ActionLabels.SophosEndpointTamperEnable,
     name: 'Sophos endpoint enable tamper protection'
   },
+  [ActionLabels.PolicyCreate]: {
+    label: ActionLabels.PolicyCreate,
+    name: 'Policy create'
+  },
+  [ActionLabels.PolicyUpdate]: {
+    label: ActionLabels.PolicyUpdate,
+    name: 'Policy update'
+  },
   [ActionLabels.PolicyDelete]: {
     label: ActionLabels.PolicyDelete,
     name: 'Policy delete'
+  },
+  [ActionLabels.PolicySetFrameworkMembership]: {
+    label: ActionLabels.PolicySetFrameworkMembership,
+    name: 'Policy set framework membership'
   },
   [ActionLabels.FindingSuppress]: {
     label: ActionLabels.FindingSuppress,
@@ -60,6 +110,10 @@ export const ActionResources = {
   [ActionLabels.FindingUnsuppress]: {
     label: ActionLabels.FindingUnsuppress,
     name: 'Finding unsuppress'
+  },
+  [ActionLabels.SiteCreate]: {
+    label: ActionLabels.SiteCreate,
+    name: 'Site create'
   },
   [ActionLabels.SiteRename]: {
     label: ActionLabels.SiteRename,
@@ -117,6 +171,30 @@ export const ActionResources = {
     label: ActionLabels.SiteProfileNoteDelete,
     name: 'Site profile note delete'
   },
+  [ActionLabels.SiteProfileFieldCreate]: {
+    label: ActionLabels.SiteProfileFieldCreate,
+    name: 'Site profile field create'
+  },
+  [ActionLabels.SiteProfileFieldUpdate]: {
+    label: ActionLabels.SiteProfileFieldUpdate,
+    name: 'Site profile field update'
+  },
+  [ActionLabels.SiteProfileFieldDelete]: {
+    label: ActionLabels.SiteProfileFieldDelete,
+    name: 'Site profile field delete'
+  },
+  [ActionLabels.SiteProfileCategoryCreate]: {
+    label: ActionLabels.SiteProfileCategoryCreate,
+    name: 'Site profile category create'
+  },
+  [ActionLabels.SiteProfileCategoryUpdate]: {
+    label: ActionLabels.SiteProfileCategoryUpdate,
+    name: 'Site profile category update'
+  },
+  [ActionLabels.SiteProfileCategoryDelete]: {
+    label: ActionLabels.SiteProfileCategoryDelete,
+    name: 'Site profile category delete'
+  },
   [ActionLabels.EntitySourceLink]: {
     label: ActionLabels.EntitySourceLink,
     name: 'Entity source link'
@@ -145,6 +223,14 @@ export const ActionResources = {
     label: ActionLabels.RoleDelete,
     name: 'Role delete'
   },
+  [ActionLabels.UserCreate]: {
+    label: ActionLabels.UserCreate,
+    name: 'User create'
+  },
+  [ActionLabels.UserDelete]: {
+    label: ActionLabels.UserDelete,
+    name: 'User delete'
+  },
   [ActionLabels.UserGrantAdd]: {
     label: ActionLabels.UserGrantAdd,
     name: 'User grant add'
@@ -152,6 +238,10 @@ export const ActionResources = {
   [ActionLabels.UserGrantRemove]: {
     label: ActionLabels.UserGrantRemove,
     name: 'User grant remove'
+  },
+  [ActionLabels.FrameworkCreate]: {
+    label: ActionLabels.FrameworkCreate,
+    name: 'Framework create'
   },
   [ActionLabels.FrameworkUpdate]: {
     label: ActionLabels.FrameworkUpdate,
@@ -168,6 +258,106 @@ export const ActionResources = {
   [ActionLabels.PolicyAssignmentDelete]: {
     label: ActionLabels.PolicyAssignmentDelete,
     name: 'Policy assignment delete'
+  },
+  [ActionLabels.BillingRuleCreate]: {
+    label: ActionLabels.BillingRuleCreate,
+    name: 'Billing rule create'
+  },
+  [ActionLabels.BillingRuleUpdate]: {
+    label: ActionLabels.BillingRuleUpdate,
+    name: 'Billing rule update'
+  },
+  [ActionLabels.BillingRuleDelete]: {
+    label: ActionLabels.BillingRuleDelete,
+    name: 'Billing rule delete'
+  },
+  [ActionLabels.IntegrationConfigure]: {
+    label: ActionLabels.IntegrationConfigure,
+    name: 'Integration configure'
+  },
+  [ActionLabels.IntegrationDelete]: {
+    label: ActionLabels.IntegrationDelete,
+    name: 'Integration delete'
+  },
+  [ActionLabels.IntegrationLinkCreate]: {
+    label: ActionLabels.IntegrationLinkCreate,
+    name: 'Integration link create'
+  },
+  [ActionLabels.IntegrationLinkUpdate]: {
+    label: ActionLabels.IntegrationLinkUpdate,
+    name: 'Integration link update'
+  },
+  [ActionLabels.IntegrationLinkSaveBatch]: {
+    label: ActionLabels.IntegrationLinkSaveBatch,
+    name: 'Integration link save batch'
+  },
+  [ActionLabels.IntegrationLinkDelete]: {
+    label: ActionLabels.IntegrationLinkDelete,
+    name: 'Integration link delete'
+  },
+  [ActionLabels.WikiContextCreate]: {
+    label: ActionLabels.WikiContextCreate,
+    name: 'Wiki context create'
+  },
+  [ActionLabels.WikiContextUpdate]: {
+    label: ActionLabels.WikiContextUpdate,
+    name: 'Wiki context update'
+  },
+  [ActionLabels.WikiContextDelete]: {
+    label: ActionLabels.WikiContextDelete,
+    name: 'Wiki context delete'
+  },
+  [ActionLabels.WikiTagCreate]: {
+    label: ActionLabels.WikiTagCreate,
+    name: 'Wiki tag create'
+  },
+  [ActionLabels.WikiTagUpdate]: {
+    label: ActionLabels.WikiTagUpdate,
+    name: 'Wiki tag update'
+  },
+  [ActionLabels.WikiTagDelete]: {
+    label: ActionLabels.WikiTagDelete,
+    name: 'Wiki tag delete'
+  },
+  [ActionLabels.WikiArticleCreate]: {
+    label: ActionLabels.WikiArticleCreate,
+    name: 'Wiki article create'
+  },
+  [ActionLabels.WikiArticleUpdate]: {
+    label: ActionLabels.WikiArticleUpdate,
+    name: 'Wiki article update'
+  },
+  [ActionLabels.WikiArticleUpdateMeta]: {
+    label: ActionLabels.WikiArticleUpdateMeta,
+    name: 'Wiki article update meta'
+  },
+  [ActionLabels.WikiArticleArchive]: {
+    label: ActionLabels.WikiArticleArchive,
+    name: 'Wiki article archive'
+  },
+  [ActionLabels.WikiArticleDelete]: {
+    label: ActionLabels.WikiArticleDelete,
+    name: 'Wiki article delete'
+  },
+  [ActionLabels.WikiArticlePublish]: {
+    label: ActionLabels.WikiArticlePublish,
+    name: 'Wiki article publish'
+  },
+  [ActionLabels.WikiDraftDiscard]: {
+    label: ActionLabels.WikiDraftDiscard,
+    name: 'Wiki draft discard'
+  },
+  [ActionLabels.WikiOverrideCreate]: {
+    label: ActionLabels.WikiOverrideCreate,
+    name: 'Wiki override create'
+  },
+  [ActionLabels.WikiOverrideUpdate]: {
+    label: ActionLabels.WikiOverrideUpdate,
+    name: 'Wiki override update'
+  },
+  [ActionLabels.WikiOverrideDelete]: {
+    label: ActionLabels.WikiOverrideDelete,
+    name: 'Wiki override delete'
   }
 } satisfies Record<ActionLabel, ActionResource>;
 

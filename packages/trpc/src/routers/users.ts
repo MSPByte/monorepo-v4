@@ -166,6 +166,22 @@ export const usersRouter = t.router({
         scopeIds: []
       });
 
+      await ctx.db.insert(customerLogs).values({
+        siteId: null,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email,
+        action: 'create',
+        actionLabel: ActionLabels.UserCreate,
+        targetType: 'user',
+        targetId: tenantUser.id,
+        targetLabel: tenantUser.email,
+        result: 'success',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: { name: tenantUser.name, email: tenantUser.email, initialRoleId: role.id }
+      });
+
       return { ...tenantUser, role };
     }),
 
@@ -395,6 +411,22 @@ export const usersRouter = t.router({
             eq(catalogMember.organizationId, ctx.orgId)
           )
         );
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: null,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email,
+        action: 'delete',
+        actionLabel: ActionLabels.UserDelete,
+        targetType: 'user',
+        targetId: tenantUser.id,
+        targetLabel: tenantUser.email,
+        result: 'success',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: { name: tenantUser.name, email: tenantUser.email }
+      });
 
       return { success: true };
     })

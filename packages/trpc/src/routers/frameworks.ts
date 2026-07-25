@@ -120,6 +120,20 @@ export const frameworksRouter = t.router({
       })
       .returning();
     if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+
+    await auditFrameworkChange(ctx, {
+      frameworkId: row.id,
+      action: 'create',
+      actionLabel: ActionLabels.FrameworkCreate,
+      targetLabel: row.name,
+      metadata: {
+        description: row.description,
+        category: row.category,
+        providerId: row.providerId,
+        enabled: row.enabled
+      }
+    });
+
     return row;
   }),
 
