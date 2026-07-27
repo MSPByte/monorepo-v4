@@ -12,14 +12,9 @@ const HaloConfigSchema = z.object({
   clientSecret: z.string().optional(),
 });
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function loadSites(
-  connectionString: string,
-  auth: App.Locals['auth'],
-  org: any,
-): Promise<HaloPSASite[]> {
+async function loadSites(locals: App.Locals): Promise<HaloPSASite[]> {
   try {
-    const caller = createServerCaller({ auth, org, connectionString });
+    const caller = createServerCaller(locals);
     const integration = await caller.integrations.get({ id: "halopsa" });
     if (!integration || integration.deletedAt) return [];
 
@@ -46,7 +41,7 @@ async function loadSites(
 
 export const load: PageServerLoad = async ({ locals }) => {
   return {
-    sites: loadSites(locals.connectionString, locals.auth, locals.org),
+    sites: loadSites(locals),
   };
 };
 
@@ -67,11 +62,7 @@ export const actions: Actions = {
     }
 
     const { url, clientId, clientSecret } = parsed.data;
-    const caller = createServerCaller({
-      auth: locals.auth,
-      org: locals.org,
-      connectionString: locals.connectionString,
-    });
+    const caller = createServerCaller(locals);
 
     let encryptedSecret: string;
     if (!clientSecret) {
@@ -125,11 +116,7 @@ export const actions: Actions = {
   },
 
   deleteIntegration: async ({ locals }) => {
-    const caller = createServerCaller({
-      auth: locals.auth,
-      org: locals.org,
-      connectionString: locals.connectionString,
-    });
+    const caller = createServerCaller(locals);
     try {
       await caller.integrations.delete({ id: "halopsa" });
     } catch (err) {

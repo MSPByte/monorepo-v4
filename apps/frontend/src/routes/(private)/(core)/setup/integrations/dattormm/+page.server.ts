@@ -13,10 +13,9 @@ const DattoConfigSchema = z.object({
   siteVariableName: z.string().optional(),
 });
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function loadSites(connectionString: string, auth: App.Locals['auth'], org: any): Promise<DattoSite[]> {
+async function loadSites(locals: App.Locals): Promise<DattoSite[]> {
   try {
-    const caller = createServerCaller({ auth, org, connectionString });
+    const caller = createServerCaller(locals);
     const integration = await caller.integrations.get({ id: 'dattormm' });
     if (!integration || integration.deletedAt) return [];
 
@@ -38,7 +37,7 @@ async function loadSites(connectionString: string, auth: App.Locals['auth'], org
 
 export const load: PageServerLoad = async ({ locals }) => {
   return {
-    sites: loadSites(locals.connectionString, locals.auth, locals.org),
+    sites: loadSites(locals),
   };
 };
 
@@ -59,7 +58,7 @@ export const actions: Actions = {
     }
 
     const { url, apiKey, apiSecretKey, siteVariableName, credentialExpiration } = parsed.data;
-    const caller = createServerCaller({ auth: locals.auth, org: locals.org, connectionString: locals.connectionString });
+    const caller = createServerCaller(locals);
 
     let encryptedSecret: string;
     if (!apiSecretKey) {
@@ -109,7 +108,7 @@ export const actions: Actions = {
   },
 
   deleteIntegration: async ({ locals }) => {
-    const caller = createServerCaller({ auth: locals.auth, org: locals.org, connectionString: locals.connectionString });
+    const caller = createServerCaller(locals);
     try {
       await caller.integrations.delete({ id: 'dattormm' });
     } catch (err) {

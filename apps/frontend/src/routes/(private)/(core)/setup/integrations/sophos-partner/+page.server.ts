@@ -11,10 +11,9 @@ const SophosConfigSchema = z.object({
   clientSecret: z.string().optional(),
 });
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function loadTenants(connectionString: string, auth: App.Locals['auth'], org: any): Promise<{ id: string; name: string; meta: { apiHost: string | null } }[]> {
+async function loadTenants(locals: App.Locals): Promise<{ id: string; name: string; meta: { apiHost: string | null } }[]> {
   try {
-    const caller = createServerCaller({ auth, org, connectionString });
+    const caller = createServerCaller(locals);
     const integration = await caller.integrations.get({ id: 'sophos-partner' });
     if (!integration || integration.deletedAt) return [];
 
@@ -41,7 +40,7 @@ async function loadTenants(connectionString: string, auth: App.Locals['auth'], o
 
 export const load: PageServerLoad = async ({ locals }) => {
   return {
-    tenants: loadTenants(locals.connectionString, locals.auth, locals.org),
+    tenants: loadTenants(locals),
   };
 };
 
@@ -60,7 +59,7 @@ export const actions: Actions = {
     }
 
     const { clientId, clientSecret, credentialExpiration } = parsed.data;
-    const caller = createServerCaller({ auth: locals.auth, org: locals.org, connectionString: locals.connectionString });
+    const caller = createServerCaller(locals);
 
     let encryptedSecret: string;
     if (!clientSecret) {
@@ -109,7 +108,7 @@ export const actions: Actions = {
   },
 
   deleteIntegration: async ({ locals }) => {
-    const caller = createServerCaller({ auth: locals.auth, org: locals.org, connectionString: locals.connectionString });
+    const caller = createServerCaller(locals);
     try {
       await caller.integrations.delete({ id: 'sophos-partner' });
     } catch (err) {

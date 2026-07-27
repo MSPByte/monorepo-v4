@@ -12,10 +12,9 @@ const CoveConfigSchema = z.object({
   clientSecret: z.string().optional(),
 });
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function loadCustomers(connectionString: string, auth: App.Locals['auth'], org: any) {
+async function loadCustomers(locals: App.Locals) {
   try {
-    const caller = createServerCaller({ auth, org, connectionString });
+    const caller = createServerCaller(locals);
     const integration = await caller.integrations.get({ id: 'cove' });
     if (!integration || integration.deletedAt) return [];
 
@@ -37,7 +36,7 @@ async function loadCustomers(connectionString: string, auth: App.Locals['auth'],
 
 export const load: PageServerLoad = async ({ locals }) => {
   return {
-    customers: loadCustomers(locals.connectionString, locals.auth, locals.org),
+    customers: loadCustomers(locals),
   };
 };
 
@@ -58,7 +57,7 @@ export const actions: Actions = {
     }
 
     const { server, partnerId, clientId, clientSecret, credentialExpiration } = parsed.data;
-    const caller = createServerCaller({ auth: locals.auth, org: locals.org, connectionString: locals.connectionString });
+    const caller = createServerCaller(locals);
 
     let encryptedSecret: string;
     if (!clientSecret) {
@@ -108,7 +107,7 @@ export const actions: Actions = {
   },
 
   deleteIntegration: async ({ locals }) => {
-    const caller = createServerCaller({ auth: locals.auth, org: locals.org, connectionString: locals.connectionString });
+    const caller = createServerCaller(locals);
     try {
       await caller.integrations.delete({ id: 'cove' });
     } catch (err) {

@@ -54,6 +54,11 @@ export function nullableTextColumn<T>(
     cellComponent: NullableTextCell,
     cellProps,
     ...overrides,
+    filter: {
+      type: 'text',
+      operators: ['contains', 'eq'],
+      placeholder: `Search ${title}...`,
+    },
   };
 }
 

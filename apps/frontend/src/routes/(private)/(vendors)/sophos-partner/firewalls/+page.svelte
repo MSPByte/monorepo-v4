@@ -37,7 +37,7 @@
   const columns: DataTableColumn<FirewallRow>[] = $derived([
     ...(!currentLinkId
       ? [
-          textColumn<FirewallRow>('siteName', 'Site', undefined, {
+          textColumn<FirewallRow>('siteName', 'Site', undefined, undefined, {
             width: '180px',
           }),
         ]
@@ -53,20 +53,20 @@
       { width: '100px' }
     ),
     textColumn<FirewallRow>('name', 'Name'),
-    nullableTextColumn<FirewallRow>('hostname', 'Hostname', {
+    nullableTextColumn<FirewallRow>('hostname', 'Hostname', undefined, {
       width: '170px',
       sortable: true,
       searchable: true,
     }),
-    nullableTextColumn<FirewallRow>('serialNumber', 'Serial', {
+    nullableTextColumn<FirewallRow>('serialNumber', 'Serial', undefined, {
       width: '150px',
       searchable: true,
     }),
-    nullableTextColumn<FirewallRow>('externalIp', 'External IP', {
+    nullableTextColumn<FirewallRow>('externalIp', 'External IP', undefined, {
       width: '140px',
       searchable: true,
     }),
-    nullableTextColumn<FirewallRow>('firmwareVersion', 'Firmware', {
+    nullableTextColumn<FirewallRow>('firmwareVersion', 'Firmware', undefined, {
       width: '130px',
       sortable: true,
       searchable: true,
