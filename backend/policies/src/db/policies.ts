@@ -286,6 +286,8 @@ export async function evaluatePolicies(
   const scope = await loadScopeContext(db, params.linkId, params.siteId);
   const triggerTable = FACET_TABLE_MAP[params.type as ProviderFacet];
 
+  type PolicyPair = { assignment: AssignmentRow; policy: PolicyRow };
+  const pairs: PolicyPair[] = [];
   for (const assignment of activeAssignments) {
     metrics.assignmentsEvaluated++;
     const policyIds =
@@ -300,23 +302,57 @@ export async function evaluatePolicies(
       if (!policy) continue;
       if (policy.providerId && policy.providerId !== params.provider) continue;
       if (!policyTargetsFacet(policy, triggerTable)) continue;
-
-      metrics.policiesEvaluated++;
-      const context: PolicyContext = {
-        assignment,
-        policy,
-        policySetId: assignment.subjectType === 'policy_set' ? assignment.policySetId : null,
-        linkId: params.linkId,
-        siteId: params.siteId,
-        provider: params.provider,
-        syncRunId: params.syncRunId,
-        scope
-      };
-      const produced = await evaluatePolicy(db, context);
-      await upsertProducedFindings(db, produced);
-      metrics.findingsOpen += produced.length;
-      metrics.findingsResolved += await resolveStaleFindings(db, context, produced);
+      pairs.push({ assignment, policy });
     }
+  }
+
+  // Dedupe overlapping assignments so each policy runs at most once per trigger.
+  // Framework (policy_set) assignments win over direct policy assignments; when
+  // types tie, the first assignment encountered wins.
+  const chosen = new Map<string, PolicyPair>();
+  const skipped: PolicyPair[] = [];
+  for (const pair of pairs) {
+    const existing = chosen.get(pair.policy.id);
+    if (!existing) {
+      chosen.set(pair.policy.id, pair);
+      continue;
+    }
+    const existingIsSet = existing.assignment.subjectType === 'policy_set';
+    const currentIsSet = pair.assignment.subjectType === 'policy_set';
+    if (!existingIsSet && currentIsSet) {
+      skipped.push(existing);
+      chosen.set(pair.policy.id, pair);
+    } else {
+      skipped.push(pair);
+    }
+  }
+
+  const buildContext = (pair: PolicyPair): PolicyContext => ({
+    assignment: pair.assignment,
+    policy: pair.policy,
+    policySetId:
+      pair.assignment.subjectType === 'policy_set' ? pair.assignment.policySetId : null,
+    linkId: params.linkId,
+    siteId: params.siteId,
+    provider: params.provider,
+    syncRunId: params.syncRunId,
+    scope
+  });
+
+  for (const pair of chosen.values()) {
+    metrics.policiesEvaluated++;
+    const context = buildContext(pair);
+    const produced = await evaluatePolicy(db, context);
+    await upsertProducedFindings(db, produced);
+    metrics.findingsOpen += produced.length;
+    metrics.findingsResolved += await resolveStaleFindings(db, context, produced);
+  }
+
+  // Resolve any prior findings that were produced by an assignment we just
+  // deduped out, so the losing side doesn't leave stale open findings.
+  for (const pair of skipped) {
+    const context = buildContext(pair);
+    metrics.findingsResolved += await resolveStaleFindings(db, context, []);
   }
 
   return metrics;
