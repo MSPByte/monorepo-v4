@@ -4,199 +4,263 @@
   import { scopeStore } from '$lib/stores/scope.store.svelte';
   import { cn } from '$lib/utils';
   import type { createTrpcClient } from '$lib/trpc';
+  import type {
+    DataTableColumn,
+    PaginationInput,
+  } from '$lib/components/data-table/types';
+  import DataTable from '$lib/components/data-table/data-table.svelte';
+  import {
+    dateColumn,
+    numberColumn,
+    textColumn,
+  } from '$lib/components/data-table/column-defs';
+  import type { inferRouterOutputs } from '@trpc/server';
+  import type { AppRouter } from '@mspbyte/trpc';
+  import Badge from '$lib/components/ui/badge/badge.svelte';
+  import * as Sheet from '$lib/components/ui/sheet/index.js';
 
   const trpc = getContext<ReturnType<typeof createTrpcClient>>('trpc');
 
-  const NOW = Date.now();
+  type LogRow = inferRouterOutputs<AppRouter>['agents']['listLogs'][number];
 
-  // Load agents for this site
-  const agentsQuery = createQuery(() => ({
-    queryKey: ['agents.list', scopeStore.currentSite],
-    queryFn: () => trpc.agents.list.query({ siteId: scopeStore.currentSite! }),
-    enabled: !!scopeStore.currentSite,
-  }));
-
-  const agents = $derived(agentsQuery.data ?? []);
-
-  // Selected agent for log drill-down
-  let selectedAgentId = $state<string | null>(null);
-
-  $effect(() => {
-    // Reset selection when site changes
-    if (scopeStore.currentSite) selectedAgentId = null;
-  });
-
-  const selectedAgent = $derived(agents.find((a) => a.id === selectedAgentId) ?? null);
+  const scopeKey = $derived(scopeStore.currentSite ?? 'all');
 
   const logsQuery = createQuery(() => ({
-    queryKey: ['agents.listLogs', selectedAgentId],
-    queryFn: () => trpc.agents.listLogs.query({ agentId: selectedAgentId! }),
-    enabled: !!selectedAgentId,
+    queryKey: ['agents.listLogs', 'all', scopeKey],
+    queryFn: () =>
+      trpc.agents.listLogs.query(
+        scopeStore.currentSite ? { siteId: scopeStore.currentSite } : undefined
+      ),
   }));
 
-  const logs = $derived(logsQuery.data ?? []);
-
-  let logSearch = $state('');
-
-  const filteredLogs = $derived(
-    logs.filter(
-      (l) =>
-        !logSearch ||
-        l.message.toLowerCase().includes(logSearch.toLowerCase()) ||
-        l.method.toLowerCase().includes(logSearch.toLowerCase()),
+  const columns: DataTableColumn<LogRow>[] = $derived([
+    ...(scopeStore.currentSite
+      ? []
+      : [
+          textColumn<LogRow>('siteName', 'Site', undefined, undefined, {
+            width: '160px',
+          }),
+        ]),
+    textColumn<LogRow>('agentHostname', 'Agent', undefined, undefined, {
+      width: '180px',
+    }),
+    textColumn<LogRow>('method', 'Method', undefined, undefined, { width: '160px' }),
+    textColumn<LogRow>('message', 'Message'),
+    {
+      key: 'status',
+      title: 'Status',
+      width: '100px',
+      sortable: true,
+      filter: {
+        type: 'number',
+        operators: ['eq', 'neq'],
+      },
+      cell: statusCell,
+    },
+    numberColumn<LogRow>('timeElapsedMs', 'Elapsed (ms)', undefined, {
+      width: '130px',
+    }),
+    dateColumn<LogRow>(
+      'createdAt',
+      'Timestamp',
+      {
+        width: '180px',
+        filter: {
+          type: 'date',
+          operators: ['lt', 'gt'],
+          defaultOperator: 'gt',
+        },
+      },
+      { withTime: true }
     ),
-  );
+  ] as DataTableColumn<LogRow>[]);
 
-  function relativeTime(ts: Date | string | null | undefined) {
+  async function fetchData(
+    input: PaginationInput
+  ): Promise<{ rows: LogRow[]; total: number }> {
+    const source = logsQuery.data ?? [];
+    const searchable = columns.filter((c) => c.searchable).map((c) => c.key);
+    const searchTerm = input.globalSearch.trim().toLowerCase();
+
+    let filtered = source.slice();
+    if (searchTerm && searchable.length) {
+      filtered = filtered.filter((row) =>
+        searchable.some((key) => {
+          const value = (row as Record<string, unknown>)[key];
+          return value != null && String(value).toLowerCase().includes(searchTerm);
+        })
+      );
+    }
+
+    for (const filter of input.filters) {
+      const key = filter.field;
+      filtered = filtered.filter((row) => {
+        const value = (row as Record<string, unknown>)[key];
+        switch (filter.operator) {
+          case 'eq':
+            return String(value ?? '') === String(filter.value ?? '');
+          case 'neq':
+            return String(value ?? '') !== String(filter.value ?? '');
+          case 'contains':
+            return (
+              value != null &&
+              String(value).toLowerCase().includes(String(filter.value ?? '').toLowerCase())
+            );
+          case 'gt':
+            return value != null && new Date(String(value)).getTime() > new Date(String(filter.value)).getTime();
+          case 'gte':
+            return value != null && new Date(String(value)).getTime() >= new Date(String(filter.value)).getTime();
+          case 'lt':
+            return value != null && new Date(String(value)).getTime() < new Date(String(filter.value)).getTime();
+          case 'lte':
+            return value != null && new Date(String(value)).getTime() <= new Date(String(filter.value)).getTime();
+          case 'is_null':
+            return value == null;
+          case 'is_not_null':
+            return value != null;
+          default:
+            return true;
+        }
+      });
+    }
+
+    if (input.sortField) {
+      const key = input.sortField;
+      const dir = input.sortDir === 'desc' ? -1 : 1;
+      filtered.sort((a, b) => {
+        const av = (a as Record<string, unknown>)[key];
+        const bv = (b as Record<string, unknown>)[key];
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        return String(av).localeCompare(String(bv), undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        }) * dir;
+      });
+    }
+
+    const total = filtered.length;
+    const start = input.page * input.pageSize;
+    return { rows: filtered.slice(start, start + input.pageSize), total };
+  }
+
+  let drawerLog = $state<LogRow | null>(null);
+
+  function absoluteDate(ts?: string | null) {
     if (!ts) return '—';
-    const diff = NOW - new Date(ts).getTime();
-    const mins = Math.floor(diff / 60_000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    return `${Math.floor(hrs / 24)}d ago`;
+    return new Date(ts).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  }
+
+  function prettyJson(value: unknown) {
+    if (value == null) return null;
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
   }
 </script>
 
-{#if !scopeStore.currentSite}
-  <div class="flex flex-col items-center justify-center size-full gap-2 text-muted-foreground">
-    <div class="text-sm font-medium">Select a site to view logs</div>
-    <div class="text-xs">Use the site selector in the navigation bar</div>
-  </div>
-{:else}
-  <div class="flex size-full overflow-hidden">
-    <!-- Agent sidebar -->
-    <div class="w-52 shrink-0 border-r flex flex-col overflow-hidden">
-      <div
-        class="px-3 py-2 border-b text-xs font-semibold text-muted-foreground uppercase tracking-wide"
-      >
-        Agents
-      </div>
-      <div class="flex-1 overflow-y-auto">
-        {#if agentsQuery.isLoading}
-          <div class="flex items-center justify-center h-16 text-xs text-muted-foreground">
-            Loading…
-          </div>
-        {:else if agents.length === 0}
-          <div class="flex items-center justify-center h-16 text-xs text-muted-foreground">
-            No agents
-          </div>
-        {:else}
-          {#each agents as agent}
-            <button
-              onclick={() => (selectedAgentId = agent.id)}
-              class={cn(
-                'w-full text-left px-3 py-2 text-sm transition-colors border-b last:border-0',
-                selectedAgentId === agent.id
-                  ? 'bg-primary/10 text-primary font-medium'
-                  : 'hover:bg-muted/40 text-foreground',
-              )}
+{#snippet statusCell({ value }: { row: LogRow; value: number })}
+  <Badge
+    variant="outline"
+    class={cn(
+      value === 0
+        ? 'bg-success/15 text-success border-success/30'
+        : 'bg-destructive/15 text-destructive border-destructive/30'
+    )}
+  >
+    {value}
+  </Badge>
+{/snippet}
+
+<div class="flex flex-col size-full overflow-hidden p-4">
+  {#key scopeKey}
+    <DataTable
+      {fetchData}
+      {columns}
+      defaultSort={{ field: 'createdAt', dir: 'desc' }}
+      refreshKey={logsQuery.dataUpdatedAt}
+      onrowclick={(row) => (drawerLog = row)}
+    />
+  {/key}
+</div>
+
+<Sheet.Root
+  open={!!drawerLog}
+  onOpenChange={(open) => {
+    if (!open) drawerLog = null;
+  }}
+>
+  <Sheet.Content side="right" class="w-[32rem] max-w-[100vw] flex flex-col p-0">
+    {#if drawerLog}
+      {@const lg = drawerLog}
+      {@const metaText = prettyJson(lg.metadata)}
+      <Sheet.Header class="p-4 border-b">
+        <Sheet.Title class="font-mono text-base">{lg.method}</Sheet.Title>
+        <Sheet.Description class="flex gap-1.5 flex-wrap mt-1 items-center">
+          <Badge
+            variant="outline"
+            class={cn(
+              lg.status === 0
+                ? 'bg-success/15 text-success border-success/30'
+                : 'bg-destructive/15 text-destructive border-destructive/30'
+            )}
+          >
+            {lg.status}
+          </Badge>
+          {#if lg.agentHostname}
+            <span
+              class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground"
             >
-              <div class="truncate">{agent.hostname}</div>
-              <div class="text-xs text-muted-foreground capitalize mt-0.5">{agent.platform}</div>
-            </button>
-          {/each}
+              {lg.agentHostname}
+            </span>
+          {/if}
+          {#if lg.siteName}
+            <span
+              class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground"
+            >
+              {lg.siteName}
+            </span>
+          {/if}
+        </Sheet.Description>
+      </Sheet.Header>
+
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <div class="rounded border bg-card px-3 py-2">
+          <div class="text-xs text-muted-foreground">Message</div>
+          <div class="text-sm mt-0.5 whitespace-pre-wrap wrap-break-word">{lg.message}</div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div class="rounded border bg-card px-3 py-2">
+            <div class="text-xs text-muted-foreground">Elapsed</div>
+            <div class="text-sm font-medium mt-0.5 font-mono">{lg.timeElapsedMs} ms</div>
+          </div>
+          <div class="rounded border bg-card px-3 py-2">
+            <div class="text-xs text-muted-foreground">Timestamp</div>
+            <div class="text-sm font-medium mt-0.5 font-mono">{absoluteDate(lg.createdAt)}</div>
+          </div>
+        </div>
+
+        {#if metaText}
+          <div class="flex flex-col gap-1.5">
+            <div class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Metadata
+            </div>
+            <pre
+              class="overflow-auto rounded-md border bg-muted/30 p-3 text-xs leading-relaxed font-mono">{metaText}</pre>
+          </div>
         {/if}
       </div>
-    </div>
-
-    <!-- Log view -->
-    <div class="flex-1 flex flex-col overflow-hidden">
-      {#if !selectedAgent}
-        <div class="flex items-center justify-center size-full text-sm text-muted-foreground">
-          Select an agent to view its logs
-        </div>
-      {:else}
-        <!-- Toolbar -->
-        <div class="flex items-center gap-3 px-4 py-3 border-b shrink-0">
-          <div class="font-medium text-sm">{selectedAgent.hostname}</div>
-          <input
-            type="text"
-            placeholder="Search logs..."
-            bind:value={logSearch}
-            class="px-3 py-1.5 text-sm rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary w-56 ml-2"
-          />
-          {#if !logsQuery.isLoading}
-            <span class="text-xs text-muted-foreground ml-auto">{filteredLogs.length} entries</span>
-          {/if}
-        </div>
-
-        <!-- Table -->
-        <div class="flex-1 overflow-y-auto">
-          {#if logsQuery.isLoading}
-            <div class="flex items-center justify-center h-32 text-sm text-muted-foreground">
-              Loading…
-            </div>
-          {:else if filteredLogs.length === 0}
-            <div class="flex items-center justify-center h-32 text-sm text-muted-foreground">
-              No logs found.
-            </div>
-          {:else}
-            <table class="w-full text-sm">
-              <thead>
-                <tr class="border-b bg-muted/40">
-                  <th
-                    class="text-left px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-32"
-                  >
-                    Method
-                  </th>
-                  <th
-                    class="text-left px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide"
-                  >
-                    Message
-                  </th>
-                  <th
-                    class="text-left px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-20"
-                  >
-                    Status
-                  </th>
-                  <th
-                    class="text-right px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-28"
-                  >
-                    Elapsed (ms)
-                  </th>
-                  <th
-                    class="text-right px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-32"
-                  >
-                    Timestamp
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each filteredLogs as log}
-                  <tr class="border-b hover:bg-muted/30 transition-colors">
-                    <td class="px-4 py-2.5 text-xs font-mono text-muted-foreground">
-                      {log.method}
-                    </td>
-                    <td class="px-4 py-2.5 text-sm text-muted-foreground truncate max-w-xs">
-                      {log.message}
-                    </td>
-                    <td class="px-4 py-2.5">
-                      <span
-                        class={cn(
-                          'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium',
-                          log.status === 0
-                            ? 'bg-success/15 text-success'
-                            : 'bg-destructive/15 text-destructive',
-                        )}
-                      >
-                        {log.status}
-                      </span>
-                    </td>
-                    <td class="px-4 py-2.5 text-right text-xs text-muted-foreground">
-                      {log.timeElapsedMs}ms
-                    </td>
-                    <td class="px-4 py-2.5 text-right text-xs text-muted-foreground">
-                      {relativeTime(log.createdAt)}
-                    </td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          {/if}
-        </div>
-      {/if}
-    </div>
-  </div>
-{/if}
+    {/if}
+  </Sheet.Content>
+</Sheet.Root>

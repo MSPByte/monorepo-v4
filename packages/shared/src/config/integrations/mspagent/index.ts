@@ -10,9 +10,9 @@ export const MSPAGENT_CONFIG: Integration = {
   scope: "site",
   supportedFacets: [],
   navigation: [
-    { label: "Agents", route: "/agents", isNullable: true },
-    { label: "Logs", route: "/logs", isNullable: true },
-    { label: "Tickets", route: "/tickets", isNullable: true },
+    { label: "Agents", route: "/agents", isNullable: false },
+    { label: "Logs", route: "/logs", isNullable: false },
+    { label: "Tickets", route: "/tickets", isNullable: false },
   ],
   linkMetaSchema: passthroughLinkMetaSchema,
   linkMetaVersion: MSPAGENT_LINK_META_VERSION,

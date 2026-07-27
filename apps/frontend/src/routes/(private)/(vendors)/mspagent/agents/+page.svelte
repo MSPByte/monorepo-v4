@@ -1,67 +1,230 @@
 <script lang="ts">
   import { getContext } from 'svelte';
-  import { createQuery } from '@tanstack/svelte-query';
+  import { createQuery, useQueryClient } from '@tanstack/svelte-query';
+  import { toast } from 'svelte-sonner';
   import { scopeStore } from '$lib/stores/scope.store.svelte';
+  import { authStore } from '$lib/stores/auth.store.svelte';
   import { cn } from '$lib/utils';
   import type { createTrpcClient } from '$lib/trpc';
+  import type {
+    DataTableColumn,
+    PaginationInput,
+    RowAction,
+    TableView,
+  } from '$lib/components/data-table/types';
+  import DataTable from '$lib/components/data-table/data-table.svelte';
+  import {
+    dateColumn,
+    nullableTextColumn,
+    relativeDateColumn,
+    textColumn,
+  } from '$lib/components/data-table/column-defs';
   import * as Sheet from '$lib/components/ui/sheet/index.js';
+  import Trash2Icon from '@lucide/svelte/icons/trash-2';
+  import type { inferRouterOutputs } from '@trpc/server';
+  import type { AppRouter } from '@mspbyte/trpc';
 
   const trpc = getContext<ReturnType<typeof createTrpcClient>>('trpc');
+  const queryClient = useQueryClient();
 
-  const NOW = Date.now();
+  type AgentRow = inferRouterOutputs<AppRouter>['agents']['list'][number];
+
+  const STALE_MS = 60 * 86_400_000;
+
+  const canDeleteAssets = $derived(authStore.isAllowed('Assets.Delete'));
+
+  const queryKey = $derived(['agents.list', scopeStore.currentSite ?? 'all'] as const);
+  const scopeKey = $derived(scopeStore.currentSite ?? 'all');
 
   const agentsQuery = createQuery(() => ({
-    queryKey: ['agents.list', scopeStore.currentSite],
-    queryFn: () => trpc.agents.list.query({ siteId: scopeStore.currentSite! }),
-    enabled: !!scopeStore.currentSite,
+    queryKey,
+    queryFn: () =>
+      trpc.agents.list.query(
+        scopeStore.currentSite ? { siteId: scopeStore.currentSite } : undefined
+      ),
   }));
 
-  const agents = $derived(agentsQuery.data ?? []);
-
-  // Filter state
-  let search = $state('');
-  let showStaleOnly = $state(false);
-
-  const filtered = $derived(
-    agents.filter((a) => {
-      const matchesSearch =
-        !search || a.hostname.toLowerCase().includes(search.toLowerCase());
-      const matchesStale =
-        !showStaleOnly ||
-        !a.updatedAt ||
-        NOW - new Date(a.updatedAt).getTime() > 60 * 86_400_000;
-      return matchesSearch && matchesStale;
+  const columns: DataTableColumn<AgentRow>[] = $derived([
+    ...(scopeStore.currentSite
+      ? []
+      : [
+          textColumn<AgentRow>('siteName', 'Site', undefined, undefined, {
+            width: '180px',
+          }),
+        ]),
+    textColumn<AgentRow>('hostname', 'Hostname'),
+    nullableTextColumn<AgentRow>('platform', 'Platform', undefined, {
+      width: '120px',
+      sortable: true,
     }),
+    nullableTextColumn<AgentRow>('version', 'Version', undefined, {
+      width: '110px',
+      sortable: true,
+    }),
+    nullableTextColumn<AgentRow>('ipAddress', 'IP Address', undefined, {
+      width: '150px',
+      sortable: true,
+    }),
+    dateColumn<AgentRow>('registeredAt', 'Registered', {
+      width: '140px',
+      filter: {
+        type: 'date',
+        operators: ['lt', 'gt'],
+        defaultOperator: 'lt',
+      },
+    }),
+    relativeDateColumn<AgentRow>('updatedAt', 'Last Seen', {
+      width: '140px',
+      filter: {
+        type: 'date',
+        operators: ['lt', 'gt'],
+        defaultOperator: 'lt',
+      },
+    }),
+  ] as DataTableColumn<AgentRow>[]);
+
+  const views: TableView<AgentRow>[] = [
+    {
+      id: 'stale',
+      label: 'Stale (60d)',
+      filters: [
+        {
+          field: 'updatedAt',
+          operator: 'lt',
+          value: new Date(Date.now() - STALE_MS).toISOString(),
+        },
+      ],
+      sort: { field: 'updatedAt', dir: 'asc' },
+    },
+  ];
+
+  const rowActions: RowAction<AgentRow>[] = $derived(
+    canDeleteAssets
+      ? [
+          {
+            label: 'Delete',
+            icon: Trash2Icon,
+            variant: 'destructive',
+            onclick: async (rows, fetchData, { setProgress }) => {
+              const ids = rows.map((row) => row.id).filter(Boolean);
+              if (ids.length === 0) return;
+
+              setProgress(`Deleting ${ids.length} agent${ids.length === 1 ? '' : 's'}...`);
+              const result = await trpc.agents.delete.mutate({ ids });
+              setProgress('Refreshing agents...');
+              await queryClient.invalidateQueries({ queryKey: ['agents.list'] });
+              await queryClient.invalidateQueries({ queryKey: ['agents.siteOverview'] });
+              await fetchData();
+
+              if (result.skipped > 0 && result.deleted > 0) {
+                toast.warning(
+                  `Deleted ${result.deleted} agent${result.deleted === 1 ? '' : 's'}, skipped ${result.skipped} out of scope`
+                );
+              } else if (result.deleted > 0) {
+                toast.success(
+                  `Deleted ${result.deleted} agent${result.deleted === 1 ? '' : 's'}`
+                );
+              } else {
+                toast.error('Failed to delete agents');
+              }
+            },
+          } satisfies RowAction<AgentRow>,
+        ]
+      : []
   );
 
-  let drawerAgent = $state<(typeof agents)[number] | null>(null);
+  // Client-side pagination/filter/sort over the fetched dataset.
+  async function fetchData(
+    input: PaginationInput
+  ): Promise<{ rows: AgentRow[]; total: number }> {
+    const source = agentsQuery.data ?? [];
+    const searchable = columns.filter((c) => c.searchable).map((c) => c.key);
+    const searchTerm = input.globalSearch.trim().toLowerCase();
+
+    let filtered = source.slice();
+    if (searchTerm && searchable.length) {
+      filtered = filtered.filter((row) =>
+        searchable.some((key) => {
+          const value = (row as Record<string, unknown>)[key];
+          return value != null && String(value).toLowerCase().includes(searchTerm);
+        })
+      );
+    }
+
+    for (const filter of input.filters) {
+      const key = filter.field;
+      filtered = filtered.filter((row) => {
+        const value = (row as Record<string, unknown>)[key];
+        switch (filter.operator) {
+          case 'eq':
+            return String(value ?? '') === String(filter.value ?? '');
+          case 'neq':
+            return String(value ?? '') !== String(filter.value ?? '');
+          case 'contains':
+            return (
+              value != null &&
+              String(value).toLowerCase().includes(String(filter.value ?? '').toLowerCase())
+            );
+          case 'gt':
+            return value != null && new Date(String(value)).getTime() > new Date(String(filter.value)).getTime();
+          case 'gte':
+            return value != null && new Date(String(value)).getTime() >= new Date(String(filter.value)).getTime();
+          case 'lt':
+            return value != null && new Date(String(value)).getTime() < new Date(String(filter.value)).getTime();
+          case 'lte':
+            return value != null && new Date(String(value)).getTime() <= new Date(String(filter.value)).getTime();
+          case 'is_null':
+            return value == null;
+          case 'is_not_null':
+            return value != null;
+          default:
+            return true;
+        }
+      });
+    }
+
+    if (input.sortField) {
+      const key = input.sortField;
+      const dir = input.sortDir === 'desc' ? -1 : 1;
+      filtered.sort((a, b) => {
+        const av = (a as Record<string, unknown>)[key];
+        const bv = (b as Record<string, unknown>)[key];
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        return String(av).localeCompare(String(bv), undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        }) * dir;
+      });
+    }
+
+    const total = filtered.length;
+    const start = input.page * input.pageSize;
+    return { rows: filtered.slice(start, start + input.pageSize), total };
+  }
+
+  let drawerAgent = $state<AgentRow | null>(null);
   let activeTab = $state<'Details' | 'Tickets'>('Details');
 
   $effect(() => {
     if (drawerAgent) activeTab = 'Details';
   });
 
-  // Per-agent tickets query (only runs when drawer is on Tickets tab)
+  const drawerSiteId = $derived(drawerAgent?.siteId ?? null);
+
   const agentTicketsQuery = createQuery(() => ({
-    queryKey: ['agents.listTickets.byAgent', drawerAgent?.id],
-    queryFn: () => trpc.agents.listTickets.query({ siteId: scopeStore.currentSite! }),
-    enabled: !!drawerAgent && activeTab === 'Tickets' && !!scopeStore.currentSite,
+    queryKey: ['agents.listTickets', drawerSiteId],
+    queryFn: () =>
+      trpc.agents.listTickets.query(drawerSiteId ? { siteId: drawerSiteId } : undefined),
+    enabled: !!drawerAgent && activeTab === 'Tickets',
   }));
 
   const drawerTickets = $derived(
-    (agentTicketsQuery.data ?? []).filter((t) => t.agentId === drawerAgent?.id),
+    (agentTicketsQuery.data ?? []).filter((t) => t.agentId === drawerAgent?.id)
   );
 
-  function relativeTime(ts?: Date | string | null) {
-    if (!ts) return 'Never';
-    const diff = NOW - new Date(ts).getTime();
-    const days = Math.floor(diff / 86_400_000);
-    if (days === 0) return 'Today';
-    if (days === 1) return '1d ago';
-    return `${days}d ago`;
-  }
-
-  function absoluteDate(ts?: Date | string | null) {
+  function absoluteDate(ts?: string | null) {
     if (!ts) return '—';
     return new Date(ts).toLocaleDateString('en-US', {
       month: 'short',
@@ -70,121 +233,31 @@
     });
   }
 
-  function isStale(updatedAt?: Date | string | null) {
-    if (!updatedAt) return true;
-    return NOW - new Date(updatedAt).getTime() > 60 * 86_400_000;
+  function relativeTime(ts?: string | null) {
+    if (!ts) return 'Never';
+    const diff = Date.now() - new Date(ts).getTime();
+    const days = Math.floor(diff / 86_400_000);
+    if (days === 0) return 'Today';
+    if (days === 1) return '1d ago';
+    return `${days}d ago`;
   }
 </script>
 
-{#if !scopeStore.currentSite}
-  <div class="flex flex-col items-center justify-center size-full gap-2 text-muted-foreground">
-    <div class="text-sm font-medium">Select a site to view agents</div>
-    <div class="text-xs">Use the site selector in the navigation bar</div>
-  </div>
-{:else}
-  <div class="flex flex-col size-full overflow-hidden">
-    <!-- Toolbar -->
-    <div class="flex items-center gap-3 px-4 py-3 border-b shrink-0">
-      <input
-        type="text"
-        placeholder="Search by hostname..."
-        bind:value={search}
-        class="px-3 py-1.5 text-sm rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary w-64"
-      />
-      <label class="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
-        <input type="checkbox" bind:checked={showStaleOnly} class="rounded" />
-        Stale 60d only
-      </label>
-      {#if !agentsQuery.isLoading}
-        <span class="text-xs text-muted-foreground ml-auto">{filtered.length} agents</span>
-      {/if}
-    </div>
+<div class="flex flex-col size-full overflow-hidden p-4">
+  {#key scopeKey}
+    <DataTable
+      {fetchData}
+      {columns}
+      {views}
+      {rowActions}
+      enableRowSelection={canDeleteAssets}
+      defaultSort={{ field: 'hostname', dir: 'asc' }}
+      refreshKey={agentsQuery.dataUpdatedAt}
+      onrowclick={(row) => (drawerAgent = row)}
+    />
+  {/key}
+</div>
 
-    <!-- Table -->
-    <div class="flex-1 overflow-y-auto">
-      {#if agentsQuery.isLoading}
-        <div class="flex items-center justify-center h-32 text-sm text-muted-foreground">
-          Loading…
-        </div>
-      {:else if filtered.length === 0}
-        <div class="flex items-center justify-center h-32 text-sm text-muted-foreground">
-          No agents found for this site.
-        </div>
-      {:else}
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="border-b bg-muted/40">
-              <th
-                class="text-left px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide"
-              >
-                Hostname
-              </th>
-              <th
-                class="text-left px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-28"
-              >
-                Platform
-              </th>
-              <th
-                class="text-left px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-24"
-              >
-                Version
-              </th>
-              <th
-                class="text-left px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-32"
-              >
-                IP Address
-              </th>
-              <th
-                class="text-right px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-32"
-              >
-                Registered
-              </th>
-              <th
-                class="text-right px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-32"
-              >
-                Last Seen
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each filtered as agent}
-              <tr
-                class="border-b hover:bg-muted/30 transition-colors cursor-pointer"
-                onclick={() => (drawerAgent = agent)}
-              >
-                <td class="px-4 py-2.5 font-medium">{agent.hostname}</td>
-                <td class="px-4 py-2.5 text-muted-foreground capitalize text-xs">
-                  {agent.platform}
-                </td>
-                <td class="px-4 py-2.5 text-xs font-mono text-muted-foreground">
-                  v{agent.version}
-                </td>
-                <td class="px-4 py-2.5 text-xs font-mono text-muted-foreground">
-                  {agent.ipAddress ?? '—'}
-                </td>
-                <td class="px-4 py-2.5 text-right text-xs text-muted-foreground">
-                  {absoluteDate(agent.registeredAt)}
-                </td>
-                <td class="px-4 py-2.5 text-right">
-                  <span
-                    class={cn(
-                      'text-xs',
-                      isStale(agent.updatedAt) ? 'text-destructive' : 'text-muted-foreground',
-                    )}
-                  >
-                    {relativeTime(agent.updatedAt)}
-                  </span>
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      {/if}
-    </div>
-  </div>
-{/if}
-
-<!-- Agent detail sheet -->
 <Sheet.Root
   open={!!drawerAgent}
   onOpenChange={(open) => {
@@ -211,19 +284,26 @@
               v{ag.version}
             </span>
           {/if}
+          {#if ag.siteName}
+            <span
+              class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground"
+            >
+              {ag.siteName}
+            </span>
+          {/if}
         </Sheet.Description>
       </Sheet.Header>
 
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
         <div class="flex gap-1 border-b">
-          {#each (['Details', 'Tickets'] as const) as tab}
+          {#each ['Details', 'Tickets'] as const as tab}
             <button
               onclick={() => (activeTab = tab)}
               class={cn(
                 'px-3 py-2 text-sm font-medium border-b-2 transition-colors -mb-px',
                 activeTab === tab
                   ? 'border-primary text-primary'
-                  : 'border-transparent text-muted-foreground hover:text-foreground',
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
               )}
             >
               {tab}

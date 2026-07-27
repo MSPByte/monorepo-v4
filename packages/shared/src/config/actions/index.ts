@@ -68,7 +68,8 @@ export enum ActionLabels {
   WikiDraftDiscard = 'wiki.draft.discard',
   WikiOverrideCreate = 'wiki.override.create',
   WikiOverrideUpdate = 'wiki.override.update',
-  WikiOverrideDelete = 'wiki.override.delete'
+  WikiOverrideDelete = 'wiki.override.delete',
+  MspAgentDelete = 'mspagent.agent.delete'
 }
 
 export type ActionLabel = `${ActionLabels}`;
@@ -358,6 +359,10 @@ export const ActionResources = {
   [ActionLabels.WikiOverrideDelete]: {
     label: ActionLabels.WikiOverrideDelete,
     name: 'Wiki override delete'
+  },
+  [ActionLabels.MspAgentDelete]: {
+    label: ActionLabels.MspAgentDelete,
+    name: 'MSPAgent delete'
   }
 } satisfies Record<ActionLabel, ActionResource>;
 
