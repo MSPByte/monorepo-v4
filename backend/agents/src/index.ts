@@ -14,7 +14,15 @@ import { downloadsRoutes } from './routes/downloads.js';
 const fastify = Fastify({ logger: false });
 
 await fastify.register(cors, { origin: true, credentials: true });
-await fastify.register(multipart);
+await fastify.register(multipart, {
+  // Don't 413 on oversized files — the handler checks part.file.truncated and
+  // gracefully drops the attachment (see routes/ticket.ts). Screenshots can run
+  // several MB, and the plugin default (1 MB) was aborting ticket submissions.
+  throwFileSizeLimit: false,
+  limits: {
+    fileSize: 10 * 1024 * 1024
+  }
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

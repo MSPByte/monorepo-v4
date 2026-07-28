@@ -48,6 +48,7 @@ function buildDetailsHtml(params: {
   hostname: string;
   assetIds: number[];
   imageUrls: string[];
+  screenshotFailed: boolean;
 }): string {
   const lines: string[] = [
     '[User Submitted Request]',
@@ -60,6 +61,7 @@ function buildDetailsHtml(params: {
     ''
   ];
   if (params.assetIds.length === 0) lines.push(`Device: ${params.hostname}`);
+  if (params.screenshotFailed) lines.push('Screenshot failed to attach');
 
   const images = params.imageUrls
     .map((src) => `<img src="${src}" class="fr-fil fr-dib" width="720" height="374">`)
@@ -109,10 +111,14 @@ export function ticketRoute(fastify: FastifyInstance) {
 
     // Parse body — multipart or JSON
     let rawBody: Record<string, unknown> = {};
+    let screenshotFailed = false;
     const contentType = req.headers['content-type'] ?? '';
 
     if (contentType.includes('multipart/form-data')) {
       let screenshotFile: { filename: string; data: Buffer } | null = null;
+      // throwFileSizeLimit is disabled on the plugin — oversized files are
+      // truncated (part.file.truncated=true) instead of 413'ing the request,
+      // so we can still submit the ticket and note the failure in the details.
       const parts = req.parts();
       for await (const part of parts) {
         if (part.type === 'file') {
@@ -121,10 +127,17 @@ export function ticketRoute(fastify: FastifyInstance) {
             for await (const chunk of part.file) {
               if (Buffer.isBuffer(chunk)) chunks.push(chunk);
             }
-            screenshotFile = {
-              filename: part.filename ?? 'screenshot.png',
-              data: Buffer.concat(chunks)
-            };
+            if (part.file.truncated) {
+              screenshotFailed = true;
+              logger.warn('Screenshot exceeded upload size limit — skipping attachment', {
+                filename: part.filename
+              });
+            } else {
+              screenshotFile = {
+                filename: part.filename ?? 'screenshot.png',
+                data: Buffer.concat(chunks)
+              };
+            }
           }
         } else {
           rawBody[part.fieldname] = part.value;
@@ -236,7 +249,8 @@ export function ticketRoute(fastify: FastifyInstance) {
       }
     }
 
-    // Upload screenshot (best-effort)
+    // Upload screenshot (best-effort). If HaloPSA rejects the upload, still
+    // submit the ticket and note the failure in the details.
     if (body.screenshot?.data) {
       try {
         const binary = atob(body.screenshot.data);
@@ -244,10 +258,18 @@ export function ticketRoute(fastify: FastifyInstance) {
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         const blob = new Blob([bytes], { type: 'image/png' });
         const imageUrl = await connector.attachment.uploadImage(blob);
-        if (imageUrl) imageUrls = [imageUrl];
-        logger.info('Screenshot uploaded to HaloPSA', { hostname: agent.hostname });
-      } catch {
-        logger.warn('Failed to upload screenshot to HaloPSA', { hostname: agent.hostname });
+        if (imageUrl) {
+          imageUrls = [imageUrl];
+          logger.info('Screenshot uploaded to HaloPSA', { hostname: agent.hostname });
+        } else {
+          screenshotFailed = true;
+          logger.warn('HaloPSA returned no image URL for screenshot', {
+            hostname: agent.hostname
+          });
+        }
+      } catch (err) {
+        screenshotFailed = true;
+        logger.warn('Failed to upload screenshot to HaloPSA', { hostname: agent.hostname, err });
       }
     }
 
@@ -267,7 +289,8 @@ export function ticketRoute(fastify: FastifyInstance) {
       phone: body.phone,
       hostname: agent.hostname,
       assetIds,
-      imageUrls
+      imageUrls,
+      screenshotFailed
     });
 
     const urgency = URGENCY_MAP[body.urgency] ?? body.urgency;
