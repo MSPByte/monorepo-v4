@@ -36,14 +36,14 @@
   const columns: DataTableColumn<LicenseRow>[] = $derived([
     ...(!currentLinkId
       ? [
-          textColumn<LicenseRow>('siteName', 'Site', undefined, {
+          textColumn<LicenseRow>('siteName', 'Site', undefined, undefined, {
             width: '180px',
           }),
         ]
       : []),
     textColumn<LicenseRow>('name', 'Name'),
-    textColumn<LicenseRow>('code', 'Code', undefined, { width: '190px' }),
-    nullableTextColumn<LicenseRow>('type', 'Type', {
+    textColumn<LicenseRow>('code', 'Code', undefined, undefined, { width: '190px' }),
+    nullableTextColumn<LicenseRow>('type', 'Type', undefined, {
       width: '120px',
       sortable: true,
       searchable: true,

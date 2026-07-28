@@ -42,7 +42,7 @@
   const columns: DataTableColumn<EndpointRow>[] = $derived([
     ...(!currentLinkId
       ? [
-          textColumn<EndpointRow>('siteName', 'Site', undefined, {
+          textColumn<EndpointRow>('siteName', 'Site', undefined, undefined, {
             width: '180px',
           }),
         ]

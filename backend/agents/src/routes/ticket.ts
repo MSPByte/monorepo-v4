@@ -32,9 +32,10 @@ const PSAConfigSchema = z
   .object({
     url: z.string().default(''),
     clientId: z.string().default(''),
-    clientSecret: z.string().default('')
+    clientSecret: z.string().default(''),
+    fallbackSiteId: z.string().default('-1')
   })
-  .catch({ url: '', clientId: '', clientSecret: '' });
+  .catch({ url: '', clientId: '', clientSecret: '', fallbackSiteId: '-1' });
 
 const URGENCY_MAP: Record<string, string> = { '1': '5', '2': '6', '3': '7' };
 
@@ -171,12 +172,42 @@ export function ticketRoute(fastify: FastifyInstance) {
     const decryptedSecret = Encryption.decrypt(psaConfig.clientSecret, env.ENCRYPTION_KEY) ?? '';
     const connector = new HaloPSAConnector(psaConfig.url, psaConfig.clientId, decryptedSecret);
 
-    const psaSiteId = psaLink.externalId ?? undefined;
+    const linkedPsaSiteId = psaLink.externalId ?? undefined;
     let assetIds: number[] = [];
     let imageUrls: string[] = [];
 
-    // Fetch matching asset (best-effort)
-    if (psaSiteId) {
+    // Verify the linked HaloPSA site still exists; fall back if not.
+    // The PSA site can be reassigned in HaloPSA, orphaning the stored externalId
+    // and causing ticket create to 400. Fall back on any lookup failure — a
+    // ticket landing in the fallback site is better than losing the submission.
+    let linkedHaloSite: HaloPSASite | null = null;
+    if (linkedPsaSiteId) {
+      try {
+        linkedHaloSite = await connector.site.get(linkedPsaSiteId);
+      } catch (err) {
+        logger.warn('Failed to fetch HaloPSA site — will use fallback', {
+          siteId,
+          linkedPsaSiteId,
+          err
+        });
+      }
+    }
+
+    let psaSiteId = linkedPsaSiteId;
+    let usingFallbackSite = false;
+    if (linkedPsaSiteId && !linkedHaloSite) {
+      psaSiteId = psaConfig.fallbackSiteId || '-1';
+      usingFallbackSite = true;
+      logger.warn('Linked HaloPSA site unavailable — using fallback site', {
+        siteId,
+        linkedPsaSiteId,
+        fallbackSiteId: psaSiteId
+      });
+    }
+
+    // Fetch matching asset (best-effort). Skip when using fallback since the
+    // agent's assets belong to the original (now-missing) site.
+    if (psaSiteId && !usingFallbackSite) {
       try {
         const assets = await connector.asset.list(psaSiteId);
         const match = assets.find((a: HaloPSAAsset) =>
@@ -220,17 +251,13 @@ export function ticketRoute(fastify: FastifyInstance) {
       }
     }
 
-    // Resolve parent company client_id (best-effort)
-    let psaParentCompanyId: number | undefined;
-    if (psaSiteId) {
-      try {
-        const haloSites = await connector.site.list();
-        const haloSite = haloSites.find((s: HaloPSASite) => String(s.id) === psaSiteId);
-        if (haloSite) psaParentCompanyId = haloSite.client_id;
-      } catch {
-        // non-fatal
-      }
-    }
+    // Resolve parent company client_id from the site we already fetched.
+    // (Only meaningful when the linked site still exists — a fallback site's
+    // client_id isn't relevant to the agent.)
+    const psaParentCompanyId =
+      !usingFallbackSite && linkedHaloSite?.client_id != null
+        ? linkedHaloSite.client_id
+        : undefined;
 
     const details_html = buildDetailsHtml({
       summary: body.summary,

@@ -10,6 +10,7 @@ const HaloConfigSchema = z.object({
   url: z.string().optional(),
   clientId: z.string().optional(),
   clientSecret: z.string().optional(),
+  fallbackSiteId: z.string().optional(),
 });
 
 async function loadSites(locals: App.Locals): Promise<HaloPSASite[]> {
@@ -51,6 +52,7 @@ export const actions: Actions = {
       url: z.string().min(1),
       clientId: z.string().min(1),
       clientSecret: z.string().optional(),
+      fallbackSiteId: z.string().optional(),
     });
 
     const raw = await request.formData();
@@ -61,7 +63,7 @@ export const actions: Actions = {
       });
     }
 
-    const { url, clientId, clientSecret } = parsed.data;
+    const { url, clientId, clientSecret, fallbackSiteId } = parsed.data;
     const caller = createServerCaller(locals);
 
     let encryptedSecret: string;
@@ -85,7 +87,12 @@ export const actions: Actions = {
     try {
       await caller.integrations.upsert({
         id: "halopsa",
-        config: { url, clientId, clientSecret: encryptedSecret },
+        config: {
+          url,
+          clientId,
+          clientSecret: encryptedSecret,
+          fallbackSiteId: fallbackSiteId || "-1",
+        },
       });
       return { success: true };
     } catch (err) {

@@ -33,7 +33,7 @@
   const columns = [
     textColumn<IntegrationRow>('name', 'Name'),
     textColumn<IntegrationRow>('category', 'Category'),
-    textColumn<IntegrationRow>('status', 'Status', undefined, {
+    textColumn<IntegrationRow>('status', 'Status', undefined, undefined, {
       cellComponent: StatusCell,
     }),
   ];

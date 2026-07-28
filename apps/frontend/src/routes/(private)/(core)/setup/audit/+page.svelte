@@ -36,15 +36,20 @@
   let selectedLog = $state<AuditLogRow | null>(null);
 
   const columns: DataTableColumn<AuditLogRow>[] = [
-    dateColumn<AuditLogRow>('createdAt', 'Time', {
-      width: '180px',
-      filter: {
-        type: 'date',
-        operators: ['lt', 'gt'],
-        defaultOperator: 'gt',
+    dateColumn<AuditLogRow>(
+      'createdAt',
+      'Time',
+      {
+        width: '180px',
+        filter: {
+          type: 'date',
+          operators: ['lt', 'gt'],
+          defaultOperator: 'gt',
+        },
       },
-    }, { withTime: true }),
-    textColumn<AuditLogRow>('actorLabel', 'Actor', undefined, {
+      { withTime: true }
+    ),
+    textColumn<AuditLogRow>('actorLabel', 'Actor', undefined, undefined, {
       width: '180px',
       filter: {
         type: 'text',
@@ -64,14 +69,14 @@
       },
       cell: actionLabelCell,
     },
-    textColumn<AuditLogRow>('targetLabel', 'Target', undefined, {
+    textColumn<AuditLogRow>('targetLabel', 'Target', undefined, undefined, {
       filter: {
         type: 'text',
         operators: ['contains', 'eq'],
         placeholder: 'Search targets...',
       },
     }),
-    textColumn<AuditLogRow>('targetType', 'Type', undefined, {
+    textColumn<AuditLogRow>('targetType', 'Type', undefined, undefined, {
       width: '160px',
       filter: {
         type: 'text',
@@ -79,7 +84,7 @@
         placeholder: 'Search target types...',
       },
     }),
-    nullableTextColumn<AuditLogRow>('siteName', 'Site', {
+    nullableTextColumn<AuditLogRow>('siteName', 'Site', undefined, {
       width: '160px',
       sortable: false,
     }),
@@ -243,7 +248,9 @@
             `${actionPastTense(selectedLog.action)} ${formatTargetType(selectedLog.targetType)}`
           )}: {selectedLog.targetLabel}
         </Sheet.Title>
-        <Sheet.Description>{selectedLog.actorLabel} - {formatDate(selectedLog.createdAt)}</Sheet.Description>
+        <Sheet.Description
+          >{selectedLog.actorLabel} - {formatDate(selectedLog.createdAt)}</Sheet.Description
+        >
       </Sheet.Header>
 
       <div class="flex-1 overflow-y-auto p-4 space-y-5">

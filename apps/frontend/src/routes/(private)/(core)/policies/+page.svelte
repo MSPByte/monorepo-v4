@@ -41,7 +41,7 @@
   };
 
   const columns: DataTableColumn<PolicyRow>[] = [
-    textColumn<PolicyRow>('name', 'Policy Name', undefined, { width: '260px' }),
+    textColumn<PolicyRow>('name', 'Policy Name', undefined, undefined, { width: '260px' }),
     boolBadgeColumn<PolicyRow>('enabled', 'Enabled', {
       trueLabel: 'Enabled',
       falseLabel: 'Off',

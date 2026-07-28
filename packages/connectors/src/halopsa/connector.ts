@@ -116,6 +116,7 @@ export class HaloPSAConnector {
 
   readonly site: {
     list: () => Promise<HaloPSASite[]>;
+    get: (id: string | number) => Promise<HaloPSASite>;
   };
 
   readonly asset: {
@@ -161,7 +162,8 @@ export class HaloPSAConnector {
           page_no: '1'
         });
         return this.client.getAll<HaloPSASite>('/api/site', 'sites', params);
-      }
+      },
+      get: (id) => this.client.get<HaloPSASite>(`/api/site/${id}`)
     };
 
     this.asset = {

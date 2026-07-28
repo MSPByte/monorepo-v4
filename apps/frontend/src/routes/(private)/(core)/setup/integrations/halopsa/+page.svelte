@@ -8,6 +8,7 @@
   import type { ExternalOption } from '../_helpers/site-linking-table.svelte';
   import * as Sheet from '$lib/components/ui/sheet/index.js';
   import * as Card from '$lib/components/ui/card/index.js';
+  import * as Select from '$lib/components/ui/select/index.js';
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import Button from '$lib/components/ui/button/button.svelte';
   import { Settings, TriangleAlert, LoaderCircle } from '@lucide/svelte';
@@ -18,6 +19,7 @@
   import type { PageProps } from './$types';
   import type { HaloPSASite } from '@mspbyte/shared';
   import Loader from '$lib/components/transition/loader.svelte';
+  import SingleSelect from '$lib/components/single-select.svelte';
 
   const { data }: PageProps = $props();
 
@@ -57,6 +59,12 @@
   let testingConnection = $state(false);
   let savingConfig = $state(false);
   let showDeleteConfirm = $state(false);
+  let fallbackSiteId = $state<string>('-1');
+
+  $effect(() => {
+    const cfgFallback = (existingConfig?.fallbackSiteId as string | undefined) ?? '-1';
+    fallbackSiteId = cfgFallback;
+  });
 </script>
 
 <AlertDialog.Root bind:open={showDeleteConfirm}>
@@ -165,6 +173,24 @@
                     class="w-full px-3 py-2 text-sm rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
                   />
                 </div>
+              </Card.Content>
+            </Card.Root>
+
+            <Card.Root class="bg-primary/5 border-primary/20">
+              <Card.Header class="pb-2">
+                <Card.Title class="text-base">Fallback Site</Card.Title>
+                <Card.Description>
+                  Used when a site's linked HaloPSA site no longer exists (e.g. it was moved and its
+                  ID changed). Tickets that would otherwise fail submit against this site instead.
+                  Defaults to HaloPSA's built-in placeholder (-1).
+                </Card.Description>
+              </Card.Header>
+              <Card.Content class="flex flex-col gap-3">
+                <input type="hidden" name="fallbackSiteId" value={fallbackSiteId} />
+                <SingleSelect
+                  options={externalOptions.map((o) => ({ label: o.name, value: o.id }))}
+                  onchange={(v) => v && (fallbackSiteId = v)}
+                />
               </Card.Content>
             </Card.Root>
 

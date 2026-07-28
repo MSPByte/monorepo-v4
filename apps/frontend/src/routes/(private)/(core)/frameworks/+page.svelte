@@ -32,7 +32,7 @@
   };
 
   const columns: DataTableColumn<FrameworkRow>[] = [
-    textColumn<FrameworkRow>('name', 'Framework Name', undefined, { width: '260px' }),
+    textColumn<FrameworkRow>('name', 'Framework Name', undefined, undefined, { width: '260px' }),
     boolBadgeColumn<FrameworkRow>('enabled', 'Enabled', {
       trueLabel: 'Enabled',
       falseLabel: 'Off',

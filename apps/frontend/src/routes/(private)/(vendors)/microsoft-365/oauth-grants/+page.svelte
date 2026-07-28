@@ -25,7 +25,9 @@
     },
     nullableTextColumn<OAuthGrantRow>('resourceDisplayName', 'Resource'),
     nullableTextColumn<OAuthGrantRow>('scope', 'Scopes'),
-    textColumn<OAuthGrantRow>('clientId', 'Client ID', undefined, { defaultHidden: true }),
+    textColumn<OAuthGrantRow>('clientId', 'Client ID', undefined, undefined, {
+      defaultHidden: true,
+    }),
   ];
 
   let selectedGrant = $state<OAuthGrantRow | null>(null);
@@ -39,7 +41,4 @@
   onrowclick={(row) => (selectedGrant = row as OAuthGrantRow)}
 />
 
-<OAuthGrantSheet
-  grant={selectedGrant}
-  onclose={() => (selectedGrant = null)}
-/>
+<OAuthGrantSheet grant={selectedGrant} onclose={() => (selectedGrant = null)} />

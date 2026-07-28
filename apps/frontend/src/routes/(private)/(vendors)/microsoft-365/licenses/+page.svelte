@@ -1,7 +1,11 @@
 <script lang="ts">
   import { scopeStore } from '$lib/stores/scope.store.svelte';
   import VendorDataTable from '$lib/components/data-table/VendorDataTable.svelte';
-  import { textColumn, numberColumn, boolBadgeColumn } from '$lib/components/data-table/column-defs';
+  import {
+    textColumn,
+    numberColumn,
+    boolBadgeColumn,
+  } from '$lib/components/data-table/column-defs';
   import type { DataTableColumn } from '$lib/components/data-table/types';
   import LicenseSheet from './_license-sheet.svelte';
   import type { m365Licenses } from '@mspbyte/drizzle';
@@ -12,7 +16,9 @@
 
   const columns: DataTableColumn<LicenseRow>[] = [
     textColumn<LicenseRow>('friendlyName', 'SKU Name'),
-    textColumn<LicenseRow>('skuPartNumber', 'Part Number', undefined, { defaultHidden: true }),
+    textColumn<LicenseRow>('skuPartNumber', 'Part Number', undefined, undefined, {
+      defaultHidden: true,
+    }),
     numberColumn<LicenseRow>('consumedUnits', 'Assigned'),
     numberColumn<LicenseRow>('totalUnits', 'Total'),
     numberColumn<LicenseRow>('warningUnits', 'Expiring'),
