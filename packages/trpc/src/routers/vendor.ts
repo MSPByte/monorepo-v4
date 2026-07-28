@@ -1,5 +1,5 @@
 // TODO: Findings Implementation
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { eq, and, count, sql, inArray, desc } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
@@ -160,6 +160,253 @@ function authMethodType(method: Record<string, unknown>): string {
   };
 
   return typeMap[odataType] ?? 'Unknown';
+}
+
+// Maps a Graph auth-method @odata.type to the URL segment used by
+// `/users/{id}/authentication/{segment}/{methodId}`. Returns null for the
+// password method (which cannot be deleted) and unknown types.
+function authMethodSegment(odataType: string): string | null {
+  const segmentMap: Record<string, string> = {
+    '#microsoft.graph.emailAuthenticationMethod': 'emailMethods',
+    '#microsoft.graph.fido2AuthenticationMethod': 'fido2Methods',
+    '#microsoft.graph.microsoftAuthenticatorAuthenticationMethod': 'microsoftAuthenticatorMethods',
+    '#microsoft.graph.phoneAuthenticationMethod': 'phoneMethods',
+    '#microsoft.graph.softwareOathAuthenticationMethod': 'softwareOathMethods',
+    '#microsoft.graph.windowsHelloForBusinessAuthenticationMethod':
+      'windowsHelloForBusinessMethods',
+    '#microsoft.graph.temporaryAccessPassAuthenticationMethod': 'temporaryAccessPassMethods'
+  };
+  return segmentMap[odataType] ?? null;
+}
+
+const AUTH_METHOD_SEGMENTS = new Set([
+  'emailMethods',
+  'fido2Methods',
+  'microsoftAuthenticatorMethods',
+  'phoneMethods',
+  'softwareOathMethods',
+  'windowsHelloForBusinessMethods',
+  'temporaryAccessPassMethods'
+]);
+
+// Azure AD default policy: 8–256 chars, at least 3 of 4 categories
+// (upper/lower/digit/symbol). We generate 16 chars and guarantee all four.
+function generateM365Password(): string {
+  const lower = 'abcdefghijkmnopqrstuvwxyz';
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const digits = '23456789';
+  const symbols = '!@#$%^&*';
+  const all = lower + upper + digits + symbols;
+  const pick = (charset: string) => charset[randomBytes(1)[0]! % charset.length]!;
+
+  const required = [pick(lower), pick(upper), pick(digits), pick(symbols)];
+  const restLen = 16 - required.length;
+  const buf = randomBytes(restLen);
+  const chars = [...required];
+  for (let i = 0; i < restLen; i++) chars.push(all[buf[i]! % all.length]!);
+
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = randomBytes(1)[0]! % (i + 1);
+    [chars[i], chars[j]] = [chars[j]!, chars[i]!];
+  }
+  return chars.join('');
+}
+
+function m365IdentityConnector(
+  ctx: {
+    encryptionKey?: string;
+    microsoftCredentials?: { clientId: string; clientSecret: string } | null;
+  },
+  integrationConfig: unknown,
+  tenantId: string
+): M365Connector {
+  const credentials = m365ClientCredentials(
+    integrationConfig,
+    ctx.microsoftCredentials,
+    ctx.encryptionKey
+  );
+  if (!credentials) throw new Error('Microsoft 365 credentials are not configured');
+  return new M365Connector(credentials.clientId, credentials.clientSecret, tenantId);
+}
+
+type M365IdentityRow = {
+  id: string;
+  linkId: string;
+  siteId: string | null;
+  externalId: string;
+  name: string;
+  email: string;
+  enabled: boolean;
+  tenantId: string | null;
+  tenantName: string | null;
+  integrationConfig: unknown;
+};
+
+type M365IdentityActionResult = {
+  id: string;
+  externalId: string;
+  name: string;
+  email: string;
+  linkId: string;
+  siteId: string | null;
+  success: boolean;
+  skipped?: boolean;
+  error?: string;
+};
+
+async function loadM365IdentityRows(ctx: { db: any }, ids: string[]): Promise<M365IdentityRow[]> {
+  const uniqueIds = [...new Set(ids)];
+  return ctx.db
+    .select({
+      id: m365Identities.id,
+      linkId: m365Identities.linkId,
+      siteId: m365Identities.siteId,
+      externalId: m365Identities.externalId,
+      name: m365Identities.name,
+      email: m365Identities.email,
+      enabled: m365Identities.enabled,
+      tenantId: integrationLinks.externalId,
+      tenantName: integrationLinks.name,
+      integrationConfig: integrations.config
+    })
+    .from(m365Identities)
+    .innerJoin(integrationLinks, eq(m365Identities.linkId, integrationLinks.id))
+    .innerJoin(integrations, eq(integrationLinks.integrationId, integrations.id))
+    .where(
+      and(
+        inArray(m365Identities.id, uniqueIds),
+        eq(integrationLinks.integrationId, 'microsoft-365')
+      )
+    );
+}
+
+function assertM365IdentityScope(
+  ctx: { scopeFor: (p: any) => any },
+  row: { siteId: string | null }
+) {
+  const scope = ctx.scopeFor('Vendors.Write');
+  if (scope === 'all') return;
+  if (!row.siteId || !scope.includes(row.siteId)) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'M365 identity not found' });
+  }
+}
+
+async function runM365IdentityAction(
+  ctx: any,
+  ids: string[],
+  opts: {
+    actionLabel: ActionLabels;
+    auditAction: 'update' | 'delete';
+    skipIf?: (row: M365IdentityRow) => boolean;
+    auditMetadata?: (row: M365IdentityRow) => Record<string, unknown>;
+    run: (connector: M365Connector, row: M365IdentityRow) => Promise<void>;
+  }
+): Promise<{
+  batchId: string;
+  requested: number;
+  found: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  result: 'success' | 'failure' | 'partial';
+  results: M365IdentityActionResult[];
+}> {
+  const uniqueIds = [...new Set(ids)];
+  const rows = await loadM365IdentityRows(ctx, uniqueIds);
+
+  if (rows.length === 0) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'No M365 identities found' });
+  }
+
+  const scope = ctx.scopeFor('Vendors.Write');
+  const scoped = scope === 'all' ? rows : rows.filter((r) => r.siteId && scope.includes(r.siteId));
+
+  const batchId = randomUUID();
+  const results: M365IdentityActionResult[] = [];
+  const connectorCache = new Map<string, M365Connector>();
+
+  for (const row of scoped) {
+    if (opts.skipIf?.(row)) {
+      results.push({
+        id: row.id,
+        externalId: row.externalId,
+        name: row.name,
+        email: row.email,
+        linkId: row.linkId,
+        siteId: row.siteId,
+        success: true,
+        skipped: true
+      });
+      continue;
+    }
+
+    let success = false;
+    let error: string | undefined;
+
+    try {
+      if (!row.tenantId) throw new Error('M365 tenant id is missing');
+      let connector = connectorCache.get(row.linkId);
+      if (!connector) {
+        connector = m365IdentityConnector(ctx, row.integrationConfig, row.tenantId);
+        connectorCache.set(row.linkId, connector);
+      }
+      await opts.run(connector, row);
+      success = true;
+    } catch (err) {
+      error = errorMessage(err);
+    }
+
+    results.push({
+      id: row.id,
+      externalId: row.externalId,
+      name: row.name,
+      email: row.email,
+      linkId: row.linkId,
+      siteId: row.siteId,
+      success,
+      error
+    });
+
+    await ctx.db.insert(customerLogs).values({
+      siteId: row.siteId,
+      actorType: 'user',
+      actorId: ctx.user.id,
+      actorLabel: ctx.user.name || ctx.user.email,
+      action: opts.auditAction,
+      actionLabel: opts.actionLabel,
+      targetType: 'm365_identity',
+      targetId: row.id,
+      targetLabel: row.email || row.name,
+      result: success ? 'success' : 'failure',
+      errorMessage: error,
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+      metadata: {
+        batchId,
+        vendor: 'microsoft-365',
+        externalId: row.externalId,
+        linkId: row.linkId,
+        tenantId: row.tenantId,
+        tenantName: row.tenantName,
+        ...(opts.auditMetadata?.(row) ?? {})
+      }
+    });
+  }
+
+  const updated = results.filter((r) => r.success && !r.skipped).length;
+  const skipped = results.filter((r) => r.skipped).length;
+  const failed = results.filter((r) => !r.success).length;
+
+  return {
+    batchId,
+    requested: uniqueIds.length,
+    found: scoped.length,
+    updated,
+    skipped,
+    failed,
+    result: failed === 0 ? 'success' : updated === 0 ? 'failure' : 'partial',
+    results
+  };
 }
 
 function m365ClientCredentials(
@@ -605,6 +852,277 @@ export const vendorRouter = t.router({
       };
     }),
 
+  revokeM365IdentitySessions: authProcedure
+    .input(z.object({ ids: z.array(z.uuid()).min(1).max(1000) }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
+      }
+      return runM365IdentityAction(ctx, input.ids, {
+        actionLabel: ActionLabels.M365IdentityRevokeSessions,
+        auditAction: 'update',
+        run: async (connector, row) => {
+          await connector.users.revokeSignInSessions(row.externalId);
+        }
+      });
+    }),
+
+  setM365IdentityEnabled: authProcedure
+    .input(z.object({ ids: z.array(z.uuid()).min(1).max(1000), enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
+      }
+      const result = await runM365IdentityAction(ctx, input.ids, {
+        actionLabel: input.enabled
+          ? ActionLabels.M365IdentityEnable
+          : ActionLabels.M365IdentityDisable,
+        auditAction: 'update',
+        auditMetadata: (row) => ({
+          field: 'accountEnabled',
+          previousValue: row.enabled,
+          newValue: input.enabled
+        }),
+        skipIf: (row) => row.enabled === input.enabled,
+        run: async (connector, row) => {
+          await connector.users.update(row.externalId, { accountEnabled: input.enabled });
+        }
+      });
+
+      const changedIds = result.results.filter((r) => r.success && !r.skipped).map((r) => r.id);
+      if (changedIds.length > 0) {
+        await ctx.db
+          .update(m365Identities)
+          .set({ enabled: input.enabled, updatedAt: new Date().toISOString() })
+          .where(inArray(m365Identities.id, changedIds));
+      }
+      return result;
+    }),
+
+  resetM365IdentityPassword: authProcedure
+    .input(
+      z
+        .object({
+          ids: z.array(z.uuid()).min(1).max(1000),
+          // 'random': generate one shared password used across all ids.
+          // 'custom': admin-provided password used across all ids.
+          // 'none': skip password write; only apply forceChangeNextSignIn.
+          mode: z.enum(['random', 'custom', 'none']),
+          password: z.string().min(8).max(256).optional(),
+          forceChangeNextSignIn: z.boolean()
+        })
+        .refine((v) => v.mode !== 'custom' || (v.password?.length ?? 0) >= 8, {
+          message: 'Password is required when mode is custom',
+          path: ['password']
+        })
+        .refine((v) => v.mode !== 'none' || v.forceChangeNextSignIn, {
+          message: 'Nothing to do — enable force change at next sign-in',
+          path: ['forceChangeNextSignIn']
+        })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
+      }
+
+      const password =
+        input.mode === 'random'
+          ? generateM365Password()
+          : input.mode === 'custom'
+            ? input.password!
+            : null;
+
+      const actionLabel =
+        input.mode === 'none'
+          ? ActionLabels.M365IdentityForcePasswordChange
+          : ActionLabels.M365IdentityResetPassword;
+
+      const result = await runM365IdentityAction(ctx, input.ids, {
+        actionLabel,
+        auditAction: 'update',
+        auditMetadata: () => ({
+          mode: input.mode,
+          forceChangeNextSignIn: input.forceChangeNextSignIn
+        }),
+        run: async (connector, row) => {
+          const passwordProfile: Record<string, unknown> = {
+            forceChangePasswordNextSignInWithMfa: input.forceChangeNextSignIn
+          };
+          if (password !== null) passwordProfile.password = password;
+          await connector.users.update(row.externalId, { passwordProfile });
+        }
+      });
+
+      // Return the generated random password once, only if at least one row
+      // succeeded and mode is 'random'. Custom passwords are known to the
+      // admin already; 'none' has no password to surface.
+      const surfacePassword = input.mode === 'random' && result.updated > 0 ? password : null;
+
+      return { ...result, password: surfacePassword };
+    }),
+
+  requireM365IdentityMfaReset: authProcedure
+    .input(z.object({ id: z.uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
+      }
+
+      const rows = await loadM365IdentityRows(ctx, [input.id]);
+      const row = rows[0];
+      if (!row) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'M365 identity not found' });
+      }
+      assertM365IdentityScope(ctx, row);
+      if (!row.tenantId) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'M365 tenant id is missing' });
+      }
+
+      const batchId = randomUUID();
+      const connector = m365IdentityConnector(ctx, row.integrationConfig, row.tenantId);
+
+      const methods = (await connector.users.authMethods(row.externalId)).value;
+      const perMethod: Array<{
+        methodId: string;
+        segment: string | null;
+        odataType: string;
+        success: boolean;
+        skipped?: boolean;
+        error?: string;
+      }> = [];
+
+      for (const method of methods) {
+        const odataType =
+          typeof method['@odata.type'] === 'string' ? (method['@odata.type'] as string) : '';
+        const methodId = typeof method.id === 'string' ? (method.id as string) : '';
+        const segment = authMethodSegment(odataType);
+
+        if (!segment || !methodId) {
+          // Password method or unknown type — skip silently.
+          perMethod.push({ methodId, segment, odataType, success: true, skipped: true });
+          continue;
+        }
+
+        try {
+          await connector.users.deleteAuthMethod(row.externalId, segment, methodId);
+          perMethod.push({ methodId, segment, odataType, success: true });
+        } catch (err) {
+          perMethod.push({
+            methodId,
+            segment,
+            odataType,
+            success: false,
+            error: errorMessage(err)
+          });
+        }
+      }
+
+      const deleted = perMethod.filter((m) => m.success && !m.skipped).length;
+      const skipped = perMethod.filter((m) => m.skipped).length;
+      const failed = perMethod.filter((m) => !m.success).length;
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: row.siteId,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email,
+        action: 'delete',
+        actionLabel: ActionLabels.M365IdentityRequireMfaReset,
+        targetType: 'm365_identity',
+        targetId: row.id,
+        targetLabel: row.email || row.name,
+        result: failed === 0 ? 'success' : deleted === 0 ? 'failure' : 'partial',
+        errorMessage: failed > 0 ? perMethod.find((m) => m.error)?.error : undefined,
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: {
+          batchId,
+          vendor: 'microsoft-365',
+          externalId: row.externalId,
+          linkId: row.linkId,
+          tenantId: row.tenantId,
+          tenantName: row.tenantName,
+          methods: perMethod
+        }
+      });
+
+      return {
+        batchId,
+        deleted,
+        skipped,
+        failed,
+        result: failed === 0 ? 'success' : deleted === 0 ? 'failure' : 'partial',
+        methods: perMethod
+      };
+    }),
+
+  deleteM365IdentityAuthMethod: authProcedure
+    .input(
+      z.object({
+        id: z.uuid(),
+        methodId: z.string().min(1),
+        methodSegment: z.string().min(1)
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
+      }
+      if (!AUTH_METHOD_SEGMENTS.has(input.methodSegment)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Unknown auth method type' });
+      }
+
+      const rows = await loadM365IdentityRows(ctx, [input.id]);
+      const row = rows[0];
+      if (!row) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'M365 identity not found' });
+      }
+      assertM365IdentityScope(ctx, row);
+      if (!row.tenantId) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'M365 tenant id is missing' });
+      }
+
+      const batchId = randomUUID();
+      let success = false;
+      let error: string | undefined;
+
+      try {
+        const connector = m365IdentityConnector(ctx, row.integrationConfig, row.tenantId);
+        await connector.users.deleteAuthMethod(row.externalId, input.methodSegment, input.methodId);
+        success = true;
+      } catch (err) {
+        error = errorMessage(err);
+      }
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: row.siteId,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email,
+        action: 'delete',
+        actionLabel: ActionLabels.M365IdentityDeleteAuthMethod,
+        targetType: 'm365_identity',
+        targetId: row.id,
+        targetLabel: row.email || row.name,
+        result: success ? 'success' : 'failure',
+        errorMessage: error,
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: {
+          batchId,
+          vendor: 'microsoft-365',
+          externalId: row.externalId,
+          linkId: row.linkId,
+          tenantId: row.tenantId,
+          tenantName: row.tenantName,
+          methodSegment: input.methodSegment,
+          methodId: input.methodId
+        }
+      });
+
+      return { batchId, success, error: error ?? null };
+    }),
+
   identityDetails: authProcedure
     .input(z.object({ linkId: z.string().uuid(), identityId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
@@ -755,7 +1273,12 @@ export const vendorRouter = t.router({
       }
       for (const p of directAssignments) policyMap.set(p.id, p);
 
-      let authMethods: Array<{ id: string; type: string; createdDateTime: string | null }> = [];
+      let authMethods: Array<{
+        id: string;
+        type: string;
+        segment: string | null;
+        createdDateTime: string | null;
+      }> = [];
       let authMethodsError: string | null = null;
       const credentials = m365ClientCredentials(
         link.integrationConfig,
@@ -780,6 +1303,10 @@ export const vendorRouter = t.router({
             .map((method: Record<string, unknown>) => ({
               id: typeof method.id === 'string' ? method.id : randomUUID(),
               type: authMethodType(method),
+              segment:
+                typeof method['@odata.type'] === 'string'
+                  ? authMethodSegment(method['@odata.type'] as string)
+                  : null,
               createdDateTime:
                 typeof method.createdDateTime === 'string' ? method.createdDateTime : null
             }));

@@ -69,7 +69,14 @@ export enum ActionLabels {
   WikiOverrideCreate = 'wiki.override.create',
   WikiOverrideUpdate = 'wiki.override.update',
   WikiOverrideDelete = 'wiki.override.delete',
-  MspAgentDelete = 'mspagent.agent.delete'
+  MspAgentDelete = 'mspagent.agent.delete',
+  M365IdentityRevokeSessions = 'm365.identity.revoke_sessions',
+  M365IdentityDisable = 'm365.identity.disable',
+  M365IdentityEnable = 'm365.identity.enable',
+  M365IdentityForcePasswordChange = 'm365.identity.force_password_change',
+  M365IdentityResetPassword = 'm365.identity.reset_password',
+  M365IdentityRequireMfaReset = 'm365.identity.require_mfa_reset',
+  M365IdentityDeleteAuthMethod = 'm365.identity.delete_auth_method'
 }
 
 export type ActionLabel = `${ActionLabels}`;
@@ -363,6 +370,34 @@ export const ActionResources = {
   [ActionLabels.MspAgentDelete]: {
     label: ActionLabels.MspAgentDelete,
     name: 'MSPAgent delete'
+  },
+  [ActionLabels.M365IdentityRevokeSessions]: {
+    label: ActionLabels.M365IdentityRevokeSessions,
+    name: 'M365 identity revoke sessions'
+  },
+  [ActionLabels.M365IdentityDisable]: {
+    label: ActionLabels.M365IdentityDisable,
+    name: 'M365 identity disable'
+  },
+  [ActionLabels.M365IdentityEnable]: {
+    label: ActionLabels.M365IdentityEnable,
+    name: 'M365 identity enable'
+  },
+  [ActionLabels.M365IdentityForcePasswordChange]: {
+    label: ActionLabels.M365IdentityForcePasswordChange,
+    name: 'M365 identity force password change'
+  },
+  [ActionLabels.M365IdentityResetPassword]: {
+    label: ActionLabels.M365IdentityResetPassword,
+    name: 'M365 identity reset password'
+  },
+  [ActionLabels.M365IdentityRequireMfaReset]: {
+    label: ActionLabels.M365IdentityRequireMfaReset,
+    name: 'M365 identity require MFA reset'
+  },
+  [ActionLabels.M365IdentityDeleteAuthMethod]: {
+    label: ActionLabels.M365IdentityDeleteAuthMethod,
+    name: 'M365 identity delete auth method'
   }
 } satisfies Record<ActionLabel, ActionResource>;
 

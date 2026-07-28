@@ -118,6 +118,47 @@ export class M365GraphClient {
     return { data: (await res.json()) as T, res };
   }
 
+  async patch(url: string, body: unknown): Promise<Response> {
+    const token = await this.getToken();
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Graph API PATCH error ${res.status}: ${url} – ${text}`);
+    }
+    return res;
+  }
+
+  async delete(url: string, opts?: { ignoreStatuses?: number[] }): Promise<Response> {
+    const token = await this.getToken();
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (opts?.ignoreStatuses?.includes(res.status)) return res;
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Graph API DELETE error ${res.status}: ${url} – ${text}`);
+    }
+    return res;
+  }
+
+  async postNoBody(url: string): Promise<Response> {
+    const token = await this.getToken();
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Graph API POST error ${res.status}: ${url} – ${text}`);
+    }
+    return res;
+  }
+
   private async fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
     for (let attempt = 0; ; attempt++) {
       const res = await fetch(url, init);

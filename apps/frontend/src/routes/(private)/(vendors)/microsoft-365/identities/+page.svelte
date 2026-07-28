@@ -1,12 +1,28 @@
 <!-- TODO: Findings Implementation -->
 <script lang="ts">
+  import { getContext } from 'svelte';
+  import { useQueryClient } from '@tanstack/svelte-query';
+  import { toast } from 'svelte-sonner';
+  import { authStore } from '$lib/stores/auth.store.svelte';
   import { scopeStore } from '$lib/stores/scope.store.svelte';
+  import type { createTrpcClient } from '$lib/trpc';
   import VendorDataTable from '$lib/components/data-table/VendorDataTable.svelte';
-  import { textColumn, boolBadgeColumn, relativeDateColumn } from '$lib/components/data-table/column-defs';
-  import type { DataTableColumn } from '$lib/components/data-table/types';
+  import {
+    textColumn,
+    boolBadgeColumn,
+    relativeDateColumn,
+  } from '$lib/components/data-table/column-defs';
+  import type { DataTableColumn, RowAction } from '$lib/components/data-table/types';
   import IdentitySheet from './_identity-sheet.svelte';
+  import ResetPasswordDialog from './_reset-password-dialog.svelte';
   import type { m365Identities } from '@mspbyte/drizzle';
+  import LogOutIcon from '@lucide/svelte/icons/log-out';
+  import ShieldOffIcon from '@lucide/svelte/icons/shield-off';
+  import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
+  import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 
+  const trpc = getContext<ReturnType<typeof createTrpcClient>>('trpc');
+  const queryClient = useQueryClient();
   const currentLinkId = $derived(scopeStore.currentLink || undefined);
 
   type IdentityRow = typeof m365Identities.$inferSelect & Record<string, unknown>;
@@ -43,6 +59,111 @@
     relativeDateColumn<IdentityRow>('lastSignInAt', 'Last Sign-in'),
   ];
 
+  const canWrite = $derived(authStore.isAllowed('Vendors.Write'));
+
+  // Reset password dialog wiring — the shared dialog handles the mutation.
+  let resetDialogOpen = $state(false);
+  let resetTargets = $state<Array<{ id: string; name: string; email: string }>>([]);
+  let resetOnComplete = $state<(() => Promise<void>) | null>(null);
+
+  async function invalidateAfter() {
+    await queryClient.invalidateQueries({ queryKey: ['vendor.tableData'] });
+    await queryClient.invalidateQueries({ queryKey: ['vendor.identityDetails'] });
+  }
+
+  function idsOf(rows: IdentityRow[]): string[] {
+    return rows.map((r) => String(r['id'])).filter(Boolean);
+  }
+
+  function summarize(kind: string, updated: number, failed: number, skipped: number) {
+    const noun = (n: number) => (n === 1 ? 'identity' : 'identities');
+    if (failed > 0 && updated > 0) {
+      toast.warning(`${kind}: ${updated} ${noun(updated)} updated, ${failed} failed`);
+    } else if (failed > 0) {
+      toast.error(`${kind}: failed on ${failed} ${noun(failed)}`);
+    } else if (updated > 0) {
+      toast.success(`${kind}: ${updated} ${noun(updated)}`);
+    } else if (skipped > 0) {
+      toast.info(`${kind}: nothing to do (${skipped} already in target state)`);
+    } else {
+      toast.info(`${kind}: no changes`);
+    }
+  }
+
+  const rowActions: RowAction<IdentityRow>[] = $derived(
+    !canWrite
+      ? []
+      : [
+          {
+            label: 'Revoke Sessions',
+            icon: LogOutIcon,
+            variant: 'outline',
+            onclick: async (rows, fetchData, { setProgress }) => {
+              const ids = idsOf(rows);
+              if (ids.length === 0) return;
+              setProgress(`Revoking sessions for ${ids.length}...`);
+              const result = await trpc.vendor.revokeM365IdentitySessions.mutate({ ids });
+              await invalidateAfter();
+              await fetchData();
+              summarize('Revoke Sessions', result.updated, result.failed, result.skipped);
+            },
+          },
+          {
+            label: 'Disable',
+            icon: ShieldOffIcon,
+            variant: 'outline',
+            disabled: (rows) => rows.length === 0 || rows.every((r) => r['enabled'] === false),
+            onclick: async (rows, fetchData, { setProgress }) => {
+              const ids = idsOf(rows);
+              if (ids.length === 0) return;
+              setProgress(`Disabling ${ids.length}...`);
+              const result = await trpc.vendor.setM365IdentityEnabled.mutate({
+                ids,
+                enabled: false,
+              });
+              await invalidateAfter();
+              await fetchData();
+              summarize('Disable', result.updated, result.failed, result.skipped);
+            },
+          },
+          {
+            label: 'Enable',
+            icon: ShieldCheckIcon,
+            variant: 'outline',
+            disabled: (rows) => rows.length === 0 || rows.every((r) => r['enabled'] === true),
+            onclick: async (rows, fetchData, { setProgress }) => {
+              const ids = idsOf(rows);
+              if (ids.length === 0) return;
+              setProgress(`Enabling ${ids.length}...`);
+              const result = await trpc.vendor.setM365IdentityEnabled.mutate({
+                ids,
+                enabled: true,
+              });
+              await invalidateAfter();
+              await fetchData();
+              summarize('Enable', result.updated, result.failed, result.skipped);
+            },
+          },
+          {
+            label: 'Reset Password',
+            icon: KeyRoundIcon,
+            variant: 'outline',
+            onclick: async (rows, fetchData) => {
+              if (rows.length === 0) return;
+              resetTargets = rows.map((r) => ({
+                id: String(r['id']),
+                name: String(r['name'] ?? ''),
+                email: String(r['email'] ?? ''),
+              }));
+              resetOnComplete = async () => {
+                await fetchData();
+              };
+              resetDialogOpen = true;
+            },
+          },
+        ]
+  );
+
   function openDrawer(identity: IdentityRow) {
     selectedIdentity = identity;
   }
@@ -53,6 +174,8 @@
   linkId={currentLinkId}
   integrationId="microsoft-365"
   {columns}
+  enableRowSelection={canWrite}
+  {rowActions}
   onrowclick={(row) => openDrawer(row as IdentityRow)}
 />
 
@@ -60,4 +183,13 @@
   identity={selectedIdentity}
   linkId={currentLinkId ?? String(selectedIdentity?.linkId ?? '')}
   onclose={() => (selectedIdentity = null)}
+/>
+
+<ResetPasswordDialog
+  open={resetDialogOpen}
+  identities={resetTargets}
+  onOpenChange={(open) => (resetDialogOpen = open)}
+  onSuccess={async () => {
+    if (resetOnComplete) await resetOnComplete();
+  }}
 />

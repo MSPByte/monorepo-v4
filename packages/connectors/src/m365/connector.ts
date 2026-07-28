@@ -19,6 +19,9 @@ export class M365Connector {
     delta: (select: string, cursor?: string) => Promise<{ items: unknown[]; cursor?: string }>;
     listForInboxRules: () => Promise<Array<{ userPrincipalName: string; accountEnabled: boolean }>>;
     authMethods: (userId: string) => Promise<{ value: Array<Record<string, unknown>> }>;
+    update: (userId: string, patch: Record<string, unknown>) => Promise<void>;
+    revokeSignInSessions: (userId: string) => Promise<void>;
+    deleteAuthMethod: (userId: string, methodType: string, methodId: string) => Promise<void>;
   };
 
   readonly groups: {
@@ -109,7 +112,26 @@ export class M365Connector {
           .get<{
             value: Array<Record<string, unknown>>;
           }>(`https://graph.microsoft.com/v1.0/users/${userId}/authentication/methods`)
-          .then((r) => r.data)
+          .then((r) => r.data),
+
+      update: async (userId, patch) => {
+        await this.client.patch(
+          `https://graph.microsoft.com/v1.0/users/${userId}`,
+          patch
+        );
+      },
+
+      revokeSignInSessions: async (userId) => {
+        await this.client.postNoBody(
+          `https://graph.microsoft.com/v1.0/users/${userId}/revokeSignInSessions`
+        );
+      },
+
+      deleteAuthMethod: async (userId, methodType, methodId) => {
+        await this.client.delete(
+          `https://graph.microsoft.com/v1.0/users/${userId}/authentication/${methodType}/${methodId}`
+        );
+      }
     };
 
     this.groups = {
