@@ -1,4 +1,5 @@
 import {
+  integrationLinks,
   m365Groups,
   m365Identities,
   m365IdentityGroups,
@@ -35,6 +36,20 @@ const MFA_TRIGGER_FACETS = new Set<string>([
   ProviderFacet.M365Groups,
   ProviderFacet.M365CAPolicies,
 ]);
+
+const IDENTITY_SITE_TRIGGER_FACETS = new Set<string>([
+  ProviderFacet.M365Identities,
+]);
+
+const SiteMappingsSchema = z
+  .array(
+    z.object({
+      siteId: z.string().uuid(),
+      domains: z.array(z.string()),
+    }),
+  )
+  .optional()
+  .default([]);
 
 const CAPolicyUsersSchema = z.looseObject({
   includeUsers: z.array(z.string()).optional().default([]),
@@ -75,7 +90,93 @@ export const m365Enrichers: readonly ProjectionStep[] = [
     ],
     run: enrichM365Mfa,
   },
+  {
+    id: "m365.identity-site",
+    kind: "enrich",
+    provider: PROVIDER_IDS.M365,
+    triggerFacets: IDENTITY_SITE_TRIGGER_FACETS,
+    requiredFacets: [ProviderFacet.M365Identities],
+    run: enrichM365IdentitySite,
+  },
 ];
+
+type IdentitySiteRow = {
+  id: string;
+  email: string;
+  siteId: string | null;
+};
+
+async function enrichM365IdentitySite(
+  context: ProjectionStepContext,
+): Promise<Record<string, unknown>> {
+  const [link] = (await context.db
+    .select({ meta: integrationLinks.meta })
+    .from(integrationLinks)
+    .where(eq(integrationLinks.id, context.linkId))
+    .limit(1)) as Array<{ meta: Record<string, unknown> | null }>;
+
+  const rawMappings = (link?.meta as Record<string, unknown> | null)
+    ?.siteMappings;
+  const parsed = SiteMappingsSchema.safeParse(rawMappings ?? []);
+  const mappings = parsed.success ? parsed.data : [];
+
+  const domainToSiteId = new Map<string, string>();
+  for (const mapping of mappings) {
+    for (const domain of mapping.domains) {
+      const key = domain.trim().toLowerCase();
+      if (key) domainToSiteId.set(key, mapping.siteId);
+    }
+  }
+
+  const identities = (await context.db
+    .select({
+      id: m365Identities.id,
+      email: m365Identities.email,
+      siteId: m365Identities.siteId,
+    })
+    .from(m365Identities)
+    .where(eq(m365Identities.linkId, context.linkId))) as IdentitySiteRow[];
+
+  const idsBySiteId = new Map<string | null, string[]>();
+  for (const identity of identities) {
+    const target = resolveSiteId(identity.email, domainToSiteId);
+    if (target === identity.siteId) continue;
+    const bucket = idsBySiteId.get(target) ?? [];
+    bucket.push(identity.id);
+    idsBySiteId.set(target, bucket);
+  }
+
+  let updated = 0;
+  for (const [siteId, ids] of idsBySiteId) {
+    if (ids.length === 0) continue;
+    for (let index = 0; index < ids.length; index += 1000) {
+      const chunk = ids.slice(index, index + 1000);
+      await context.db
+        .update(m365Identities)
+        .set({ siteId })
+        .where(inArray(m365Identities.id, chunk));
+      updated += chunk.length;
+    }
+  }
+
+  return {
+    identities: identities.length,
+    mappings: mappings.length,
+    domains: domainToSiteId.size,
+    updated,
+  };
+}
+
+function resolveSiteId(
+  email: string,
+  domainToSiteId: Map<string, string>,
+): string | null {
+  if (!email) return null;
+  const atIndex = email.lastIndexOf("@");
+  if (atIndex < 0 || atIndex === email.length - 1) return null;
+  const domain = email.slice(atIndex + 1).toLowerCase();
+  return domainToSiteId.get(domain) ?? null;
+}
 
 async function enrichM365Mfa(
   context: ProjectionStepContext,

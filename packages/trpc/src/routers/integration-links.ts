@@ -1,7 +1,7 @@
 // TODO: Findings Implementation
 import { z } from 'zod';
 import { customerLogs, integrationLinks } from '@mspbyte/drizzle';
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, inArray, ne } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import { ActionLabels, INTEGRATIONS, META_VERSION_KEY, type ProviderId } from '@mspbyte/shared';
 import type { Context } from '../context.js';
@@ -78,7 +78,7 @@ export const integrationLinksRouter = t.router({
       z.object({
         integrationId: z.string().optional(),
         siteId: z.string().uuid().optional(),
-        status: z.enum(['active', 'error', 'disabled']).optional()
+        status: z.enum(['active', 'error', 'disabled', 'mapping']).optional()
       })
     )
     .query(async ({ ctx, input }): Promise<IntegrationLinkRow[]> => {
@@ -165,7 +165,7 @@ export const integrationLinksRouter = t.router({
         externalId: z.string().optional().nullable(),
         name: z.string().optional().nullable(),
         siteId: z.uuid().optional().nullable(),
-        status: z.enum(['active', 'error', 'disabled']).optional(),
+        status: z.enum(['active', 'error', 'disabled', 'mapping']).optional(),
         disposition: z.enum(['managed', 'third_party', 'not_managed']).optional().nullable(),
         note: z.string().optional().nullable(),
         meta: z.record(z.string(), z.unknown()).optional().nullable()
@@ -345,6 +345,160 @@ export const integrationLinksRouter = t.router({
         });
 
         return {
+          created: toCreate.length,
+          updated: toUpdate.length,
+          deleted: toDelete.length
+        };
+      }
+    ),
+
+  syncSiteMappings: authProcedure
+    .input(
+      z.object({
+        parentLinkId: z.string().uuid(),
+        mappings: z.array(
+          z.object({
+            siteId: z.string().uuid(),
+            domains: z.array(z.string())
+          })
+        )
+      })
+    )
+    .mutation(
+      async ({
+        ctx,
+        input
+      }): Promise<{
+        parent: IntegrationLinkRow;
+        created: number;
+        updated: number;
+        deleted: number;
+      }> => {
+        const [parent] = await ctx.db
+          .select()
+          .from(integrationLinks)
+          .where(eq(integrationLinks.id, input.parentLinkId))
+          .limit(1);
+        if (!parent) throw new TRPCError({ code: 'NOT_FOUND' });
+        if (parent.siteId) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'syncSiteMappings requires a tenant-scoped link (siteId must be null)'
+          });
+        }
+        if (!parent.externalId) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Parent link is missing externalId'
+          });
+        }
+
+        const dedupedMappings = new Map<string, string[]>();
+        for (const mapping of input.mappings) {
+          if (mapping.domains.length === 0) continue;
+          const existing = dedupedMappings.get(mapping.siteId) ?? [];
+          for (const domain of mapping.domains) {
+            if (!existing.includes(domain)) existing.push(domain);
+          }
+          dedupedMappings.set(mapping.siteId, existing);
+        }
+
+        const parentMeta = (parent.meta as Record<string, unknown> | null) ?? {};
+        const nextParentMeta = {
+          ...parentMeta,
+          siteMappings: [...dedupedMappings.entries()].map(([siteId, domains]) => ({
+            siteId,
+            domains
+          }))
+        };
+        const parentMetaStamped = stampMeta(parent.integrationId, nextParentMeta);
+
+        const existingChildren = (await ctx.db
+          .select()
+          .from(integrationLinks)
+          .where(
+            and(
+              eq(integrationLinks.integrationId, parent.integrationId),
+              eq(integrationLinks.externalId, parent.externalId),
+              ne(integrationLinks.id, parent.id)
+            )
+          )) as IntegrationLinkRow[];
+        const existingBySite = new Map(
+          existingChildren.filter((c) => c.siteId).map((c) => [c.siteId as string, c])
+        );
+
+        const toCreate: Array<typeof integrationLinks.$inferInsert> = [];
+        const toUpdate: Array<{
+          id: string;
+          meta: Record<string, unknown> | null;
+          status: 'mapping';
+        }> = [];
+        const now = new Date().toISOString();
+
+        for (const [siteId, domains] of dedupedMappings) {
+          const childMeta = stampMeta(parent.integrationId, {
+            source: 'domain-mapping',
+            parentLinkId: parent.id,
+            domains
+          });
+          const existing = existingBySite.get(siteId);
+          if (existing) {
+            toUpdate.push({ id: existing.id, meta: childMeta, status: 'mapping' });
+          } else {
+            toCreate.push({
+              integrationId: parent.integrationId,
+              siteId,
+              externalId: parent.externalId,
+              name: parent.name,
+              status: 'mapping',
+              meta: childMeta
+            });
+          }
+        }
+
+        const toDelete = existingChildren
+          .filter((c) => c.siteId && c.status === 'mapping' && !dedupedMappings.has(c.siteId))
+          .map((c) => c.id);
+
+        const [updatedParent] = await ctx.db
+          .update(integrationLinks)
+          .set({ meta: parentMetaStamped, updatedAt: now })
+          .where(eq(integrationLinks.id, parent.id))
+          .returning();
+        if (!updatedParent) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+
+        if (toDelete.length > 0) {
+          await ctx.db.delete(integrationLinks).where(inArray(integrationLinks.id, toDelete));
+        }
+        for (const update of toUpdate) {
+          await ctx.db
+            .update(integrationLinks)
+            .set({ meta: update.meta, status: update.status, updatedAt: now })
+            .where(eq(integrationLinks.id, update.id));
+        }
+        if (toCreate.length > 0) {
+          await ctx.db.insert(integrationLinks).values(toCreate);
+        }
+
+        await auditLinkChange(ctx, {
+          linkId: parent.id,
+          action: 'update',
+          actionLabel: ActionLabels.IntegrationLinkUpdate,
+          targetLabel: parent.name ?? parent.externalId ?? parent.id,
+          siteId: null,
+          metadata: {
+            integrationId: parent.integrationId,
+            changedFields: ['meta.siteMappings'],
+            mappingCounts: {
+              created: toCreate.length,
+              updated: toUpdate.length,
+              deleted: toDelete.length
+            }
+          }
+        });
+
+        return {
+          parent: updatedParent,
           created: toCreate.length,
           updated: toUpdate.length,
           deleted: toDelete.length

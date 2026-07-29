@@ -265,6 +265,79 @@ export const actions: Actions = {
     }
   },
 
+  refreshLinkInfo: async ({ request, locals }) => {
+    const formData = await request.formData();
+    const externalId = formData.get("externalId");
+    const linkId = formData.get("linkId");
+
+    if (!externalId || typeof externalId !== "string")
+      return fail(400, { error: "externalId is required" });
+    if (!linkId || typeof linkId !== "string")
+      return fail(400, { error: "linkId is required" });
+
+    const caller = createServerCaller(locals);
+    const integration = await caller.integrations.get({ id: "microsoft-365" });
+    if (!integration || integration.deletedAt) {
+      return fail(400, { error: "Microsoft 365 integration not configured" });
+    }
+
+    const configResult = M365ConfigSchema.safeParse(integration.config);
+    if (!configResult.success)
+      return fail(400, { error: "Invalid integration configuration" });
+    const config = configResult.data;
+
+    const clientId = config.clientId ?? MICROSOFT_CLIENT_ID;
+    const rawSecret = config.clientSecret
+      ? (Encryption.decrypt(config.clientSecret, ENCRYPTION_KEY) ??
+        MICROSOFT_CLIENT_SECRET)
+      : MICROSOFT_CLIENT_SECRET;
+
+    const connector = new M365Connector(clientId, rawSecret, externalId);
+
+    let domains: string[] = [];
+    let defaultDomain: string | null = null;
+    try {
+      const allDomains = await connector.domains.listAll();
+      domains = allDomains.filter((d) => d.isVerified).map((d) => d.id);
+      defaultDomain = allDomains.find((d) => d.isDefault)?.id ?? null;
+    } catch {
+      return fail(502, {
+        error: "Failed to fetch domains — tenant may need re-consent",
+      });
+    }
+
+    let userCount = 0;
+    try {
+      const users = await connector.users.listAll("id");
+      userCount = users.length;
+    } catch {
+      /* non-fatal: keep prior userCount */
+    }
+
+    const links = await caller.integrationLinks.list({
+      integrationId: "microsoft-365",
+    });
+    const link = links.find((l) => l.id === linkId);
+    if (!link) return fail(404, { error: "Link not found" });
+    const existingMeta = (link.meta as Record<string, unknown>) ?? {};
+
+    try {
+      await caller.integrationLinks.update({
+        id: linkId,
+        meta: {
+          ...existingMeta,
+          domains,
+          defaultDomain,
+          userCount,
+        },
+      });
+    } catch (err) {
+      return fail(500, { error: String(err) });
+    }
+
+    return { success: true };
+  },
+
   refreshCapabilities: async ({ request, locals }) => {
     const formData = await request.formData();
     const externalId = formData.get("externalId");

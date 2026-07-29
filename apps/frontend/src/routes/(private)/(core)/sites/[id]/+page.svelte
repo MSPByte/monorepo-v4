@@ -161,8 +161,13 @@
     return INTEGRATIONS[id as ProviderId]?.name ?? id;
   }
 
-  function integrationHref(link: { id: string; integrationId: string }) {
-    const params = new URLSearchParams({ linkId: link.id });
+  function integrationHref(link: {
+    id: string;
+    integrationId: string;
+    meta?: Record<string, unknown> | null;
+  }) {
+    const parentLinkId = (link.meta?.parentLinkId as string | undefined) ?? link.id;
+    const params = new URLSearchParams({ linkId: parentLinkId });
     if (site?.id) params.set('siteId', site.id);
     return `/${link.integrationId}?${params.toString()}`;
   }
@@ -637,7 +642,7 @@
                 <div class="flex min-w-0 items-baseline gap-2">
                   <span
                     class={`size-1.5 shrink-0 translate-y-px rounded-full ${
-                      link.status === 'active'
+                      link.status === 'active' || link.status === 'mapping'
                         ? 'bg-primary'
                         : link.status === 'error'
                           ? 'bg-destructive'

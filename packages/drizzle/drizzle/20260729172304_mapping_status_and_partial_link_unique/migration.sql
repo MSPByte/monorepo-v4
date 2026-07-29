@@ -1,0 +1,3 @@
+ALTER TABLE "integration_links" DROP CONSTRAINT "integration_links_integration_id_external_id_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "integration_links_tenant_unique" ON "integration_links" ("integration_id","external_id") WHERE "site_id" is null;--> statement-breakpoint
+CREATE UNIQUE INDEX "integration_links_site_tenant_unique" ON "integration_links" ("integration_id","external_id","site_id") WHERE "site_id" is not null;

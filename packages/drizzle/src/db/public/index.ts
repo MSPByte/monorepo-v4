@@ -6,9 +6,11 @@ import {
   jsonb,
   uuid,
   unique,
+  uniqueIndex,
   index,
   boolean
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { crudPolicy, authenticatedRole } from 'drizzle-orm/neon';
 import { sites } from './sites.js';
 
@@ -107,7 +109,7 @@ export const integrationLinks = pgTable(
     externalId: text('external_id'),
     name: text('name'),
     status: text('status', {
-      enum: ['active', 'error', 'disabled', 'dispositioned']
+      enum: ['active', 'error', 'disabled', 'dispositioned', 'mapping']
     }).default('active'),
     disposition: text('disposition', {
       enum: ['managed', 'third_party', 'not_managed']
@@ -122,7 +124,12 @@ export const integrationLinks = pgTable(
       .defaultNow()
   },
   (t) => [
-    unique().on(t.integrationId, t.externalId),
+    uniqueIndex('integration_links_tenant_unique')
+      .on(t.integrationId, t.externalId)
+      .where(sql`${t.siteId} is null`),
+    uniqueIndex('integration_links_site_tenant_unique')
+      .on(t.integrationId, t.externalId, t.siteId)
+      .where(sql`${t.siteId} is not null`),
     index('integration_links_status_idx').on(t.status),
     crudPolicy({ role: authenticatedRole, read: true, modify: true })
   ]

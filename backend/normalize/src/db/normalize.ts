@@ -203,6 +203,15 @@ async function normalizeM365Identities(
     'm365_identities',
     validRows.map((row) => row.id)
   );
+  await adoptPersonSites(
+    db,
+    validRows.map((row) => ({
+      identityId: row.id,
+      email: row.normalizedEmail,
+      siteId: row.siteId ?? params.siteId
+    })),
+    existingSources
+  );
   const rowsNeedingMatch = validRows.filter((row) => !existingSources.has(row.id));
   const peopleMatches = await findPeopleMatchesBatch(
     db,
@@ -685,6 +694,66 @@ async function findSourcesBatch(
         row
       ])
   );
+}
+
+async function adoptPersonSites(
+  db: Db,
+  rows: Array<{ identityId: string; email: string; siteId: string | undefined }>,
+  existingSources: Map<string, { id: string; canonicalId: string; status: string }>
+): Promise<void> {
+  const candidates = rows
+    .map((row) => {
+      const source = existingSources.get(row.identityId);
+      if (!source || !row.siteId) return null;
+      return { canonicalId: source.canonicalId, email: row.email, siteId: row.siteId };
+    })
+    .filter((row): row is { canonicalId: string; email: string; siteId: string } => row !== null);
+  if (candidates.length === 0) return;
+
+  const canonicalIds = unique(candidates.map((row) => row.canonicalId));
+  const currentPeople = (await db
+    .select({ id: people.id, siteId: people.siteId })
+    .from(people)
+    .where(inArray(people.id, canonicalIds))) as Array<{ id: string; siteId: string | null }>;
+  const personSiteById = new Map(currentPeople.map((row) => [row.id, row.siteId]));
+  const needsMove = candidates.filter((row) => personSiteById.get(row.canonicalId) === null);
+  if (needsMove.length === 0) return;
+
+  const emailsByTargetSite = new Map<string, string[]>();
+  for (const row of needsMove) {
+    const existing = emailsByTargetSite.get(row.siteId) ?? [];
+    if (!existing.includes(row.email)) existing.push(row.email);
+    emailsByTargetSite.set(row.siteId, existing);
+  }
+  const conflictKeys = new Set<string>();
+  for (const [siteId, emails] of emailsByTargetSite) {
+    const conflicts = (await db
+      .select({ primaryEmail: people.primaryEmail })
+      .from(people)
+      .where(
+        and(eq(people.siteId, siteId), inArray(people.primaryEmail, emails))
+      )) as Array<{ primaryEmail: string }>;
+    for (const row of conflicts) {
+      conflictKeys.add(siteEmailKey(siteId, row.primaryEmail));
+    }
+  }
+
+  const idsByTargetSite = new Map<string, string[]>();
+  for (const row of needsMove) {
+    if (conflictKeys.has(siteEmailKey(row.siteId, row.email))) continue;
+    const bucket = idsByTargetSite.get(row.siteId) ?? [];
+    if (!bucket.includes(row.canonicalId)) bucket.push(row.canonicalId);
+    idsByTargetSite.set(row.siteId, bucket);
+  }
+
+  const now = new Date().toISOString();
+  for (const [siteId, ids] of idsByTargetSite) {
+    if (ids.length === 0) continue;
+    await db
+      .update(people)
+      .set({ siteId, updatedAt: now })
+      .where(inArray(people.id, ids));
+  }
 }
 
 async function findPeopleMatchesBatch(

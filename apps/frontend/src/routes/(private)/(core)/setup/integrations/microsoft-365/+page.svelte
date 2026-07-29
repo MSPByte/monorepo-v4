@@ -5,7 +5,6 @@
   import { INTEGRATIONS, CONSENT_VERSION } from '@mspbyte/shared';
   import * as Card from '$lib/components/ui/card/index.js';
   import * as Sheet from '$lib/components/ui/sheet/index.js';
-  import * as Tabs from '$lib/components/ui/tabs/index.js';
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
   import Badge from '$lib/components/ui/badge/badge.svelte';
@@ -73,10 +72,17 @@
   const loading = $derived(integrationQuery.isLoading || linksQuery.isLoading);
 
   const tenantLinks = $derived((linksQuery.data ?? []).filter((l) => !l.siteId));
-  const siteLinks = $derived((linksQuery.data ?? []).filter((l) => !!l.siteId));
   const dbSites = $derived(sitesQuery.data ?? []);
 
   const activeLinks = $derived(tenantLinks.filter((l) => l.status === 'active'));
+
+  const mappedDomainCount = (link: Link): number => {
+    const mappings =
+      ((link.meta as Record<string, unknown>)?.siteMappings as
+        | Array<{ domains?: string[] }>
+        | undefined) ?? [];
+    return mappings.reduce((acc, m) => acc + (m.domains?.length ?? 0), 0);
+  };
 
   const metrics = $derived({
     total: tenantLinks.length,
@@ -85,16 +91,9 @@
       (l) => (l.meta as Record<string, unknown>)?.consentVersion !== CONSENT_VERSION
     ).length,
     totalUnmapped: activeLinks.reduce((acc, al) => {
-      const mapped = siteLinks
-        .filter((sl) => sl.externalId === al.externalId)
-        .reduce(
-          (dacc, sl) =>
-            dacc + (((sl.meta as Record<string, unknown>)?.domains as unknown[]) ?? []).length,
-          0
-        );
-      return (
-        acc + (((al.meta as Record<string, unknown>)?.domains as unknown[]) ?? []).length - mapped
-      );
+      const domainCount =
+        (((al.meta as Record<string, unknown>)?.domains as unknown[]) ?? []).length;
+      return acc + Math.max(domainCount - mappedDomainCount(al), 0);
     }, 0),
     isConfigured: !!(dbIntegration && !dbIntegration.deletedAt),
   });
@@ -115,13 +114,18 @@
   const domainSiteMap = $derived.by(() => {
     const map = new Map<string, string>();
     if (!selectedLink) return map;
-    for (const sl of siteLinks) {
-      if (sl.externalId !== selectedLink.externalId) continue;
-      const slDomains = ((sl.meta as Record<string, unknown>)?.domains as string[]) ?? [];
-      const tlDomains = ((selectedLink.meta as Record<string, unknown>)?.domains as string[]) ?? [];
-      for (const domain of slDomains) {
-        if (!tlDomains.includes(domain)) continue;
-        if (sl.siteId) map.set(domain, sl.siteId);
+    const tlDomains = new Set(
+      ((selectedLink.meta as Record<string, unknown>)?.domains as string[]) ?? []
+    );
+    const mappings =
+      ((selectedLink.meta as Record<string, unknown>)?.siteMappings as
+        | Array<{ siteId: string; domains: string[] }>
+        | undefined) ?? [];
+    for (const mapping of mappings) {
+      if (!mapping.siteId) continue;
+      for (const domain of mapping.domains ?? []) {
+        if (!tlDomains.has(domain)) continue;
+        map.set(domain, mapping.siteId);
       }
     }
     return map;
@@ -145,17 +149,9 @@
         return (link.meta as Record<string, unknown> | null)?.source === 'manual';
       case 'Has Unmapped': {
         if (link.status !== 'active') return false;
-        const domainCount = siteLinks
-          .filter((sl) => sl.externalId === link.externalId)
-          .reduce(
-            (acc, sl) =>
-              acc + (((sl.meta as Record<string, unknown>)?.domains as unknown[]) ?? []).length,
-            0
-          );
-        return (
-          domainCount <
-          (((link.meta as Record<string, unknown>)?.domains as unknown[]) ?? []).length
-        );
+        const domainCount =
+          (((link.meta as Record<string, unknown>)?.domains as unknown[]) ?? []).length;
+        return mappedDomainCount(link) < domainCount;
       }
       case 'Active':
         return link.status === 'active';
@@ -376,9 +372,7 @@
           {metrics.isConfigured ? 'Configured' : 'Not configured'}
         </Badge>
       </div>
-      <p class="text-xs text-muted-foreground">
-        Manage Microsoft 365 tenant connections.
-      </p>
+      <p class="text-xs text-muted-foreground">Manage Microsoft 365 tenant connections.</p>
     </div>
     <div class="flex gap-2">
       {#if authStore.isAllowed('Integrations.Write')}
@@ -435,189 +429,176 @@
   </div>
 
   {#if metrics.isConfigured}
-    <Tabs.Root value="connections" class="flex flex-1 flex-col gap-3 overflow-hidden">
-      <Tabs.List class="w-fit shrink-0">
-        <Tabs.Trigger value="connections">Connections</Tabs.Trigger>
-      </Tabs.List>
-
-      <Tabs.Content value="connections" class="mt-0 flex flex-1 flex-col gap-4 overflow-hidden">
-        <!-- Metrics strip -->
-        <div class="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-          <Card.Root class="p-4">
-            <div class="flex flex-col gap-1">
-              <span class="text-xs text-muted-foreground">Total Tenants</span>
-              <span class="text-2xl font-bold">{loading ? '—' : metrics.total}</span>
-            </div>
-          </Card.Root>
-          <Card.Root class="p-4">
-            <div class="flex flex-col gap-1">
-              <span class="text-xs text-muted-foreground">Active</span>
-              <span class="text-2xl font-bold text-primary">{loading ? '—' : metrics.active}</span>
-            </div>
-          </Card.Root>
-          <Card.Root class="p-4">
-            <div class="flex flex-col gap-1">
-              <span class="text-xs text-muted-foreground">Needs Action</span>
-              <span class="text-2xl font-bold text-warning"
-                >{loading ? '—' : metrics.withIssues}</span
-              >
-            </div>
-          </Card.Root>
-          <Card.Root class="p-4">
-            <div class="flex flex-col gap-1">
-              <span class="text-xs text-muted-foreground">Unmapped</span>
-              <span class="text-2xl font-bold text-destructive"
-                >{loading ? '—' : metrics.totalUnmapped}</span
-              >
-            </div>
-          </Card.Root>
-          <Card.Root class="p-4">
-            <div class="flex flex-col gap-1">
-              <span class="text-xs text-muted-foreground">Config Health</span>
-              {#if loading}
-                <span class="text-2xl font-bold">—</span>
-              {:else if metrics.isConfigured}
-                <span class="flex items-center gap-1 text-sm font-medium text-primary">
-                  <CircleCheck class="size-4" /> Healthy
-                </span>
-              {:else}
-                <span class="flex items-center gap-1 text-sm font-medium text-destructive">
-                  <CircleX class="size-4" /> Not set up
-                </span>
-              {/if}
-            </div>
-          </Card.Root>
+    <div class="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+      <Card.Root class="p-4">
+        <div class="flex flex-col gap-1">
+          <span class="text-xs text-muted-foreground">Total Tenants</span>
+          <span class="text-2xl font-bold">{loading ? '—' : metrics.total}</span>
         </div>
-
-        {#if !loading && !metrics.isConfigured}
-          <div
-            class="flex shrink-0 items-center gap-3 rounded border border-warning/30 bg-warning/10 px-4 py-3 text-warning"
+      </Card.Root>
+      <Card.Root class="p-4">
+        <div class="flex flex-col gap-1">
+          <span class="text-xs text-muted-foreground">Active</span>
+          <span class="text-2xl font-bold text-primary">{loading ? '—' : metrics.active}</span>
+        </div>
+      </Card.Root>
+      <Card.Root class="p-4">
+        <div class="flex flex-col gap-1">
+          <span class="text-xs text-muted-foreground">Needs Action</span>
+          <span class="text-2xl font-bold text-warning">{loading ? '—' : metrics.withIssues}</span>
+        </div>
+      </Card.Root>
+      <Card.Root class="p-4">
+        <div class="flex flex-col gap-1">
+          <span class="text-xs text-muted-foreground">Unmapped</span>
+          <span class="text-2xl font-bold text-destructive"
+            >{loading ? '—' : metrics.totalUnmapped}</span
           >
-            <TriangleAlert class="size-4 shrink-0" />
-            <span class="text-sm">
-              Microsoft 365 is not configured yet. Click <strong>Configure</strong> to set up your credentials.
+        </div>
+      </Card.Root>
+      <Card.Root class="p-4">
+        <div class="flex flex-col gap-1">
+          <span class="text-xs text-muted-foreground">Config Health</span>
+          {#if loading}
+            <span class="text-2xl font-bold">—</span>
+          {:else if metrics.isConfigured}
+            <span class="flex items-center gap-1 text-sm font-medium text-primary">
+              <CircleCheck class="size-4" /> Healthy
             </span>
-          </div>
-        {/if}
-
-        <!-- Search + filters -->
-        <div class="flex w-full shrink-0 items-center gap-2">
-          <div class="w-80">
-            <Input bind:value={connectionSearch} placeholder="Search tenants..." class="h-8" />
-          </div>
-          <div class="flex shrink-0 flex-wrap gap-1.5">
-            {#each ['All', 'Active', 'Manual', 'Needs Consent', 'Has Unmapped', 'Missing Capabilities'] as filter}
-              <button
-                class="rounded-full border px-2.5 py-1 text-xs font-medium transition-colors
-                {activeFilter === filter
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'border-border bg-background text-muted-foreground hover:border-foreground/30'}"
-                onclick={() => (activeFilter = filter as typeof activeFilter)}
-              >
-                {filter}
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        <!-- Tenant list + selected panel -->
-        <FadeIn class="flex min-h-0 flex-1 gap-4 overflow-hidden">
-          <div
-            class="flex flex-col gap-4 overflow-hidden transition-all duration-200 {selectedLinkId
-              ? 'w-96'
-              : 'flex-1'}"
-          >
-            <div class="flex-1 overflow-y-auto pr-1">
-              {#if loading}
-                <Loader />
-              {:else if filteredLinks.length === 0}
-                <div
-                  class="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground"
-                >
-                  <Globe class="size-8 opacity-40" />
-                  <span class="text-sm">No tenants found</span>
-                </div>
-              {:else}
-                <div
-                  class="grid gap-3 {selectedLinkId
-                    ? 'grid-cols-1'
-                    : 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-4'}"
-                >
-                  {#each filteredLinks as link (link.id)}
-                    {@const missing = missingCapsCount(link)}
-                    <button
-                      class="w-full text-left"
-                      onclick={() => (selectedLinkId = selectedLinkId === link.id ? null : link.id)}
-                    >
-                      <Card.Root
-                        class="h-24 cursor-pointer p-3 transition-colors hover:border-primary/50 {selectedLinkId ===
-                        link.id
-                          ? 'border-primary bg-primary/10'
-                          : 'bg-card/70'}"
-                      >
-                        <div class="flex h-full flex-col justify-between gap-2">
-                          <div class="flex items-start justify-between gap-2">
-                            <span class="min-w-0 truncate text-sm leading-tight font-medium">
-                              {link.name ?? link.externalId}
-                            </span>
-                            <div class="flex shrink-0 items-center gap-1">
-                              <Badge
-                                class="shrink-0 text-xs {link.status === 'active'
-                                  ? 'border-success/30 bg-success/15 text-success'
-                                  : 'border-muted-foreground/30 bg-muted-foreground/15 text-muted-foreground'}"
-                                variant="outline"
-                              >
-                                {link.status?.toUpperCase() ?? 'UNKNOWN'}
-                              </Badge>
-                              {#if (link.meta as Record<string, unknown> | null)?.source === 'manual'}
-                                <Badge
-                                  class="shrink-0 border-blue-500/20 bg-blue-500/10 text-xs text-blue-700"
-                                  variant="outline"
-                                >
-                                  MANUAL
-                                </Badge>
-                              {/if}
-                            </div>
-                          </div>
-                          <div class="flex items-center gap-3 text-xs text-muted-foreground">
-                            <span class="flex items-center gap-1">
-                              <Globe class="size-3" />
-                              {(
-                                ((link.meta as Record<string, unknown>)?.domains as unknown[]) ?? []
-                              ).length} domains
-                            </span>
-                            <span class="flex items-center gap-1">
-                              <Users class="size-3" />
-                              {(link.meta as Record<string, unknown>)?.userCount ?? 0} users
-                            </span>
-                            {#if missing > 0}
-                              <span class="flex items-center gap-1 text-warning">
-                                <TriangleAlert class="size-3 text-amber-500" />
-                                {missing} missing
-                              </span>
-                            {/if}
-                          </div>
-                        </div>
-                      </Card.Root>
-                    </button>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          </div>
-
-          {#if selectedLink}
-            <SelectedLink
-              {selectedLink}
-              {domainSiteMap}
-              {dbSites}
-              {siteLinks}
-              deselect={() => (selectedLinkId = null)}
-            />
+          {:else}
+            <span class="flex items-center gap-1 text-sm font-medium text-destructive">
+              <CircleX class="size-4" /> Not set up
+            </span>
           {/if}
-        </FadeIn>
-      </Tabs.Content>
-    </Tabs.Root>
+        </div>
+      </Card.Root>
+    </div>
+
+    {#if !loading && !metrics.isConfigured}
+      <div
+        class="flex shrink-0 items-center gap-3 rounded border border-warning/30 bg-warning/10 px-4 py-3 text-warning"
+      >
+        <TriangleAlert class="size-4 shrink-0" />
+        <span class="text-sm">
+          Microsoft 365 is not configured yet. Click <strong>Configure</strong> to set up your credentials.
+        </span>
+      </div>
+    {/if}
+
+    <!-- Search + filters -->
+    <div class="flex w-full shrink-0 items-center gap-2">
+      <div class="w-80">
+        <Input bind:value={connectionSearch} placeholder="Search tenants..." class="h-8" />
+      </div>
+      <div class="flex shrink-0 flex-wrap gap-1.5">
+        {#each ['All', 'Active', 'Manual', 'Needs Consent', 'Has Unmapped', 'Missing Capabilities'] as filter}
+          <button
+            class="rounded-full border px-2.5 py-1 text-xs font-medium transition-colors
+                {activeFilter === filter
+              ? 'border-primary bg-primary text-primary-foreground'
+              : 'border-border bg-background text-muted-foreground hover:border-foreground/30'}"
+            onclick={() => (activeFilter = filter as typeof activeFilter)}
+          >
+            {filter}
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <!-- Tenant list + selected panel -->
+    <FadeIn class="flex min-h-0 flex-1 gap-4 overflow-hidden">
+      <div
+        class="flex flex-col gap-4 overflow-hidden transition-all duration-200 {selectedLinkId
+          ? 'w-96'
+          : 'flex-1'}"
+      >
+        <div class="flex-1 overflow-y-auto pr-1">
+          {#if loading}
+            <Loader />
+          {:else if filteredLinks.length === 0}
+            <div
+              class="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground"
+            >
+              <Globe class="size-8 opacity-40" />
+              <span class="text-sm">No tenants found</span>
+            </div>
+          {:else}
+            <div
+              class="grid gap-3 {selectedLinkId
+                ? 'grid-cols-1'
+                : 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-4'}"
+            >
+              {#each filteredLinks as link (link.id)}
+                {@const missing = missingCapsCount(link)}
+                <button
+                  class="w-full text-left"
+                  onclick={() => (selectedLinkId = selectedLinkId === link.id ? null : link.id)}
+                >
+                  <Card.Root
+                    class="h-24 cursor-pointer p-3 transition-colors hover:border-primary/50 {selectedLinkId ===
+                    link.id
+                      ? 'border-primary bg-primary/10'
+                      : 'bg-card/70'}"
+                  >
+                    <div class="flex h-full flex-col justify-between gap-2">
+                      <div class="flex items-start justify-between gap-2">
+                        <span class="min-w-0 truncate text-sm leading-tight font-medium">
+                          {link.name ?? link.externalId}
+                        </span>
+                        <div class="flex shrink-0 items-center gap-1">
+                          <Badge
+                            class="shrink-0 text-xs {link.status === 'active'
+                              ? 'border-success/30 bg-success/15 text-success'
+                              : 'border-muted-foreground/30 bg-muted-foreground/15 text-muted-foreground'}"
+                            variant="outline"
+                          >
+                            {link.status?.toUpperCase() ?? 'UNKNOWN'}
+                          </Badge>
+                          {#if (link.meta as Record<string, unknown> | null)?.source === 'manual'}
+                            <Badge
+                              class="shrink-0 border-blue-500/20 bg-blue-500/10 text-xs text-blue-700"
+                              variant="outline"
+                            >
+                              MANUAL
+                            </Badge>
+                          {/if}
+                        </div>
+                      </div>
+                      <div class="flex items-center gap-3 text-xs text-muted-foreground">
+                        <span class="flex items-center gap-1">
+                          <Globe class="size-3" />
+                          {(((link.meta as Record<string, unknown>)?.domains as unknown[]) ?? [])
+                            .length} domains
+                        </span>
+                        <span class="flex items-center gap-1">
+                          <Users class="size-3" />
+                          {(link.meta as Record<string, unknown>)?.userCount ?? 0} users
+                        </span>
+                        {#if missing > 0}
+                          <span class="flex items-center gap-1 text-warning">
+                            <TriangleAlert class="size-3 text-amber-500" />
+                            {missing} missing
+                          </span>
+                        {/if}
+                      </div>
+                    </div>
+                  </Card.Root>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
+
+      {#if selectedLink}
+        <SelectedLink
+          {selectedLink}
+          {domainSiteMap}
+          {dbSites}
+          deselect={() => (selectedLinkId = null)}
+        />
+      {/if}
+    </FadeIn>
   {:else if loading}
     <Loader />
   {:else}

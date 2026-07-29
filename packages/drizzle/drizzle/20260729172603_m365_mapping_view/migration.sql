@@ -1,20 +1,5 @@
-import { sql } from 'drizzle-orm';
-import { integer, pgView, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-
-export const sitesWithCounts = pgView('sites_with_counts', {
-  id: uuid('id').notNull(),
-  name: text('name').notNull(),
-  description: text('description'),
-  assetCount: integer('asset_count').notNull(),
-  peopleCount: integer('people_count').notNull(),
-  openFindingCount: integer('open_finding_count').notNull(),
-  frameworkScore: integer('framework_score').notNull(),
-  policyHealth: integer('policy_health').notNull(),
-  sources: text('sources').array().notNull(),
-  sourceList: text('source_list').notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull()
-}).with({ securityInvoker: true }).as(sql`
+DROP VIEW "sites_with_counts";--> statement-breakpoint
+CREATE VIEW "sites_with_counts" WITH (security_invoker = true) AS (
     select
       s.id,
       s.name,
@@ -51,6 +36,4 @@ export const sitesWithCounts = pgView('sites_with_counts', {
       where il.site_id = s.id
         and il.status in ('active', 'mapping')
     ) src on true
-  `);
-
-export type SiteWithCounts = typeof sitesWithCounts.$inferSelect;
+  );

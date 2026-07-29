@@ -73,6 +73,7 @@ export type ProfileIntegration = {
   name: string | null;
   status: string | null;
   disposition: string | null;
+  meta: Record<string, unknown> | null;
 };
 
 export type NetworkAsset = {

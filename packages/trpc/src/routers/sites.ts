@@ -246,7 +246,12 @@ export const sitesRouter = t.router({
         ctx.db
           .select()
           .from(integrationLinks)
-          .where(eq(integrationLinks.siteId, siteId))
+          .where(
+            and(
+              eq(integrationLinks.siteId, siteId),
+              inArray(integrationLinks.status, ['active', 'mapping'])
+            )
+          )
           .catch(() => []),
         ctx.db
           .select({
@@ -377,7 +382,9 @@ export const sitesRouter = t.router({
         totalAssets += c;
       }
 
-      const connectedIntegrations = linkRows.filter((l) => l.status === 'active').length;
+      const connectedIntegrations = linkRows.filter(
+        (l) => l.status === 'active' || l.status === 'mapping'
+      ).length;
 
       const metricValues: Record<MetricKey, number> = {
         totalAssets,
@@ -477,7 +484,8 @@ export const sitesRouter = t.router({
         integrationId: link.integrationId,
         name: link.name,
         status: link.status,
-        disposition: link.disposition
+        disposition: link.disposition,
+        meta: link.meta as Record<string, unknown> | null
       }));
 
       const networkAssets = networkAssetRows.map((row) => ({

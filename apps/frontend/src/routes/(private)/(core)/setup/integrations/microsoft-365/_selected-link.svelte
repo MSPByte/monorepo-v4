@@ -27,6 +27,7 @@
 
   type Link = inferRouterOutputs<AppRouter>['integrationLinks']['list'][number];
   type Site = inferRouterOutputs<AppRouter>['sites']['list'][number];
+  type SiteMapping = { siteId: string; domains: string[] };
 
   // MS_CAPABILITIES is not exported from v2 shared — define locally
   const MS_CAPABILITIES: Record<string, { label: string; description: string }> = {
@@ -48,28 +49,18 @@
     selectedLink,
     domainSiteMap,
     dbSites,
-    siteLinks,
     deselect,
     onSaveMappings,
   }: {
     selectedLink: Link;
     domainSiteMap: Map<string, string>;
     dbSites: Site[];
-    siteLinks: Link[];
     deselect?: () => void;
     onSaveMappings?: () => void;
   } = $props();
 
   const trpc = getContext<ReturnType<typeof createTrpcClient>>('trpc');
   const queryClient = useQueryClient();
-
-  const createLinkMut = createMutation(() => ({
-    mutationFn: (input: Parameters<typeof trpc.integrationLinks.create.mutate>[0]) =>
-      trpc.integrationLinks.create.mutate(input),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['integrationLinks.list'] });
-    },
-  }));
 
   const updateLinkMut = createMutation(() => ({
     mutationFn: (input: Parameters<typeof trpc.integrationLinks.update.mutate>[0]) =>
@@ -79,8 +70,9 @@
     },
   }));
 
-  const deleteLinksMut = createMutation(() => ({
-    mutationFn: (ids: string[]) => trpc.integrationLinks.delete.mutate({ ids }),
+  const syncMappingsMut = createMutation(() => ({
+    mutationFn: (input: Parameters<typeof trpc.integrationLinks.syncSiteMappings.mutate>[0]) =>
+      trpc.integrationLinks.syncSiteMappings.mutate(input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['integrationLinks.list'] });
     },
@@ -95,6 +87,7 @@
   let editingName = $state(false);
   let nameValue = $state('');
   let refreshing = $state(false);
+  let refreshingInfo = $state(false);
 
   $effect(() => {
     localMappings = { ...mappings };
@@ -112,47 +105,22 @@
     saving = true;
     try {
       const siteDomainMap = new Map<string, string[]>();
-      for (const [k, v] of Object.entries(localMappings)) {
-        if (!v) continue;
-        if (siteDomainMap.has(v)) {
-          siteDomainMap.get(v)!.push(k);
-        } else {
-          siteDomainMap.set(v, [k]);
-        }
+      for (const [domain, siteId] of Object.entries(localMappings)) {
+        if (!siteId) continue;
+        const existing = siteDomainMap.get(siteId);
+        if (existing) existing.push(domain);
+        else siteDomainMap.set(siteId, [domain]);
       }
 
-      // Upsert site-scoped links
-      for (const [siteId, domains] of siteDomainMap) {
-        const existingLink = siteLinks.find(
-          (l) => l.externalId === selectedLink.externalId && l.siteId === siteId
-        );
+      const mappings: SiteMapping[] = [...siteDomainMap.entries()].map(([siteId, domains]) => ({
+        siteId,
+        domains,
+      }));
 
-        if (existingLink) {
-          await updateLinkMut.mutateAsync({
-            id: existingLink.id,
-            meta: { ...((existingLink.meta as Record<string, unknown>) ?? {}), domains },
-          });
-        } else {
-          await createLinkMut.mutateAsync({
-            integrationId: selectedLink.integrationId,
-            externalId: selectedLink.externalId ?? undefined,
-            siteId,
-            meta: { domains },
-          });
-        }
-      }
-
-      // Delete site-scoped links for sites no longer in the mapping
-      const keepSiteIds = new Set(siteDomainMap.keys());
-      const toDelete = siteLinks
-        .filter(
-          (l) => l.externalId === selectedLink.externalId && l.siteId && !keepSiteIds.has(l.siteId)
-        )
-        .map((l) => l.id);
-
-      if (toDelete.length > 0) {
-        await deleteLinksMut.mutateAsync(toDelete);
-      }
+      await syncMappingsMut.mutateAsync({
+        parentLinkId: selectedLink.id,
+        mappings,
+      });
 
       onSaveMappings?.();
       toast.info('Successfully saved mappings!');
@@ -297,6 +265,40 @@
           >
             Save Mappings
           </Button>
+          <form
+            method="POST"
+            action="?/refreshLinkInfo"
+            use:enhance={() => {
+              refreshingInfo = true;
+              return async ({ result }) => {
+                refreshingInfo = false;
+                if (result.type === 'failure') {
+                  toast.error(
+                    ((result.data as Record<string, unknown>)?.error as string) ??
+                      'Failed to refresh link info'
+                  );
+                } else {
+                  toast.info('Refreshed tenant info!');
+                }
+              };
+            }}
+          >
+            <input name="linkId" value={selectedLink.id} hidden />
+            <input name="externalId" value={selectedLink.externalId} hidden />
+            <Button
+              size="sm"
+              variant="outline"
+              type="submit"
+              disabled={!authStore.isAllowed('Integrations.Write') || refreshingInfo}
+            >
+              {#if refreshingInfo}
+                <LoaderCircle class="size-4 animate-spin" />
+              {:else}
+                <Activity class="size-4 mr-1.5" />
+              {/if}
+              Refresh Info
+            </Button>
+          </form>
           <form method="POST" action="?/gdapConsent" use:enhance>
             <input name="gdapTenantId" value={selectedLink.externalId} hidden />
             <Button size="sm" variant="outline" type="submit">Re-consent</Button>
