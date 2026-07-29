@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getContext } from 'svelte';
+  import { getContext, onDestroy } from 'svelte';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
   import { scopeStore } from '$lib/stores/scope.store.svelte';
@@ -15,11 +15,16 @@
     textColumn,
   } from '$lib/components/data-table/column-defs';
   import * as Sheet from '$lib/components/ui/sheet/index.js';
+  import * as Dialog from '$lib/components/ui/dialog/index.js';
+  import Button from '$lib/components/ui/button/button.svelte';
+  import SingleSelect from '$lib/components/single-select.svelte';
+  import Progress from '$lib/components/ui/progress/progress.svelte';
   import Loader from '$lib/components/transition/loader.svelte';
   import Badge from '$lib/components/ui/badge/badge.svelte';
   import { formatStringProper } from '$lib/utils/format';
   import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
   import Trash2Icon from '@lucide/svelte/icons/trash-2';
+  import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
 
   import type { sophosEndpointsWithSite } from '@mspbyte/drizzle';
 
@@ -140,6 +145,127 @@
 
   const canWriteAssets = $derived(authStore.isAllowed('Assets.Write'));
   const canDeleteAssets = $derived(authStore.isAllowed('Assets.Delete'));
+
+  type MoveDialogState = {
+    rows: EndpointRow[];
+    sourceLinkId: string;
+    sourceSiteId: string | null;
+    sourceSiteName: string | null;
+    fetchData: () => Promise<void>;
+    targetSiteId?: string;
+    starting: boolean;
+    jobId?: string;
+    status?: {
+      status: string;
+      requested: number;
+      succeeded: number;
+      failed: number;
+      pending?: number;
+      error?: string | null;
+    };
+    pollError?: string;
+  };
+
+  let moveDialog = $state<MoveDialogState | null>(null);
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const sophosLinksQuery = createQuery(() => ({
+    queryKey: ['integrationLinks.list', 'sophos-partner', 'all'],
+    queryFn: () =>
+      trpc.integrationLinks.list.query({
+        integrationId: 'sophos-partner',
+        status: 'active',
+      }),
+  }));
+
+  const sitesListQuery = createQuery(() => ({
+    queryKey: ['sites.list'],
+    queryFn: () => trpc.sites.list.query(),
+  }));
+
+  const moveTargetOptions = $derived.by(() => {
+    if (!moveDialog) return [] as { value: string; label: string }[];
+    const linkedSiteIds = new Set(
+      (sophosLinksQuery.data ?? [])
+        .filter((l) => !!l.siteId && l.status !== 'disabled')
+        .map((l) => l.siteId as string)
+    );
+    return (sitesListQuery.data ?? [])
+      .filter((s) => linkedSiteIds.has(s.id) && s.id !== moveDialog!.sourceSiteId)
+      .map((s) => ({ value: s.id, label: s.name }));
+  });
+
+  function stopPolling() {
+    if (pollTimer) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  onDestroy(stopPolling);
+
+  async function pollMigration(jobId: string) {
+    if (!moveDialog || moveDialog.jobId !== jobId) return;
+    try {
+      const status = await trpc.vendor.sophosEndpointMigrationStatus.query({ id: jobId });
+      if (!moveDialog || moveDialog.jobId !== jobId) return;
+      moveDialog.status = status;
+      moveDialog.pollError = undefined;
+      if (
+        status.status === 'completed' ||
+        status.status === 'failed' ||
+        status.status === 'partial'
+      ) {
+        stopPolling();
+        await queryClient.invalidateQueries({ queryKey: ['vendor.tableData'] });
+        await moveDialog.fetchData();
+        if (status.status === 'completed') {
+          toast.success(`Moved ${status.succeeded} endpoint${status.succeeded === 1 ? '' : 's'}`);
+        } else if (status.status === 'partial') {
+          toast.warning(`Moved ${status.succeeded}, failed ${status.failed}`);
+        } else {
+          toast.error(
+            `Migration failed for all ${status.failed} endpoint${status.failed === 1 ? '' : 's'}`
+          );
+        }
+        return;
+      }
+    } catch (err) {
+      if (!moveDialog || moveDialog.jobId !== jobId) return;
+      moveDialog.pollError = err instanceof Error ? err.message : String(err);
+    }
+    pollTimer = setTimeout(() => pollMigration(jobId), 3000);
+  }
+
+  async function startMove() {
+    if (!moveDialog || !moveDialog.targetSiteId || moveDialog.starting) return;
+    moveDialog.starting = true;
+    try {
+      const result = await trpc.vendor.startSophosEndpointMigration.mutate({
+        ids: moveDialog.rows.map((r) => String(r['id'])),
+        toSiteId: moveDialog.targetSiteId,
+      });
+      if (!moveDialog) return;
+      moveDialog.jobId = result.id;
+      moveDialog.status = {
+        status: 'running',
+        requested: result.requested,
+        succeeded: 0,
+        failed: 0,
+        pending: result.requested,
+      };
+      pollMigration(result.id);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Failed to start migration: ${msg}`);
+      if (moveDialog) moveDialog.starting = false;
+    }
+  }
+
+  function closeMoveDialog() {
+    stopPolling();
+    moveDialog = null;
+  }
   const selectedEndpointId = $derived(
     drawerEndpoint?.['id'] ? String(drawerEndpoint['id']) : undefined
   );
@@ -154,6 +280,32 @@
   const rowActions: RowAction<EndpointRow>[] = $derived([
     ...(canWriteAssets
       ? [
+          {
+            label: 'Move to Site',
+            icon: ArrowRightLeftIcon,
+            variant: 'outline',
+            disabled: (rows: EndpointRow[]) => {
+              if (rows.length === 0) return true;
+              const linkIds = new Set(rows.map((r) => String(r['linkId'] ?? '')));
+              return linkIds.size !== 1;
+            },
+            onclick: async (rows, fetchData) => {
+              if (rows.length === 0) return;
+              const linkIds = new Set(rows.map((r) => String(r['linkId'] ?? '')));
+              if (linkIds.size !== 1) {
+                toast.error('All selected endpoints must belong to the same source site');
+                return;
+              }
+              moveDialog = {
+                rows,
+                sourceLinkId: String(rows[0]!['linkId'] ?? ''),
+                sourceSiteId: (rows[0]!['siteId'] as string | null) ?? null,
+                sourceSiteName: (rows[0]!['siteName'] as string | null) ?? null,
+                fetchData,
+                starting: false,
+              };
+            },
+          } satisfies RowAction<EndpointRow>,
           {
             label: 'Enable Tamper',
             icon: ShieldCheckIcon,
@@ -386,3 +538,123 @@
     {/if}
   </Sheet.Content>
 </Sheet.Root>
+
+<!-- Move endpoints to site dialog -->
+<Dialog.Root
+  open={!!moveDialog}
+  onOpenChange={(open) => {
+    if (!open) closeMoveDialog();
+  }}
+>
+  <Dialog.Content class="sm:max-w-lg">
+    {#if moveDialog}
+      {@const state = moveDialog.status}
+      {@const jobActive = !!moveDialog.jobId && !!state && state.status === 'running'}
+      {@const jobDone =
+        !!state &&
+        (state.status === 'completed' || state.status === 'failed' || state.status === 'partial')}
+      <Dialog.Header>
+        <Dialog.Title>Move endpoints to another site</Dialog.Title>
+        <Dialog.Description>
+          Migrates {moveDialog.rows.length} endpoint{moveDialog.rows.length === 1 ? '' : 's'} from
+          <span class="font-medium">{moveDialog.sourceSiteName ?? 'current site'}</span> to the target
+          Sophos tenant.
+        </Dialog.Description>
+      </Dialog.Header>
+
+      <div class="flex flex-col gap-4 py-2 px-4 text-sm">
+        {#if !moveDialog.jobId}
+          <div class="flex flex-col gap-1.5">
+            <label class="text-xs font-medium text-muted-foreground" for="move-target-site">
+              Target site
+            </label>
+            {#if sophosLinksQuery.isLoading || sitesListQuery.isLoading}
+              <Loader />
+            {:else}
+              <SingleSelect
+                options={moveTargetOptions}
+                bind:selected={moveDialog.targetSiteId}
+                placeholder="Select target site..."
+                searchPlaceholder="Search sites..."
+                disabled={moveDialog.starting}
+              />
+              {#if moveTargetOptions.length === 0}
+                <div class="text-xs text-muted-foreground">
+                  No other sites have an active Sophos Partner integration.
+                </div>
+              {/if}
+            {/if}
+          </div>
+          <div class="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+            The Sophos migration runs asynchronously. You can close this dialog and return later —
+            the move will continue on Sophos, and endpoint records will be repointed once complete.
+          </div>
+        {:else if state}
+          {@const total = state.requested || 1}
+          {@const done = state.succeeded + state.failed}
+          {@const pct = Math.round((done / total) * 100)}
+          <div class="flex flex-col gap-3">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-medium">
+                {#if state.status === 'running'}
+                  Running...
+                {:else if state.status === 'completed'}
+                  Completed
+                {:else if state.status === 'partial'}
+                  Partial
+                {:else}
+                  Failed
+                {/if}
+              </span>
+              <span class="text-muted-foreground">{done} / {total}</span>
+            </div>
+            <Progress value={pct} />
+            <div class="grid grid-cols-3 gap-2 text-xs">
+              <div class="rounded-md border p-2">
+                <div class="text-muted-foreground">Succeeded</div>
+                <div class="font-medium text-success">{state.succeeded}</div>
+              </div>
+              <div class="rounded-md border p-2">
+                <div class="text-muted-foreground">Failed</div>
+                <div class="font-medium text-destructive">{state.failed}</div>
+              </div>
+              <div class="rounded-md border p-2">
+                <div class="text-muted-foreground">Pending</div>
+                <div class="font-medium">
+                  {state.pending ?? Math.max(0, state.requested - state.succeeded - state.failed)}
+                </div>
+              </div>
+            </div>
+            {#if moveDialog.pollError}
+              <div
+                class="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive"
+              >
+                Poll error: {moveDialog.pollError}
+              </div>
+            {/if}
+          </div>
+        {/if}
+      </div>
+
+      <Dialog.Footer>
+        {#if !moveDialog.jobId}
+          <Button variant="outline" onclick={closeMoveDialog} disabled={moveDialog.starting}>
+            Cancel
+          </Button>
+          <Button
+            onclick={startMove}
+            disabled={!moveDialog.targetSiteId ||
+              moveDialog.starting ||
+              moveTargetOptions.length === 0}
+          >
+            {moveDialog.starting ? 'Starting...' : 'Move'}
+          </Button>
+        {:else if jobActive}
+          <Button variant="outline" onclick={closeMoveDialog}>Close (keeps running)</Button>
+        {:else if jobDone}
+          <Button onclick={closeMoveDialog}>Done</Button>
+        {/if}
+      </Dialog.Footer>
+    {/if}
+  </Dialog.Content>
+</Dialog.Root>

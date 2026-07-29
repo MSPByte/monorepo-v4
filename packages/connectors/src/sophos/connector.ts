@@ -1,5 +1,11 @@
 import { SophosHttpClient } from './http-client.js';
-import type { SophosTamperProtectionGet } from './types.js';
+import type {
+  SophosMigrationCreate,
+  SophosMigrationEndpoint,
+  SophosMigrationEndpointsResponse,
+  SophosMigrationTrigger,
+  SophosTamperProtectionGet
+} from './types.js';
 
 export interface SophosFirewallUpgradeResult {
   id?: string;
@@ -32,6 +38,26 @@ export class SophosConnector {
         endpointId: string,
         enabled: boolean
       ) => Promise<void>;
+    };
+    migrations: {
+      create: (
+        apiHost: string,
+        fromTenantId: string,
+        toTenantId: string,
+        endpointIds: string[]
+      ) => Promise<SophosMigrationCreate>;
+      trigger: (
+        apiHost: string,
+        fromTenantId: string,
+        migrationId: string,
+        token: string,
+        endpointIds: string[]
+      ) => Promise<SophosMigrationTrigger>;
+      getEndpoints: (
+        apiHost: string,
+        tenantId: string,
+        migrationId: string
+      ) => Promise<SophosMigrationEndpoint[]>;
     };
   };
 
@@ -77,6 +103,41 @@ export class SophosConnector {
             { enabled: enabled },
             tenantId
           )
+      },
+      migrations: {
+        create: (apiHost, fromTenantId, toTenantId, endpointIds) =>
+          this.client.post<SophosMigrationCreate>(
+            `${apiHost}/endpoint/v1/migrations`,
+            {
+              fromTenant: fromTenantId,
+              endpoints: endpointIds
+            },
+            toTenantId
+          ),
+        trigger: (apiHost, fromTenantId, migrationId, token, endpointIds) =>
+          this.client.put<SophosMigrationTrigger>(
+            `${apiHost}/endpoint/v1/migrations/${migrationId}`,
+            {
+              token,
+              endpoints: endpointIds
+            },
+            fromTenantId
+          ),
+        getEndpoints: async (apiHost, tenantId, migrationId) => {
+          const items: SophosMigrationEndpoint[] = [];
+          let page = 1;
+          while (true) {
+            const result = await this.client.get<SophosMigrationEndpointsResponse>(
+              `${apiHost}/endpoint/v1/migrations/${migrationId}/endpoints?page=${page}&pageTotal=true&pageSize=200`,
+              tenantId
+            );
+            items.push(...(result.items ?? []));
+            const total = result.pages?.total ?? 1;
+            if (page >= total) break;
+            page++;
+          }
+          return items;
+        }
       }
     };
 

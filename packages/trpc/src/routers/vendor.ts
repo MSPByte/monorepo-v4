@@ -1,7 +1,8 @@
 // TODO: Findings Implementation
 import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { eq, and, count, sql, inArray, desc } from 'drizzle-orm';
+import { eq, and, count, sql, inArray, desc, or } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { TRPCError } from '@trpc/server';
 import { M365Connector } from '@mspbyte/connectors';
 import {
@@ -11,6 +12,7 @@ import {
   integrations,
   integrationLinks,
   sites,
+  users,
   m365Identities,
   m365Groups,
   m365Policies,
@@ -30,6 +32,7 @@ import {
   m365IdentityRoles,
   m365IdentityGroups,
   sophosEndpoints,
+  sophosEndpointMigrations,
   sophosFirewalls,
   sophosLicenses,
   sophosTamperProtection,
@@ -1647,5 +1650,575 @@ export const vendorRouter = t.router({
       serverTier: serverRank ? rankLabel[serverRank - 1] : null,
       endpointTier: endpointRank ? rankLabel[endpointRank - 1] : null
     }));
-  })
+  }),
+
+  startSophosEndpointMigration: authProcedure
+    .input(
+      z.object({
+        ids: z.array(z.uuid()).min(1).max(1000),
+        toSiteId: z.uuid()
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
+      }
+
+      const uniqueIds = [...new Set(input.ids)];
+
+      const endpointRows = await ctx.db
+        .select({
+          id: sophosEndpoints.id,
+          linkId: sophosEndpoints.linkId,
+          siteId: sophosEndpoints.siteId,
+          externalId: sophosEndpoints.externalId,
+          hostname: sophosEndpoints.hostname,
+          fromTenantId: integrationLinks.externalId,
+          fromLinkMeta: integrationLinks.meta,
+          integrationConfig: integrations.config
+        })
+        .from(sophosEndpoints)
+        .innerJoin(integrationLinks, eq(sophosEndpoints.linkId, integrationLinks.id))
+        .innerJoin(integrations, eq(integrationLinks.integrationId, integrations.id))
+        .where(
+          and(
+            inArray(sophosEndpoints.id, uniqueIds),
+            eq(integrationLinks.integrationId, 'sophos-partner')
+          )
+        );
+
+      if (endpointRows.length === 0) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'No Sophos endpoints found' });
+      }
+      if (endpointRows.length !== uniqueIds.length) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Some selected endpoints are missing or not Sophos-managed'
+        });
+      }
+
+      const fromLinkIds = new Set(endpointRows.map((r) => r.linkId));
+      if (fromLinkIds.size > 1) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'All endpoints must belong to the same source site'
+        });
+      }
+      const source = endpointRows[0]!;
+      if (source.siteId === input.toSiteId) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Target site is the same as the source site'
+        });
+      }
+
+      const scope = ctx.scopeFor('Vendors.Write');
+      if (scope !== 'all') {
+        const scopeSet = new Set(scope);
+        if (!source.siteId || !scopeSet.has(source.siteId) || !scopeSet.has(input.toSiteId)) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Both source and target sites must be within your scope'
+          });
+        }
+      }
+
+      const [targetLink] = await ctx.db
+        .select({
+          id: integrationLinks.id,
+          siteId: integrationLinks.siteId,
+          externalId: integrationLinks.externalId,
+          meta: integrationLinks.meta,
+          status: integrationLinks.status
+        })
+        .from(integrationLinks)
+        .where(
+          and(
+            eq(integrationLinks.integrationId, 'sophos-partner'),
+            eq(integrationLinks.siteId, input.toSiteId)
+          )
+        )
+        .limit(1);
+
+      if (!targetLink || !targetLink.externalId) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Target site has no active Sophos Partner integration'
+        });
+      }
+      if (targetLink.status === 'disabled') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Target Sophos Partner link is disabled'
+        });
+      }
+
+      const toApiHost =
+        targetLink.meta && typeof targetLink.meta === 'object' && !Array.isArray(targetLink.meta)
+          ? (targetLink.meta as Record<string, unknown>).apiHost
+          : undefined;
+
+      const fromApiHost =
+        source.fromLinkMeta &&
+        typeof source.fromLinkMeta === 'object' &&
+        !Array.isArray(source.fromLinkMeta)
+          ? (source.fromLinkMeta as Record<string, unknown>).apiHost
+          : undefined;
+
+      const config = SophosConfigSchema.safeParse(source.integrationConfig);
+      if (!config.success || !config.data.clientId || !config.data.clientSecret) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Sophos integration credentials are missing'
+        });
+      }
+      if (!source.fromTenantId) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Sophos source tenant id is missing'
+        });
+      }
+      if (typeof toApiHost !== 'string' || !toApiHost) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Sophos target API host is missing'
+        });
+      }
+      if (typeof fromApiHost !== 'string' || !fromApiHost) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Sophos source API host is missing'
+        });
+      }
+
+      const encryptionKey = ctx.encryptionKey ?? process.env.ENCRYPTION_KEY;
+      if (!encryptionKey) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Encryption key is not configured'
+        });
+      }
+      const clientSecret = Encryption.decrypt(config.data.clientSecret, encryptionKey);
+      if (!clientSecret) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Sophos client secret could not be decrypted'
+        });
+      }
+
+      const connector = new SophosConnector(config.data.clientId, clientSecret);
+
+      const endpointExternalIds = endpointRows.map((r) => r.externalId);
+      let created;
+      try {
+        created = await connector.endpoint.migrations.create(
+          toApiHost,
+          source.fromTenantId,
+          targetLink.externalId,
+          endpointExternalIds
+        );
+      } catch (err) {
+        throw new TRPCError({
+          code: 'BAD_GATEWAY',
+          message: `Sophos migration create failed: ${errorMessage(err)}`
+        });
+      }
+
+      try {
+        await connector.endpoint.migrations.trigger(
+          fromApiHost,
+          source.fromTenantId,
+          created.id,
+          created.token,
+          endpointExternalIds
+        );
+      } catch (err) {
+        throw new TRPCError({
+          code: 'BAD_GATEWAY',
+          message: `Sophos migration trigger failed (source tenant may need "Allow device migration" enabled): ${errorMessage(err)}`
+        });
+      }
+
+      const [row] = await ctx.db
+        .insert(sophosEndpointMigrations)
+        .values({
+          sophosMigrationId: created.id,
+          fromLinkId: source.linkId,
+          toLinkId: targetLink.id,
+          fromSiteId: source.siteId,
+          toSiteId: targetLink.siteId,
+          endpointIds: endpointRows.map((r) => r.id),
+          status: 'running',
+          requestedCount: endpointRows.length,
+          initiatedBy: ctx.user.id
+        })
+        .returning({ id: sophosEndpointMigrations.id });
+
+      return {
+        id: row!.id,
+        sophosMigrationId: created.id,
+        requested: endpointRows.length
+      };
+    }),
+
+  sophosEndpointMigrationStatus: authProcedure
+    .input(z.object({ id: z.uuid() }))
+    .query(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Read permission required' });
+      }
+
+      const [job] = await ctx.db
+        .select()
+        .from(sophosEndpointMigrations)
+        .where(eq(sophosEndpointMigrations.id, input.id))
+        .limit(1);
+
+      if (!job) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const scope = ctx.scopeFor('Vendors.Read');
+      if (scope !== 'all') {
+        const scopeSet = new Set(scope);
+        const okSource = !job.fromSiteId || scopeSet.has(job.fromSiteId);
+        const okTarget = !job.toSiteId || scopeSet.has(job.toSiteId);
+        if (!okSource && !okTarget) throw new TRPCError({ code: 'NOT_FOUND' });
+      }
+
+      if (job.status === 'completed' || job.status === 'failed' || job.status === 'partial') {
+        return {
+          id: job.id,
+          status: job.status,
+          requested: job.requestedCount,
+          succeeded: job.succeededCount,
+          failed: job.failedCount,
+          error: job.error
+        };
+      }
+
+      const [target] = await ctx.db
+        .select({
+          externalId: integrationLinks.externalId,
+          meta: integrationLinks.meta,
+          integrationConfig: integrations.config
+        })
+        .from(integrationLinks)
+        .innerJoin(integrations, eq(integrationLinks.integrationId, integrations.id))
+        .where(eq(integrationLinks.id, job.toLinkId))
+        .limit(1);
+
+      if (!target || !target.externalId) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Target Sophos link is no longer available'
+        });
+      }
+      const apiHost =
+        target.meta && typeof target.meta === 'object' && !Array.isArray(target.meta)
+          ? (target.meta as Record<string, unknown>).apiHost
+          : undefined;
+      if (typeof apiHost !== 'string' || !apiHost) {
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Target API host missing' });
+      }
+
+      const config = SophosConfigSchema.safeParse(target.integrationConfig);
+      if (!config.success || !config.data.clientId || !config.data.clientSecret) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Sophos integration credentials are missing'
+        });
+      }
+      const encryptionKey = ctx.encryptionKey ?? process.env.ENCRYPTION_KEY;
+      if (!encryptionKey) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Encryption key is not configured'
+        });
+      }
+      const clientSecret = Encryption.decrypt(config.data.clientSecret, encryptionKey);
+      if (!clientSecret) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Sophos client secret could not be decrypted'
+        });
+      }
+
+      const connector = new SophosConnector(config.data.clientId, clientSecret);
+
+      let items;
+      try {
+        items = await connector.endpoint.migrations.getEndpoints(
+          apiHost,
+          target.externalId,
+          job.sophosMigrationId
+        );
+      } catch (err) {
+        return {
+          id: job.id,
+          status: job.status,
+          requested: job.requestedCount,
+          succeeded: job.succeededCount,
+          failed: job.failedCount,
+          pending: job.requestedCount - job.succeededCount - job.failedCount,
+          error: errorMessage(err)
+        };
+      }
+
+      const succeededExt = items.filter((i) => i.status === 'succeeded');
+      const failedExt = items.filter((i) => i.status === 'failed');
+      const pendingCount = items.filter((i) => i.status === 'pending').length;
+
+      // Repoint DB rows for succeeded endpoints that haven't been finalized yet.
+      const succeededExtIds = new Set(succeededExt.map((i) => i.id));
+      let newlyFinalized: {
+        id: string;
+        externalId: string;
+        hostname: string;
+        newExternalId: string;
+      }[] = [];
+      if (succeededExtIds.size > 0) {
+        const candidateRows = await ctx.db
+          .select({
+            id: sophosEndpoints.id,
+            externalId: sophosEndpoints.externalId,
+            hostname: sophosEndpoints.hostname,
+            linkId: sophosEndpoints.linkId
+          })
+          .from(sophosEndpoints)
+          .where(inArray(sophosEndpoints.id, job.endpointIds));
+
+        const stillOnSource = candidateRows.filter(
+          (r) => r.linkId === job.fromLinkId && succeededExtIds.has(r.externalId)
+        );
+        if (stillOnSource.length > 0) {
+          const byExtId = new Map(succeededExt.map((i) => [i.id, i]));
+          const now = new Date().toISOString();
+
+          for (const row of stillOnSource) {
+            const item = byExtId.get(row.externalId)!;
+            const newExternalId = item.newId ?? row.externalId;
+            await ctx.db
+              .update(sophosEndpoints)
+              .set({
+                linkId: job.toLinkId,
+                siteId: job.toSiteId,
+                externalId: newExternalId,
+                updatedAt: now
+              })
+              .where(eq(sophosEndpoints.id, row.id));
+
+            await ctx.db
+              .update(sophosTamperProtection)
+              .set({ linkId: job.toLinkId, siteId: job.toSiteId })
+              .where(eq(sophosTamperProtection.endpointId, row.id));
+
+            await ctx.db.insert(customerLogs).values({
+              siteId: job.toSiteId,
+              actorType: 'user',
+              actorId: job.initiatedBy ?? ctx.user.id,
+              actorLabel: ctx.user.name || ctx.user.email,
+              action: 'update',
+              actionLabel: ActionLabels.SophosEndpointMigrate,
+              targetType: 'sophos_endpoint',
+              targetId: row.id,
+              targetLabel: row.hostname,
+              result: 'success',
+              ipAddress: ctx.ipAddress,
+              userAgent: ctx.userAgent,
+              metadata: {
+                migrationJobId: job.id,
+                sophosMigrationId: job.sophosMigrationId,
+                fromLinkId: job.fromLinkId,
+                toLinkId: job.toLinkId,
+                fromSiteId: job.fromSiteId,
+                toSiteId: job.toSiteId,
+                previousExternalId: row.externalId,
+                newExternalId
+              }
+            });
+
+            newlyFinalized.push({
+              id: row.id,
+              externalId: row.externalId,
+              hostname: row.hostname,
+              newExternalId
+            });
+          }
+        }
+      }
+
+      const succeeded = succeededExt.length;
+      const failed = failedExt.length;
+      const total = succeeded + failed + pendingCount;
+      const nextStatus: 'running' | 'completed' | 'failed' | 'partial' =
+        pendingCount > 0
+          ? 'running'
+          : failed === 0
+            ? 'completed'
+            : succeeded === 0
+              ? 'failed'
+              : 'partial';
+
+      const finalizedCount = job.finalizedCount + newlyFinalized.length;
+
+      await ctx.db
+        .update(sophosEndpointMigrations)
+        .set({
+          status: nextStatus,
+          succeededCount: succeeded,
+          failedCount: failed,
+          finalizedCount,
+          completedAt:
+            nextStatus === 'running' ? null : (job.completedAt ?? new Date().toISOString()),
+          updatedAt: new Date().toISOString()
+        })
+        .where(eq(sophosEndpointMigrations.id, job.id));
+
+      return {
+        id: job.id,
+        status: nextStatus,
+        requested: job.requestedCount,
+        succeeded,
+        failed,
+        pending: pendingCount,
+        reported: total,
+        error: null as string | null
+      };
+    }),
+
+  listSophosMigrations: authProcedure
+    .input(
+      z
+        .object({
+          status: z.enum(['pending', 'running', 'completed', 'failed', 'partial']).optional(),
+          limit: z.number().int().min(1).max(500).default(100)
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Read permission required' });
+      }
+
+      const fromSites = alias(sites, 'from_sites');
+      const toSites = alias(sites, 'to_sites');
+
+      const conditions = [] as ReturnType<typeof and>[];
+      if (input?.status) {
+        conditions.push(eq(sophosEndpointMigrations.status, input.status));
+      }
+
+      const scope = ctx.scopeFor('Vendors.Read');
+      if (scope !== 'all') {
+        if (scope.length === 0) return [];
+        conditions.push(
+          or(
+            inArray(sophosEndpointMigrations.fromSiteId, [...scope]),
+            inArray(sophosEndpointMigrations.toSiteId, [...scope])
+          )!
+        );
+      }
+
+      const rows = await ctx.db
+        .select({
+          id: sophosEndpointMigrations.id,
+          sophosMigrationId: sophosEndpointMigrations.sophosMigrationId,
+          status: sophosEndpointMigrations.status,
+          requestedCount: sophosEndpointMigrations.requestedCount,
+          succeededCount: sophosEndpointMigrations.succeededCount,
+          failedCount: sophosEndpointMigrations.failedCount,
+          finalizedCount: sophosEndpointMigrations.finalizedCount,
+          fromLinkId: sophosEndpointMigrations.fromLinkId,
+          toLinkId: sophosEndpointMigrations.toLinkId,
+          fromSiteId: sophosEndpointMigrations.fromSiteId,
+          toSiteId: sophosEndpointMigrations.toSiteId,
+          fromSiteName: fromSites.name,
+          toSiteName: toSites.name,
+          initiatedBy: sophosEndpointMigrations.initiatedBy,
+          initiatedByName: users.name,
+          initiatedByEmail: users.email,
+          error: sophosEndpointMigrations.error,
+          startedAt: sophosEndpointMigrations.startedAt,
+          completedAt: sophosEndpointMigrations.completedAt,
+          createdAt: sophosEndpointMigrations.createdAt,
+          updatedAt: sophosEndpointMigrations.updatedAt
+        })
+        .from(sophosEndpointMigrations)
+        .leftJoin(fromSites, eq(fromSites.id, sophosEndpointMigrations.fromSiteId))
+        .leftJoin(toSites, eq(toSites.id, sophosEndpointMigrations.toSiteId))
+        .leftJoin(users, eq(users.id, sophosEndpointMigrations.initiatedBy))
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
+        .orderBy(desc(sophosEndpointMigrations.createdAt))
+        .limit(input?.limit ?? 100);
+
+      return rows;
+    }),
+
+  getSophosMigration: authProcedure
+    .input(z.object({ id: z.uuid() }))
+    .query(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Read permission required' });
+      }
+
+      const fromSites = alias(sites, 'from_sites');
+      const toSites = alias(sites, 'to_sites');
+
+      const [row] = await ctx.db
+        .select({
+          id: sophosEndpointMigrations.id,
+          sophosMigrationId: sophosEndpointMigrations.sophosMigrationId,
+          status: sophosEndpointMigrations.status,
+          requestedCount: sophosEndpointMigrations.requestedCount,
+          succeededCount: sophosEndpointMigrations.succeededCount,
+          failedCount: sophosEndpointMigrations.failedCount,
+          finalizedCount: sophosEndpointMigrations.finalizedCount,
+          endpointIds: sophosEndpointMigrations.endpointIds,
+          fromLinkId: sophosEndpointMigrations.fromLinkId,
+          toLinkId: sophosEndpointMigrations.toLinkId,
+          fromSiteId: sophosEndpointMigrations.fromSiteId,
+          toSiteId: sophosEndpointMigrations.toSiteId,
+          fromSiteName: fromSites.name,
+          toSiteName: toSites.name,
+          initiatedBy: sophosEndpointMigrations.initiatedBy,
+          initiatedByName: users.name,
+          initiatedByEmail: users.email,
+          error: sophosEndpointMigrations.error,
+          startedAt: sophosEndpointMigrations.startedAt,
+          completedAt: sophosEndpointMigrations.completedAt,
+          createdAt: sophosEndpointMigrations.createdAt,
+          updatedAt: sophosEndpointMigrations.updatedAt
+        })
+        .from(sophosEndpointMigrations)
+        .leftJoin(fromSites, eq(fromSites.id, sophosEndpointMigrations.fromSiteId))
+        .leftJoin(toSites, eq(toSites.id, sophosEndpointMigrations.toSiteId))
+        .leftJoin(users, eq(users.id, sophosEndpointMigrations.initiatedBy))
+        .where(eq(sophosEndpointMigrations.id, input.id))
+        .limit(1);
+
+      if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const scope = ctx.scopeFor('Vendors.Read');
+      if (scope !== 'all') {
+        const scopeSet = new Set(scope);
+        const okFrom = !row.fromSiteId || scopeSet.has(row.fromSiteId);
+        const okTo = !row.toSiteId || scopeSet.has(row.toSiteId);
+        if (!okFrom && !okTo) throw new TRPCError({ code: 'NOT_FOUND' });
+      }
+
+      const endpointRows =
+        row.endpointIds.length > 0
+          ? await ctx.db
+              .select({
+                id: sophosEndpoints.id,
+                externalId: sophosEndpoints.externalId,
+                hostname: sophosEndpoints.hostname,
+                linkId: sophosEndpoints.linkId,
+                siteId: sophosEndpoints.siteId
+              })
+              .from(sophosEndpoints)
+              .where(inArray(sophosEndpoints.id, row.endpointIds))
+          : [];
+
+      return { ...row, endpoints: endpointRows };
+    })
 });

@@ -64,6 +64,7 @@ export const SOPHOS_PARTNER_CONFIG: Integration = {
     { label: "Endpoints", route: "/endpoints", isNullable: false },
     { label: "Firewalls", route: "/firewalls", isNullable: false },
     { label: "Licenses", route: "/licenses", isNullable: false },
+    { label: "Migrations", route: "/migrations", isNullable: false },
   ],
   linkMetaSchema: passthroughLinkMetaSchema,
   linkMetaVersion: SOPHOS_PARTNER_LINK_META_VERSION,
