@@ -86,6 +86,13 @@ export type PaginationInput = {
   sortDir?: 'asc' | 'desc';
 };
 
+/** API exposed to `signalStrip` so a strip cell can push a filter onto the table. */
+export interface SignalStripApi {
+  addFilter: (filter: Omit<TableFilter, 'id'>) => void;
+  clearFilters: () => void;
+  setSort: (field: string, dir: 'asc' | 'desc') => void;
+}
+
 export interface DataTableProps<TData> {
   fetchData: (opts: PaginationInput) => Promise<{ rows: TData[]; total: number }>;
   columns: DataTableColumn<TData>[];
@@ -107,6 +114,10 @@ export interface DataTableProps<TData> {
   filterMap?: Record<string, string>;
   defaultPageSize?: number;
   defaultSort?: { field: string; dir: 'asc' | 'desc' };
+
+  /** Optional strip rendered inside the table frame above the header row.
+   * Receives helpers so strip cells can act as filter/sort shortcuts. */
+  signalStrip?: import('svelte').Snippet<[SignalStripApi]>;
 
   // Bump to force a re-fetch from outside
   refreshKey?: number;

@@ -1,7 +1,8 @@
 import { z } from 'zod';
-import { and, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import {
   entitySources,
+  findings,
   findingsWithContext,
   integrationLinks,
   peopleWithSites
@@ -35,6 +36,82 @@ const mockPersonRows = () =>
   }));
 
 export const peopleRouter = t.router({
+  overview: authProcedure.query(async ({ ctx }) => {
+    const scope = ctx.scopeFor('People.Read');
+    if (scope !== 'all' && scope.length === 0) {
+      return {
+        total: 0,
+        byStatus: { active: 0, inactive: 0, unknown: 0 },
+        withoutSources: 0,
+        unassigned: 0,
+        severity: { critical: 0, high: 0, medium: 0, low: 0 },
+      };
+    }
+    const scopeWhere =
+      scope === 'all' ? undefined : inArray(peopleWithSites.siteId, [...scope]);
+
+    const [rollup, severityRows] = await Promise.all([
+      ctx.db
+        .select({
+          status: peopleWithSites.status,
+          hasSources: sql<boolean>`coalesce(array_length(${peopleWithSites.sources}, 1), 0) > 0`,
+          hasSite: sql<boolean>`${peopleWithSites.siteId} is not null`,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(peopleWithSites)
+        .where(scopeWhere)
+        .groupBy(
+          peopleWithSites.status,
+          sql`coalesce(array_length(${peopleWithSites.sources}, 1), 0) > 0`,
+          sql`${peopleWithSites.siteId} is not null`,
+        )
+        .catch(
+          () => [] as {
+            status: string;
+            hasSources: boolean;
+            hasSite: boolean;
+            count: number;
+          }[],
+        ),
+      ctx.db
+        .select({
+          severity: findings.severity,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(findings)
+        .where(
+          and(
+            eq(findings.resourceType, 'person'),
+            inArray(findings.status, [...OPEN_STATUSES]),
+            scope === 'all' ? undefined : inArray(findings.siteId, [...scope]),
+          ) as never,
+        )
+        .groupBy(findings.severity)
+        .catch(() => [] as { severity: number; count: number }[]),
+    ]);
+
+    let total = 0;
+    let withoutSources = 0;
+    let unassigned = 0;
+    const byStatus = { active: 0, inactive: 0, unknown: 0 };
+    for (const row of rollup) {
+      total += row.count;
+      if (row.status in byStatus) byStatus[row.status as keyof typeof byStatus] += row.count;
+      if (!row.hasSources) withoutSources += row.count;
+      if (!row.hasSite) unassigned += row.count;
+    }
+
+    const severity = { critical: 0, high: 0, medium: 0, low: 0 };
+    for (const row of severityRows) {
+      if (row.severity === 4) severity.critical += row.count;
+      else if (row.severity === 3) severity.high += row.count;
+      else if (row.severity === 2) severity.medium += row.count;
+      else severity.low += row.count;
+    }
+
+    return { total, byStatus, withoutSources, unassigned, severity };
+  }),
+
   tableData: authProcedure.input(tableDataInputSchema).query(async ({ ctx, input }) => {
     const scope = ctx.scopeFor('People.Read');
     if (scope !== 'all' && scope.length === 0) {

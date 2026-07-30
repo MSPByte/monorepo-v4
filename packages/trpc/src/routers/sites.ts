@@ -1,6 +1,6 @@
 // TODO: Findings Implementation
 import { z } from 'zod';
-import { and, count, eq, inArray } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import {
   assets,
   customerLogs,
@@ -96,7 +96,98 @@ const METRIC_ORIGINS: Record<MetricKey, string> = {
   connectedIntegrations: 'integration_links'
 };
 
+const OPEN_STATUSES = ['open', 'acknowledged', 'regressed'] as const;
+
 export const sitesRouter = t.router({
+  overview: authProcedure.query(async ({ ctx }) => {
+    const scope = ctx.scopeFor('Sites.Read');
+    if (scope !== 'all' && scope.length === 0) {
+      return {
+        totalSites: 0,
+        connectedSites: 0,
+        sitesWithFindings: 0,
+        totalAssets: 0,
+        totalPeople: 0,
+        severity: { critical: 0, high: 0, medium: 0, low: 0 },
+        hotspot: null as null | { id: string; name: string; openFindingCount: number },
+      };
+    }
+    const scopeWhere =
+      scope === 'all' ? undefined : inArray(sitesWithCounts.id, [...scope]);
+
+    const [totalsRow, severityRows, hotspotRow] = await Promise.all([
+      ctx.db
+        .select({
+          totalSites: sql<number>`count(*)::int`,
+          connectedSites: sql<number>`count(*) filter (where coalesce(array_length(${sitesWithCounts.sources}, 1), 0) > 0)::int`,
+          sitesWithFindings: sql<number>`count(*) filter (where ${sitesWithCounts.openFindingCount} > 0)::int`,
+          totalAssets: sql<number>`coalesce(sum(${sitesWithCounts.assetCount}), 0)::int`,
+          totalPeople: sql<number>`coalesce(sum(${sitesWithCounts.peopleCount}), 0)::int`,
+        })
+        .from(sitesWithCounts)
+        .where(scopeWhere)
+        .catch(
+          () => [{
+            totalSites: 0,
+            connectedSites: 0,
+            sitesWithFindings: 0,
+            totalAssets: 0,
+            totalPeople: 0,
+          }],
+        ),
+      ctx.db
+        .select({
+          severity: findings.severity,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(findings)
+        .where(
+          and(
+            inArray(findings.status, [...OPEN_STATUSES]),
+            // Only count findings that map to a site — the portfolio strip
+            // shouldn't include unattached findings.
+            scope === 'all'
+              ? isNotNull(findings.siteId)
+              : inArray(findings.siteId, [...scope]),
+          ) as never,
+        )
+        .groupBy(findings.severity)
+        .catch(() => [] as { severity: number; count: number }[]),
+      ctx.db
+        .select({
+          id: sitesWithCounts.id,
+          name: sitesWithCounts.name,
+          openFindingCount: sitesWithCounts.openFindingCount,
+        })
+        .from(sitesWithCounts)
+        .where(scopeWhere)
+        .orderBy(desc(sitesWithCounts.openFindingCount))
+        .limit(1)
+        .catch(() => [] as { id: string; name: string; openFindingCount: number }[]),
+    ]);
+
+    const severity = { critical: 0, high: 0, medium: 0, low: 0 };
+    for (const row of severityRows) {
+      if (row.severity === 4) severity.critical += row.count;
+      else if (row.severity === 3) severity.high += row.count;
+      else if (row.severity === 2) severity.medium += row.count;
+      else severity.low += row.count;
+    }
+
+    const totals = totalsRow[0] ?? {
+      totalSites: 0,
+      connectedSites: 0,
+      sitesWithFindings: 0,
+      totalAssets: 0,
+      totalPeople: 0,
+    };
+
+    const hotspot =
+      hotspotRow[0] && hotspotRow[0].openFindingCount > 0 ? hotspotRow[0] : null;
+
+    return { ...totals, severity, hotspot };
+  }),
+
   tableData: authProcedure.input(tableDataInputSchema).query(async ({ ctx, input }) => {
     const scope = ctx.scopeFor('Sites.Read');
     if (scope !== 'all' && scope.length === 0) {

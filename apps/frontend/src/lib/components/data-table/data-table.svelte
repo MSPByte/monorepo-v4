@@ -34,10 +34,33 @@
     filterMap,
     defaultPageSize = 100,
     defaultSort,
+    signalStrip,
     refreshKey = 0,
     onrowclick,
     onselectionchange,
   }: DataTableProps<TData> = $props();
+
+  // Stable id for view-driven filters so we can dedupe additions from the strip.
+  function makeFilterId(field: string, operator: string): string {
+    return `strip-${field}-${operator}`;
+  }
+
+  const stripApi = {
+    addFilter: (filter: Omit<TableFilter, 'id'>) => {
+      const id = makeFilterId(filter.field, filter.operator);
+      // Replace existing filter with the same field+operator so repeated clicks toggle values.
+      const next = filters.filter((f) => f.id !== id);
+      filters = [...next, { ...filter, id }];
+      currentPage = 0;
+      allSelected = false;
+    },
+    clearFilters: () => handleClearFilters(),
+    setSort: (field: string, dir: 'asc' | 'desc') => {
+      sortField = field;
+      sortDir = dir;
+      currentPage = 0;
+    },
+  };
 
   // Initialize state from URL if enabled
   function getInitialState() {
@@ -459,10 +482,13 @@
   {#if loading}
     <Loader />
   {:else}
-    <FadeIn class="flex relative size-full rounded-md border overflow-hidden bg-card/10">
+    <FadeIn class="flex relative size-full flex-col rounded-md border overflow-hidden bg-card/10">
+      {#if signalStrip}
+        {@render signalStrip(stripApi)}
+      {/if}
       <div
         class={cn(
-          'flex size-full transition-[filter,opacity]',
+          'flex w-full min-h-0 flex-1 transition-[filter,opacity]',
           actionRunning ? 'pointer-events-none blur-[2px] opacity-60' : undefined
         )}
         aria-busy={actionRunning}

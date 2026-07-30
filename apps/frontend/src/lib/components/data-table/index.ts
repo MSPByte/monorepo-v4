@@ -13,6 +13,7 @@ export type {
   DataTableProps,
   DataTableState,
   PaginationInput,
+  SignalStripApi,
 } from "./types";
 
 // Sub-components (for custom toolbars)

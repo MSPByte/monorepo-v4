@@ -5,6 +5,7 @@
   import type { TRPCClient } from '@trpc/client';
   import MetricCard from '$lib/components/domain/metric-card.svelte';
   import FindingSeverityBadge from '$lib/components/domain/finding-severity-badge.svelte';
+  import SeverityCountRow from '$lib/components/domain/severity-count-row.svelte';
   import * as Card from '$lib/components/ui/card';
   import { formatRelativeDate } from '$lib/utils/format';
     import Loader from "$lib/components/transition/loader.svelte";
@@ -61,11 +62,13 @@
           detail={`${kpis.data?.sourceHealth.total ?? 0} integration links`}
         />
       </a>
-      <MetricCard
-        label="Policy pass rate"
-        value={kpis.data ? `${kpis.data.policyPassRate}%` : '—'}
-        detail="Across enabled policies"
-      />
+      <a href="/policies" class="block">
+        <MetricCard
+          label="Policy pass rate"
+          value={kpis.data ? `${kpis.data.policyPassRate}%` : '—'}
+          detail="Across enabled policies"
+        />
+      </a>
     </div>
 
     <div class="grid gap-6 lg:grid-cols-[2fr_1fr]">
@@ -120,12 +123,7 @@
                     <div class="text-sm font-medium truncate">{site.name}</div>
                     <div class="text-xs text-muted-foreground">{site.openFindingCount} open</div>
                   </div>
-                  <div class="flex shrink-0 items-center gap-1 text-xs">
-                    {#if site.severity.critical > 0}<span class="rounded bg-red-700 px-1.5 py-0.5 text-white">{site.severity.critical}C</span>{/if}
-                    {#if site.severity.high > 0}<span class="rounded bg-orange-600 px-1.5 py-0.5 text-white">{site.severity.high}H</span>{/if}
-                    {#if site.severity.medium > 0}<span class="rounded bg-yellow-500 px-1.5 py-0.5 text-black">{site.severity.medium}M</span>{/if}
-                    {#if site.severity.low > 0}<span class="rounded border px-1.5 py-0.5 text-muted-foreground">{site.severity.low}L</span>{/if}
-                  </div>
+                  <SeverityCountRow buckets={site.severity} />
                 </a>
               {/each}
             {:else if sitePressure.data}

@@ -1,8 +1,9 @@
 import { z } from 'zod';
-import { and, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import {
   assetsWithSites,
   entitySources,
+  findings,
   findingsWithContext,
   integrationLinks
 } from '@mspbyte/drizzle';
@@ -35,6 +36,82 @@ function tableLabel(table?: string | null): string {
 }
 
 export const assetsRouter = t.router({
+  overview: authProcedure.query(async ({ ctx }) => {
+    const scope = ctx.scopeFor('Assets.Read');
+    if (scope !== 'all' && scope.length === 0) {
+      return {
+        total: 0,
+        byStatus: { active: 0, inactive: 0, unknown: 0 },
+        byType: { workstation: 0, server: 0, network: 0, mobile: 0, unknown: 0 },
+        withoutSources: 0,
+        severity: { critical: 0, high: 0, medium: 0, low: 0 },
+      };
+    }
+    const scopeWhere =
+      scope === 'all' ? undefined : inArray(assetsWithSites.siteId, [...scope]);
+
+    const [rollup, severityRows] = await Promise.all([
+      ctx.db
+        .select({
+          status: assetsWithSites.status,
+          assetType: assetsWithSites.assetType,
+          hasSources: sql<boolean>`coalesce(array_length(${assetsWithSites.sources}, 1), 0) > 0`,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(assetsWithSites)
+        .where(scopeWhere)
+        .groupBy(
+          assetsWithSites.status,
+          assetsWithSites.assetType,
+          sql`coalesce(array_length(${assetsWithSites.sources}, 1), 0) > 0`,
+        )
+        .catch(
+          () => [] as {
+            status: string;
+            assetType: string;
+            hasSources: boolean;
+            count: number;
+          }[],
+        ),
+      ctx.db
+        .select({
+          severity: findings.severity,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(findings)
+        .where(
+          and(
+            eq(findings.resourceType, 'asset'),
+            inArray(findings.status, [...OPEN_STATUSES]),
+            scope === 'all' ? undefined : inArray(findings.siteId, [...scope]),
+          ) as never,
+        )
+        .groupBy(findings.severity)
+        .catch(() => [] as { severity: number; count: number }[]),
+    ]);
+
+    let total = 0;
+    let withoutSources = 0;
+    const byStatus = { active: 0, inactive: 0, unknown: 0 };
+    const byType = { workstation: 0, server: 0, network: 0, mobile: 0, unknown: 0 };
+    for (const row of rollup) {
+      total += row.count;
+      if (row.status in byStatus) byStatus[row.status as keyof typeof byStatus] += row.count;
+      if (row.assetType in byType) byType[row.assetType as keyof typeof byType] += row.count;
+      if (!row.hasSources) withoutSources += row.count;
+    }
+
+    const severity = { critical: 0, high: 0, medium: 0, low: 0 };
+    for (const row of severityRows) {
+      if (row.severity === 4) severity.critical += row.count;
+      else if (row.severity === 3) severity.high += row.count;
+      else if (row.severity === 2) severity.medium += row.count;
+      else severity.low += row.count;
+    }
+
+    return { total, byStatus, byType, withoutSources, severity };
+  }),
+
   tableData: authProcedure.input(tableDataInputSchema).query(async ({ ctx, input }) => {
     const scope = ctx.scopeFor('Assets.Read');
     if (scope !== 'all' && scope.length === 0) {
