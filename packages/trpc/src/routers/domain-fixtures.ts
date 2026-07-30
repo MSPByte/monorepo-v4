@@ -230,7 +230,7 @@ export const mockFindings = [
     id: 'dddddddd-dddd-4ddd-8ddd-ddddddddddd3',
     title: 'Active server has stale backup coverage',
     severity: 3,
-    status: 'acknowledged',
+    status: 'open',
     siteId: mockSites[0]!.id,
     resourceType: 'asset',
     resourceId: mockAssets[0]!.id,

@@ -8,6 +8,7 @@ export enum ActionLabels {
   PolicySetFrameworkMembership = 'policy.set_framework_membership',
   FindingSuppress = 'finding.suppress',
   FindingUnsuppress = 'finding.unsuppress',
+  FindingResolve = 'finding.resolve',
   SiteCreate = 'site.create',
   SiteRename = 'site.rename',
   SiteDelete = 'site.delete',
@@ -123,6 +124,10 @@ export const ActionResources = {
   [ActionLabels.FindingUnsuppress]: {
     label: ActionLabels.FindingUnsuppress,
     name: 'Finding unsuppress'
+  },
+  [ActionLabels.FindingResolve]: {
+    label: ActionLabels.FindingResolve,
+    name: 'Finding resolve'
   },
   [ActionLabels.SiteCreate]: {
     label: ActionLabels.SiteCreate,

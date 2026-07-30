@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, lt, ne, or, sql } from 'drizzle-orm';
 import {
   customerLogs,
   findings,
@@ -311,6 +311,215 @@ export const findingsRouter = t.router({
       relatedByPolicy
     };
   }),
+
+  overview: authProcedure.query(async ({ ctx }) => {
+    const scope = ctx.scopeFor('Findings.Read');
+    if (scope !== 'all' && scope.length === 0) {
+      return {
+        totalOpen: 0,
+        byStatus: { open: 0, acknowledged: 0, regressed: 0, suppressed: 0, resolved: 0 },
+        severity: { critical: 0, high: 0, medium: 0, low: 0 },
+        agedOver30d: 0,
+        topPolicy: null as null | { policyId: string; policyName: string; count: number }
+      };
+    }
+    const scopeWhere =
+      scope === 'all' ? undefined : inArray(findings.siteId, [...scope]);
+    const openWhere = and(inArray(findings.status, [...OPEN_STATUSES]), scopeWhere);
+
+    const [statusRows, severityRows, agedRow, topPolicyRow] = await Promise.all([
+      ctx.db
+        .select({
+          status: findings.status,
+          count: sql<number>`count(*)::int`
+        })
+        .from(findings)
+        .where(scopeWhere)
+        .groupBy(findings.status)
+        .catch(() => [] as { status: string; count: number }[]),
+      ctx.db
+        .select({
+          severity: findings.severity,
+          count: sql<number>`count(*)::int`
+        })
+        .from(findings)
+        .where(openWhere as never)
+        .groupBy(findings.severity)
+        .catch(() => [] as { severity: number; count: number }[]),
+      ctx.db
+        .select({
+          count: sql<number>`count(*)::int`
+        })
+        .from(findings)
+        .where(
+          and(
+            openWhere,
+            sql`${findings.firstSeenAt} < now() - interval '30 days'`
+          ) as never
+        )
+        .catch(() => [{ count: 0 }]),
+      ctx.db
+        .select({
+          policyId: findingsWithContext.policyId,
+          policyName: findingsWithContext.policyName,
+          count: sql<number>`count(*)::int`
+        })
+        .from(findingsWithContext)
+        .where(
+          and(
+            inArray(findingsWithContext.status, [...OPEN_STATUSES]),
+            scope === 'all' ? undefined : inArray(findingsWithContext.siteId, [...scope])
+          ) as never
+        )
+        .groupBy(findingsWithContext.policyId, findingsWithContext.policyName)
+        .orderBy(sql`count(*) desc`)
+        .limit(1)
+        .catch(() => [] as { policyId: string; policyName: string; count: number }[])
+    ]);
+
+    const byStatus = { open: 0, acknowledged: 0, regressed: 0, suppressed: 0, resolved: 0 };
+    for (const row of statusRows) {
+      if (row.status in byStatus) byStatus[row.status as keyof typeof byStatus] += row.count;
+    }
+
+    const severity = { critical: 0, high: 0, medium: 0, low: 0 };
+    for (const row of severityRows) {
+      if (row.severity === 4) severity.critical += row.count;
+      else if (row.severity === 3) severity.high += row.count;
+      else if (row.severity === 2) severity.medium += row.count;
+      else severity.low += row.count;
+    }
+
+    return {
+      totalOpen: byStatus.open + byStatus.acknowledged + byStatus.regressed,
+      byStatus,
+      severity,
+      agedOver30d: agedRow[0]?.count ?? 0,
+      topPolicy: topPolicyRow[0] ?? null
+    };
+  }),
+
+  neighbor: authProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        direction: z.enum(['prev', 'next']),
+        // Optional constraints to keep the neighbor within the same working queue.
+        onlyOpen: z.boolean().default(true)
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = ctx.scopeFor('Findings.Read');
+      if (scope !== 'all' && scope.length === 0) return null;
+
+      // Get current finding's cursor position (severity + lastSeenAt).
+      const [current] = await ctx.db
+        .select({
+          id: findings.id,
+          severity: findings.severity,
+          lastSeenAt: findings.lastSeenAt
+        })
+        .from(findings)
+        .where(eq(findings.id, input.id))
+        .limit(1);
+      if (!current) return null;
+
+      // Sort mirrors the list page default: severity desc, lastSeenAt desc.
+      // "next" means "later in the queue" → lower severity or older lastSeen.
+      const scopeWhere =
+        scope === 'all' ? undefined : inArray(findings.siteId, [...scope]);
+      const statusFilter = input.onlyOpen
+        ? inArray(findings.status, [...OPEN_STATUSES])
+        : undefined;
+
+      const cursorForward = or(
+        lt(findings.severity, current.severity),
+        and(
+          eq(findings.severity, current.severity),
+          lt(findings.lastSeenAt, current.lastSeenAt)
+        )
+      );
+      const cursorBackward = or(
+        gt(findings.severity, current.severity),
+        and(
+          eq(findings.severity, current.severity),
+          gt(findings.lastSeenAt, current.lastSeenAt)
+        )
+      );
+
+      const [neighbor] = await ctx.db
+        .select({ id: findings.id })
+        .from(findings)
+        .where(
+          and(
+            input.direction === 'next' ? cursorForward : cursorBackward,
+            statusFilter,
+            scopeWhere,
+            ne(findings.id, input.id)
+          ) as never
+        )
+        .orderBy(
+          input.direction === 'next' ? desc(findings.severity) : asc(findings.severity),
+          input.direction === 'next' ? desc(findings.lastSeenAt) : asc(findings.lastSeenAt)
+        )
+        .limit(1);
+
+      return neighbor ? { id: neighbor.id } : null;
+    }),
+
+  resolve: authProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Assets.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Write permission required' });
+      }
+      const [row] = await ctx.db
+        .select(findingSelection)
+        .from(findingsWithContext)
+        .where(eq(findingsWithContext.id, input.id))
+        .limit(1);
+      if (!row) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (row.status === 'suppressed') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Suppressed findings must be returned to active tracking before resolving'
+        });
+      }
+
+      const now = new Date().toISOString();
+      const [updated] = await ctx.db
+        .update(findings)
+        .set({ status: 'resolved', updatedAt: now })
+        .where(eq(findings.id, input.id))
+        .returning({ id: findings.id });
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: row.siteId,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email,
+        action: 'update',
+        actionLabel: ActionLabels.FindingResolve,
+        targetType: 'finding',
+        targetId: row.id,
+        targetLabel: row.title,
+        result: updated ? 'success' : 'failure',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: {
+          previousStatus: row.status,
+          newStatus: 'resolved',
+          policyId: row.policyId,
+          policyName: row.policyName,
+          resourceType: row.resourceType,
+          resourceId: row.resourceId,
+          resourceName: row.resourceName,
+          linkId: row.linkId
+        }
+      });
+
+      return { id: input.id, status: 'resolved' as const };
+    }),
 
   suppress: authProcedure
     .input(

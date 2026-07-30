@@ -1,7 +1,8 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { page } from '$app/state';
-  import { createQuery } from '@tanstack/svelte-query';
+  import { goto } from '$app/navigation';
+  import { createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { getLocalTimeZone, parseDate, today, type CalendarDate } from '@internationalized/date';
   import { toast } from 'svelte-sonner';
   import type { AppRouter } from '@mspbyte/trpc';
@@ -20,9 +21,13 @@
   import Textarea from '$lib/components/ui/textarea/textarea.svelte';
 
   import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
+  import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+  import ArrowRight from '@lucide/svelte/icons/arrow-right';
+  import CircleCheckBig from '@lucide/svelte/icons/circle-check-big';
   import FindingBriefing from './_components/finding-briefing.svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
+  const qc = useQueryClient();
   const id = $derived(page.params.id ?? '');
 
   type DataSource = NonNullable<typeof findingQuery.data>['dataSources'][number];
@@ -45,6 +50,85 @@
     queryKey: ['findings.byId', id],
     queryFn: () => trpc.findings.byId.query({ id }),
   }));
+
+  // Prev/next only make sense within the active queue (open + regressed).
+  // Suppressed/resolved detail pages get no navigation.
+  const canNavigateQueue = $derived(
+    findingQuery.data?.status === 'open' || findingQuery.data?.status === 'regressed',
+  );
+
+  const prevQuery = createQuery(() => ({
+    queryKey: ['findings.neighbor', id, 'prev'],
+    queryFn: () => trpc.findings.neighbor.query({ id, direction: 'prev' }),
+    enabled: !!id && canNavigateQueue,
+    staleTime: 30_000,
+  }));
+
+  const nextQuery = createQuery(() => ({
+    queryKey: ['findings.neighbor', id, 'next'],
+    queryFn: () => trpc.findings.neighbor.query({ id, direction: 'next' }),
+    enabled: !!id && canNavigateQueue,
+    staleTime: 30_000,
+  }));
+
+  function invalidateLists() {
+    void qc.invalidateQueries({ queryKey: ['findings.overview'] });
+  }
+
+  let resolveBusy = $state(false);
+
+  async function resolve() {
+    const finding = findingQuery.data;
+    if (!finding) return;
+    resolveBusy = true;
+    try {
+      await trpc.findings.resolve.mutate({ id: finding.id });
+      await findingQuery.refetch();
+      invalidateLists();
+      toast.success('Finding resolved');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to resolve');
+    } finally {
+      resolveBusy = false;
+    }
+  }
+
+  function goPrev() {
+    if (prevQuery.data?.id) goto(`/findings/${prevQuery.data.id}`);
+  }
+  function goNext() {
+    if (nextQuery.data?.id) goto(`/findings/${nextQuery.data.id}`);
+  }
+
+  // j/k + arrow-left/arrow-right walk the queue. Ignore when a form field is
+  // focused so text entry (suppression reason, etc.) isn't hijacked.
+  function isEditableTarget(e: KeyboardEvent): boolean {
+    const t = e.target as HTMLElement | null;
+    if (!t) return false;
+    const tag = t.tagName;
+    return (
+      tag === 'INPUT' ||
+      tag === 'TEXTAREA' ||
+      tag === 'SELECT' ||
+      t.isContentEditable
+    );
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (isEditableTarget(e)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'k' || e.key === 'ArrowLeft') {
+      if (prevQuery.data?.id) {
+        e.preventDefault();
+        goPrev();
+      }
+    } else if (e.key === 'j' || e.key === 'ArrowRight') {
+      if (nextQuery.data?.id) {
+        e.preventDefault();
+        goNext();
+      }
+    }
+  }
 
   let suppressionReason = $state('');
   let suppressDate = $state<CalendarDate | undefined>(undefined);
@@ -231,6 +315,8 @@
   </a>
 {/snippet}
 
+<svelte:window onkeydown={handleKeydown} />
+
 {#if findingQuery.data}
   {@const finding = findingQuery.data}
   <FadeIn class="flex flex-col size-full">
@@ -260,11 +346,40 @@
             <span class="ml-2 text-foreground/70">·</span>
             <span class="ml-2">last seen {formatRelativeDate(finding.lastSeenAt)}</span>
           </div>
-          <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            {finding.dataSources.length} data {finding.dataSources.length === 1
-              ? 'source'
-              : 'sources'}
-            · {finding.relatedBySite.length + finding.relatedByPolicy.length} related
+          <div class="flex items-center gap-3">
+            <div class="hidden font-mono text-[10px] uppercase tracking-wider text-muted-foreground md:block">
+              {finding.dataSources.length} data {finding.dataSources.length === 1
+                ? 'source'
+                : 'sources'}
+              · {finding.relatedBySite.length + finding.relatedByPolicy.length} related
+            </div>
+            {#if canNavigateQueue}
+              <div class="flex items-center gap-1">
+                <button
+                  type="button"
+                  onclick={goPrev}
+                  disabled={!prevQuery.data?.id}
+                  aria-label="Previous finding (k)"
+                  title="Previous finding — k"
+                  class="inline-flex size-6 items-center justify-center rounded-sm border border-border/60 bg-background/60 text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border/60 disabled:hover:text-muted-foreground"
+                >
+                  <ArrowLeft class="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onclick={goNext}
+                  disabled={!nextQuery.data?.id}
+                  aria-label="Next finding (j)"
+                  title="Next finding — j"
+                  class="inline-flex size-6 items-center justify-center rounded-sm border border-border/60 bg-background/60 text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border/60 disabled:hover:text-muted-foreground"
+                >
+                  <ArrowRight class="size-3.5" />
+                </button>
+                <kbd class="ml-1 hidden font-mono text-[9px] uppercase tracking-wider text-muted-foreground/60 sm:inline">
+                  j/k
+                </kbd>
+              </div>
+            {/if}
           </div>
         </div>
 
@@ -400,9 +515,26 @@
 
             <SectionPanel code="!" title="LIFECYCLE">
               {#snippet aside()}
-                {finding.status === 'suppressed' ? 'suppressed' : 'active'}
+                {finding.status}
               {/snippet}
               <div class="space-y-3 text-sm">
+                {#if finding.status === 'open' || finding.status === 'regressed'}
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <Button
+                      variant="default"
+                      size="sm"
+                      disabled={resolveBusy}
+                      onclick={resolve}
+                      class="gap-1.5"
+                    >
+                      <CircleCheckBig class="size-3.5" />
+                      Mark resolved
+                    </Button>
+                  </div>
+                  <p class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                    Or suppress temporarily below to hide until a chosen date
+                  </p>
+                {/if}
                 {#if finding.status === 'suppressed'}
                   <div class="border border-border/50 bg-muted/20 p-3">
                     <div

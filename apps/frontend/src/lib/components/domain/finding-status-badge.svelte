@@ -9,6 +9,8 @@
         return 'medium';
       case 'regressed':
         return 'high';
+      case 'acknowledged':
+        return 'low';
       default:
         return 'default';
     }

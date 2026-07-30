@@ -12,6 +12,7 @@
   import SetupMenu from './_layout/setup-menu.svelte';
   import CommandPalette from './_layout/command-palette.svelte';
   import UserAccount from './_layout/user-account.svelte';
+  import { flattenRoutes } from '$lib/config/routes';
 
   const { data, children }: LayoutProps = $props();
 
@@ -21,7 +22,9 @@
   const routeMap = new Map(data.routeGroups);
   const topRoutes = $derived(routeMap.get('top') ?? []);
   const setupRoutes = $derived(routeMap.get('Setup') ?? []);
-  const allRoutes = $derived([...routeMap.values()].flat());
+  // Command palette wants leaf routes; expand grouped children so every page
+  // remains discoverable via ⌘J even though the top nav collapses them.
+  const allRoutes = $derived(flattenRoutes([...routeMap.values()].flat()));
 
   let paletteOpen = $state(false);
 
