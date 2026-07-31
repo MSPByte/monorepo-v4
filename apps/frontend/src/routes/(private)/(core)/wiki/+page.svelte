@@ -11,12 +11,14 @@
   import Check from '@lucide/svelte/icons/check';
   import Clock from '@lucide/svelte/icons/clock';
   import FileText from '@lucide/svelte/icons/file-text';
+  import FolderPlus from '@lucide/svelte/icons/folder-plus';
   import Folder from '@lucide/svelte/icons/folder';
   import Link from '@lucide/svelte/icons/link';
   import Lock from '@lucide/svelte/icons/lock';
   import Plus from '@lucide/svelte/icons/plus';
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import X from '@lucide/svelte/icons/x';
+  import { toast } from 'svelte-sonner';
 
   import { getAllDescendantIds, getContextChildren, getContextPath } from './_wiki-utils.js';
   import Loader from '$lib/components/transition/loader.svelte';
@@ -68,6 +70,10 @@
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['wiki.contexts.list'] });
       void queryClient.invalidateQueries({ queryKey: ['wiki.articles'] });
+      toast.success('Context deleted');
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof Error ? e.message : 'Failed to delete context');
     },
   }));
 
@@ -175,6 +181,28 @@
 
       {#if contextsQuery.isLoading}
         <Loader />
+      {:else if rootContexts.length === 0}
+        <div
+          class="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed bg-muted/20 px-6 py-12 text-center"
+        >
+          <FolderPlus class="size-8 text-muted-foreground/60" />
+          <div class="space-y-1">
+            <div class="text-sm font-medium">No contexts yet</div>
+            <p class="max-w-sm text-xs text-muted-foreground">
+              Contexts group articles by operational area — clients, vendors, playbooks, etc.
+              Create your first one to start writing articles.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            class="gap-1.5"
+            onclick={() => (addingRootContext = true)}
+          >
+            <Folder class="size-3.5" />
+            New Context
+          </Button>
+        </div>
       {:else}
         <FadeIn class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
           {#each rootContexts as context (context.id)}
@@ -216,11 +244,30 @@
                     {/snippet}
                   </AlertDialog.Trigger>
                   <AlertDialog.Content>
+                    {@const descendantCount =
+                      getAllDescendantIds(context.id, allContexts).length - 1}
+                    {@const subtreeArticles = getArticleCount(context.id)}
                     <AlertDialog.Header>
                       <AlertDialog.Title>Delete {context.name}?</AlertDialog.Title>
                       <AlertDialog.Description>
-                        This removes the context and child contexts. Articles are moved to the
-                        parent context.
+                        {#if descendantCount > 0}
+                          This will also delete
+                          <span class="font-medium text-foreground">{descendantCount}</span>
+                          child context{descendantCount === 1 ? '' : 's'}.
+                        {/if}
+                        {#if subtreeArticles > 0}
+                          {descendantCount > 0 ? ' Its' : 'Its'}
+                          <span class="font-medium text-foreground">{subtreeArticles}</span>
+                          article{subtreeArticles === 1 ? '' : 's'} will move to
+                          {rootContexts.length > 1 ? 'another top-level context' : 'the parent'}.
+                        {:else if descendantCount === 0}
+                          No articles are attached to this context.
+                        {/if}
+                        {#if rootContexts.length === 1 && subtreeArticles > 0}
+                          <span class="mt-2 block text-destructive">
+                            This is the only top-level context — you need to create another one first, or the delete will be blocked.
+                          </span>
+                        {/if}
                       </AlertDialog.Description>
                     </AlertDialog.Header>
                     <AlertDialog.Footer>
@@ -265,36 +312,56 @@
         Recently Updated
       </h2>
       <div class="rounded-lg border bg-card/40">
-        {#each recentArticles as article, i (article.id)}
-          {#if i > 0}
-            <Separator />
-          {/if}
-          <div class="group flex items-center gap-3 px-4 py-3">
-            <FileText class="size-4 shrink-0 text-muted-foreground" />
-            <div class="min-w-0 flex-1">
-              <a
-                href="/wiki/{article.id}"
-                class="block truncate text-sm font-medium transition-colors hover:text-primary"
-              >
-                {article.title}
-              </a>
-              <p class="truncate text-xs text-muted-foreground">
-                {article.kbId} · {contextPath(article.primaryContextId)}
-              </p>
-            </div>
-            <div class="flex shrink-0 items-center gap-2">
-              {#if article.lockedBy}
-                <span title="Locked by {article.lockedBy}">
-                  <Lock class="size-3.5 text-warning" />
-                </span>
-              {/if}
-              <span class="flex items-center gap-1 text-xs text-muted-foreground">
-                <Clock class="size-3" />
-                {relativeTime(article.updatedAt)}
-              </span>
-            </div>
+        {#if recentQuery.isLoading}
+          <div class="px-4 py-6"><Loader /></div>
+        {:else if recentArticles.length === 0}
+          <div class="flex flex-col items-center gap-2 px-4 py-8 text-center">
+            <FileText class="size-6 text-muted-foreground/50" />
+            <div class="text-xs font-medium">No articles yet</div>
+            <p class="max-w-[16rem] text-[11px] text-muted-foreground">
+              {rootContexts.length === 0
+                ? 'Create a context first, then start writing.'
+                : 'Recent article activity will show up here as you write.'}
+            </p>
+            {#if rootContexts.length > 0}
+              <Button size="sm" variant="outline" href="/wiki/create/new" class="mt-1 gap-1.5">
+                <Plus class="size-3.5" />
+                New Article
+              </Button>
+            {/if}
           </div>
-        {/each}
+        {:else}
+          {#each recentArticles as article, i (article.id)}
+            {#if i > 0}
+              <Separator />
+            {/if}
+            <div class="group flex items-center gap-3 px-4 py-3">
+              <FileText class="size-4 shrink-0 text-muted-foreground" />
+              <div class="min-w-0 flex-1">
+                <a
+                  href="/wiki/{article.id}"
+                  class="block truncate text-sm font-medium transition-colors hover:text-primary"
+                >
+                  {article.title}
+                </a>
+                <p class="truncate text-xs text-muted-foreground">
+                  {article.kbId} · {contextPath(article.primaryContextId)}
+                </p>
+              </div>
+              <div class="flex shrink-0 items-center gap-2">
+                {#if article.lockedBy}
+                  <span title="Locked by {article.lockedBy}">
+                    <Lock class="size-3.5 text-warning" />
+                  </span>
+                {/if}
+                <span class="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Clock class="size-3" />
+                  {relativeTime(article.updatedAt)}
+                </span>
+              </div>
+            </div>
+          {/each}
+        {/if}
       </div>
     </aside>
   </div>

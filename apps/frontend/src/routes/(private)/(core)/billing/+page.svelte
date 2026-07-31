@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { getContext, untrack } from 'svelte';
+  import { getContext } from 'svelte';
   import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import { toast } from 'svelte-sonner';
 
-  import MetricCard from '$lib/components/domain/metric-card.svelte';
   import * as Card from '$lib/components/ui/card';
   import * as Tabs from '$lib/components/ui/tabs';
   import { Button } from '$lib/components/ui/button';
@@ -16,10 +15,13 @@
     DataTable,
     type DataTableColumn,
     type PaginationInput,
+    type SignalStripApi,
     type TableView,
   } from '$lib/components/data-table';
   import Loader from '$lib/components/transition/loader.svelte';
   import { toServerTableInput } from '$lib/components/domain/server-table';
+  import SignalStrip from '$lib/components/panel/signal-strip.svelte';
+  import SignalCell from '$lib/components/panel/signal-cell.svelte';
 
   import Plus from '@lucide/svelte/icons/plus';
   import Search from '@lucide/svelte/icons/search';
@@ -88,7 +90,17 @@
   let ruleFacetFilter = $state<string>('all');
 
   let reportSnapshot = $state<ReportResponse | null>(null);
-  let refreshKey = $state(0);
+  // Bump this whenever a query dependency changes so DataTable re-runs fetchData.
+  // Scope filters are the only external input the DataTable can't see natively;
+  // hashing them into a stable number keeps the effect-based refresh out of the file.
+  const refreshKey = $derived(hashScope(siteFilter, siteGroupFilter));
+
+  function hashScope(site: string, group: string): number {
+    let h = 0;
+    const s = `${site}|${group}`;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return h;
+  }
 
   const sites = $derived(filterOptionsQuery.data?.sites ?? []);
   const siteGroups = $derived(filterOptionsQuery.data?.siteGroups ?? []);
@@ -134,15 +146,6 @@
     }
     return parts.join(' · ') || 'No scope';
   }
-
-  // Bump refreshKey so DataTable re-runs fetchData when scope changes.
-  $effect(() => {
-    siteFilter;
-    siteGroupFilter;
-    untrack(() => {
-      refreshKey = refreshKey + 1;
-    });
-  });
 
   async function fetchData(input: PaginationInput) {
     const base = toServerTableInput(input, ['siteName', 'psaItemName', 'ruleName']);
@@ -514,6 +517,105 @@
   {/if}
 {/snippet}
 
+{#snippet reconciliationStrip(api: SignalStripApi)}
+  <SignalStrip
+    code="01"
+    title="Revenue Signal"
+    meta={summary
+      ? `${(summary.totalRows ?? 0).toLocaleString()} rows`
+      : 'loading'}
+  >
+    <SignalCell
+      code="U"
+      label="Underbilled MRR"
+      tone="warning"
+      onclick={() => api.addFilter({ field: 'status', operator: 'eq', value: 'underbilled' })}
+    >
+      {#if summary}
+        <div class="mt-0.5 flex items-baseline gap-2">
+          <span class="font-mono text-xl font-semibold tabular-nums text-amber-600 dark:text-amber-400">
+            {formatMoney(summary.underbilledMrr)}
+          </span>
+        </div>
+        <div class="pt-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          {summary.underbilledRows ?? 0} rows to fix
+        </div>
+      {:else}
+        <div class="h-8"></div>
+      {/if}
+    </SignalCell>
+    <SignalCell
+      code="O"
+      label="Overbilled MRR"
+      tone="destructive"
+      onclick={() => api.addFilter({ field: 'status', operator: 'eq', value: 'overbilled' })}
+    >
+      {#if summary}
+        <div class="mt-0.5 flex items-baseline gap-2">
+          <span class="font-mono text-xl font-semibold tabular-nums text-rose-600 dark:text-rose-400">
+            {formatMoney(summary.overbilledMrr)}
+          </span>
+        </div>
+        <div class="pt-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          {summary.overbilledRows ?? 0} rows to refund
+        </div>
+      {:else}
+        <div class="h-8"></div>
+      {/if}
+    </SignalCell>
+    <SignalCell code="Δ" label="Net MRR Delta">
+      {#if summary}
+        {@const net = summary.netMrrDelta ?? 0}
+        <div class="mt-0.5 flex items-baseline gap-2">
+          <span
+            class={`font-mono text-xl font-semibold tabular-nums ${net > 0 ? 'text-emerald-600 dark:text-emerald-400' : net < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-foreground'}`}
+          >
+            {formatMoney(net)}
+          </span>
+        </div>
+        <div class="pt-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          {net > 0 ? 'recoverable revenue' : net < 0 ? 'net refund exposure' : 'balanced'}
+        </div>
+      {:else}
+        <div class="h-8"></div>
+      {/if}
+    </SignalCell>
+    <SignalCell
+      code="C"
+      label="Coverage Gaps"
+      onclick={() => api.addFilter({ field: 'status', operator: 'eq', value: 'missing_rule' })}
+    >
+      {#if summary}
+        <div class="mt-0.5 flex items-baseline gap-2">
+          <span class="font-mono text-xl font-semibold tabular-nums text-foreground">
+            {(summary.missingRuleRows ?? 0).toLocaleString()}
+          </span>
+          <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            missing rule
+          </span>
+        </div>
+        <div class="pt-0.5 flex flex-wrap gap-x-3 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          <button
+            type="button"
+            class="hover:text-foreground"
+            onclick={(e) => {
+              e.stopPropagation();
+              api.addFilter({ field: 'status', operator: 'eq', value: 'missing_psa_line' });
+            }}
+          >
+            no PSA line
+            <span class="tabular-nums text-foreground">
+              {(summary.missingPsaLineRows ?? 0).toLocaleString()}
+            </span>
+          </button>
+        </div>
+      {:else}
+        <div class="h-8"></div>
+      {/if}
+    </SignalCell>
+  </SignalStrip>
+{/snippet}
+
 {#snippet statusCell({ value }: { row: EnrichedRow; value: ReportRow['status'] })}
   <span
     class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider {statusClass(
@@ -550,29 +652,6 @@
         <Plus class="size-4" />
         New rule
       </Button>
-    </div>
-
-    <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-      <MetricCard
-        label="Underbilled MRR"
-        value={formatMoney(summary?.underbilledMrr)}
-        detail={`${summary?.underbilledRows ?? 0} rows to fix`}
-      />
-      <MetricCard
-        label="Overbilled MRR"
-        value={formatMoney(summary?.overbilledMrr)}
-        detail={`${summary?.overbilledRows ?? 0} rows to refund`}
-      />
-      <MetricCard
-        label="Net MRR delta"
-        value={formatMoney(summary?.netMrrDelta)}
-        detail="Positive = recoverable revenue"
-      />
-      <MetricCard
-        label="PSA lines without rules"
-        value={summary?.missingRuleRows ?? '—'}
-        detail={`${summary?.totalRows ?? 0} total report rows`}
-      />
     </div>
   </div>
 
@@ -635,6 +714,7 @@
             defaultPageSize={50}
             defaultSort={{ field: 'monthlyDelta', dir: 'desc' }}
             globalSearchFields={['siteName', 'psaItemName', 'ruleName']}
+            signalStrip={reconciliationStrip}
           />
         </div>
 
@@ -775,10 +855,6 @@
               <span class="text-xs text-muted-foreground">
                 {filteredRules.length} of {rules.length} rules
               </span>
-              <Button size="sm" class="gap-2" onclick={openNewRule}>
-                <Plus class="size-4" />
-                New rule
-              </Button>
             </div>
           </div>
 

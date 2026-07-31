@@ -177,27 +177,53 @@ const contextsRouter = t.router({
 
       if (!target) throw new TRPCError({ code: 'NOT_FOUND' });
 
-      const fallbackContextId = target.parentId;
+      // The contexts table cascades on parent_id, so deleting a root will
+      // wipe every descendant context. Articles in *any* descendant must be
+      // reassigned first — otherwise their primary_context_id FK errors out.
+      // Walk the subtree explicitly (recursive CTE) and gather every context
+      // id under (and including) the target.
+      const descendantRows = await ctx.db.execute<{ id: string }>(sql`
+        WITH RECURSIVE subtree(id) AS (
+          SELECT id FROM wiki.contexts WHERE id = ${input.id}
+          UNION ALL
+          SELECT c.id FROM wiki.contexts c
+          INNER JOIN subtree s ON c.parent_id = s.id
+        )
+        SELECT id FROM subtree
+      `);
+      const descendantIds = [...descendantRows].map((r) => r.id);
 
-      if (fallbackContextId) {
-        await ctx.db
-          .update(articles)
-          .set({ primaryContextId: fallbackContextId })
-          .where(eq(articles.primaryContextId, input.id));
-      } else {
+      // Pick a fallback: parent if it exists, else any other root context
+      // outside this subtree.
+      let fallbackContextId: string | null = target.parentId;
+      if (!fallbackContextId) {
         const [anyRoot] = await ctx.db
           .select({ id: contexts.id })
           .from(contexts)
-          .where(and(sql`${contexts.parentId} IS NULL`, sql`${contexts.id} != ${input.id}`))
+          .where(
+            and(
+              sql`${contexts.parentId} IS NULL`,
+              sql`${contexts.id} NOT IN ${descendantIds}`
+            )
+          )
           .limit(1);
-
-        if (anyRoot) {
-          await ctx.db
-            .update(articles)
-            .set({ primaryContextId: anyRoot.id })
-            .where(eq(articles.primaryContextId, input.id));
-        }
+        fallbackContextId = anyRoot?.id ?? null;
       }
+
+      if (!fallbackContextId) {
+        // No home left for the articles. Block the delete instead of orphaning.
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message:
+            'Cannot delete the last remaining top-level context — articles have nowhere to go. Create another top-level context first.'
+        });
+      }
+
+      // Reassign every article whose primary context is inside this subtree.
+      await ctx.db
+        .update(articles)
+        .set({ primaryContextId: fallbackContextId })
+        .where(inArray(articles.primaryContextId, descendantIds));
 
       await ctx.db.delete(contexts).where(eq(contexts.id, input.id));
 
@@ -207,7 +233,11 @@ const contextsRouter = t.router({
         targetType: 'wiki_context',
         targetId: target.id,
         targetLabel: target.name,
-        metadata: { parentId: target.parentId }
+        metadata: {
+          parentId: target.parentId,
+          cascadedContextCount: descendantIds.length - 1,
+          articlesReassignedTo: fallbackContextId
+        }
       });
 
       return { success: true };

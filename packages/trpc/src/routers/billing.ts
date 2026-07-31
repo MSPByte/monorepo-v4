@@ -507,6 +507,7 @@ type ReportSummary = {
   underbilledRows: number;
   overbilledRows: number;
   missingRuleRows: number;
+  missingPsaLineRows: number;
   underbilledMrr: number;
   overbilledMrr: number;
   netMrrDelta: number;
@@ -547,6 +548,7 @@ function summarizeRows(rows: ReconciliationRow[]): ReportSummary {
         summary.overbilledMrr += Math.abs(Math.min(row.monthlyDelta, 0));
       }
       if (row.status === 'missing_rule') summary.missingRuleRows += 1;
+      if (row.status === 'missing_psa_line') summary.missingPsaLineRows += 1;
       summary.netMrrDelta += row.monthlyDelta;
       return summary;
     },
@@ -555,6 +557,7 @@ function summarizeRows(rows: ReconciliationRow[]): ReportSummary {
       underbilledRows: 0,
       overbilledRows: 0,
       missingRuleRows: 0,
+      missingPsaLineRows: 0,
       underbilledMrr: 0,
       overbilledMrr: 0,
       netMrrDelta: 0
@@ -905,6 +908,7 @@ export const billingRouter = t.router({
           underbilledRows: 0,
           overbilledRows: 0,
           missingRuleRows: 0,
+          missingPsaLineRows: 0,
           underbilledMrr: 0,
           overbilledMrr: 0,
           netMrrDelta: 0
