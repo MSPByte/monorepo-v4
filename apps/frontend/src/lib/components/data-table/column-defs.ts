@@ -104,6 +104,10 @@ export function boolBadgeColumn<T>(
     cellComponent: BoolBadgeCell,
     cellProps,
     sortable: true,
+    filter: {
+      type: 'boolean',
+      operators: ['eq', 'neq'],
+    },
     ...overrides,
   };
 }

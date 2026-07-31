@@ -57,6 +57,9 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   const labelColumnName = url.searchParams.get('labelColumn');
   const query = url.searchParams.get('query')?.trim();
   const exactValue = url.searchParams.get('exactValue')?.trim();
+  const limitParam = Number(url.searchParams.get('limit'));
+  const limit =
+    Number.isFinite(limitParam) && limitParam > 0 ? Math.min(Math.trunc(limitParam), 500) : 50;
 
   if (!tableName || !valueColumnName || !labelColumnName) {
     throw error(400, 'table, valueColumn, and labelColumn are required');
@@ -89,7 +92,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
     .from(config.table)
     .where(where)
     .orderBy(asc(labelColumn))
-    .limit(50)) as ReferenceOption[];
+    .limit(limit)) as ReferenceOption[];
 
   return json(rows);
 };

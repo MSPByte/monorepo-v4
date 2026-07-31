@@ -41,23 +41,12 @@
   });
 
   const filteredOptions = $derived.by(() => {
-    const current = options.filter((o) => selected.includes(o.value));
-    const filtered = options.filter((opt) =>
-      opt.label.toLowerCase().includes(search.toLowerCase())
-    );
+    const needle = search.toLowerCase();
+    const matches = options.filter((opt) => opt.label.toLowerCase().includes(needle));
 
-    // Sort selected items to the top (only when not actively searching)
-    if (!search) {
-      return [...filtered].sort((a, b) => {
-        const aSelected = selected.includes(a.value);
-        const bSelected = selected.includes(b.value);
-        if (aSelected && !bSelected) return -1;
-        if (!aSelected && bSelected) return 1;
-        return 0;
-      });
-    }
-
-    return current.length ? [...current, ...filtered] : filtered;
+    const selectedMatches = matches.filter((o) => selected.includes(o.value));
+    const unselectedMatches = matches.filter((o) => !selected.includes(o.value));
+    return [...selectedMatches, ...unselectedMatches];
   });
 
   const selectedOptions = $derived(options.filter((opt) => selected.includes(opt.value)));

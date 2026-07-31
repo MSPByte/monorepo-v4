@@ -142,27 +142,32 @@ async function* fetchIdentities(
   if (capabilities.signInActivity) fields.push('signInActivity');
 
   if (mode === 'full' || !cursor) {
-    const users = (await connector.users.listAll(fields.join(','))) as Array<
-      Record<string, unknown>
-    >;
+    // Role templates are small (dozens) — fetch once, then stream user pages
+    // and augment each in place. Keeps peak memory bounded by one Graph page
+    // rather than the whole directory.
     const roleTemplateIdsByUserId = await fetchRoleTemplateIdsByUserId(connector, context);
-    const records = users.map((user) => {
-      const userId = typeof user.id === 'string' ? user.id : '';
-      const roleTemplateIds = roleTemplateIdsByUserId.get(userId) ?? [];
-      return {
-        ...user,
-        _role_template_ids: roleTemplateIds
-      };
-    });
-    yield page(ProviderFacet.M365Identities, records);
+    const usersPages = connector.users.pages(fields.join(','));
+    for await (const users of usersPages) {
+      const records = (users as Array<Record<string, unknown>>).map((user) => {
+        const userId = typeof user.id === 'string' ? user.id : '';
+        return { ...user, _role_template_ids: roleTemplateIdsByUserId.get(userId) ?? [] };
+      });
+      yield page(ProviderFacet.M365Identities, records);
+    }
 
+    // Establish a fresh delta cursor for the next incremental run. The
+    // response only carries the cursor — items are discarded because we just
+    // full-synced.
     const cursorResult = await connector.users.delta(M365_IDENTITY_DELTA_FIELDS);
     return cursorResult.cursor;
   }
 
-  const result = await connector.users.delta(M365_IDENTITY_DELTA_FIELDS, cursor);
-  yield page(ProviderFacet.M365Identities, result.items);
-  return result.cursor;
+  const deltaPages = connector.users.deltaPages(M365_IDENTITY_DELTA_FIELDS, cursor);
+  while (true) {
+    const step = await deltaPages.next();
+    if (step.done) return step.value;
+    yield page(ProviderFacet.M365Identities, step.value);
+  }
 }
 
 type M365RoleTemplateRow = {
@@ -205,17 +210,39 @@ async function m365RoleTemplates(context: IngestionAdapterContext): Promise<M365
   return db.select({ templateId: m365Roles.templateId }).from(m365Roles);
 }
 
+const GROUP_MEMBER_CONCURRENCY = 8;
+
 async function* fetchGroups(connector: M365Connector): AsyncGenerator<FetchPage> {
   const groups = (await connector.groups.listAll(
     'id,displayName,description,groupTypes,mailEnabled,securityEnabled'
   )) as Array<Record<string, unknown>>;
-  const records = await Promise.all(
-    groups.map(async (group) => ({
-      ...group,
-      _member_ids: await groupMemberIds(connector, group)
-    }))
-  );
+  const records = await mapWithConcurrency(groups, GROUP_MEMBER_CONCURRENCY, async (group) => ({
+    ...group,
+    _member_ids: await groupMemberIds(connector, group)
+  }));
   yield page(ProviderFacet.M365Groups, records);
+}
+
+// Bounded-concurrency map. Prevents fan-out storms against Graph (which
+// aggressively 429s on parallel per-resource requests) while still overlapping
+// I/O for tenants with hundreds of groups.
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (true) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      results[index] = await fn(items[index]!, index);
+    }
+  };
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, worker);
+  await Promise.all(workers);
+  return results;
 }
 
 async function groupMemberIds(
@@ -282,8 +309,9 @@ async function* fetchConditionalAccessPolicies(
 async function* fetchDevices(connector: M365Connector): AsyncGenerator<FetchPage> {
   const select =
     'id,displayName,operatingSystem,operatingSystemVersion,isCompliant,isManaged,deviceOwnership,approximateLastSignInDateTime,registrationDateTime';
-  const devices = await connector.devices.listAll(select);
-  yield page(ProviderFacet.M365Devices, devices);
+  for await (const devices of connector.devices.pages(select)) {
+    yield page(ProviderFacet.M365Devices, devices);
+  }
 }
 
 async function* fetchOAuthGrants(

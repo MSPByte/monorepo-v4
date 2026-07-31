@@ -1,9 +1,10 @@
-import { Queue, UnrecoverableError, Worker } from "bullmq";
+import { UnrecoverableError, Worker } from "bullmq";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
 import { syncRuns } from "@mspbyte/drizzle";
 import { eq } from "drizzle-orm";
 import {
   assertBullMqName,
+  getOrCreateQueue,
   orgQueueName,
   pipelineJobPriority,
   QUEUES,
@@ -36,25 +37,6 @@ export function createIngestionWorker(
   redis: RedisConnection,
   queueName: string,
 ): Worker {
-  const normalizeQueues = new Map<
-    string,
-    Queue<NormalizeJobData, unknown, string>
-  >();
-
-  function getNormalizeQueue(
-    orgId: string,
-  ): Queue<NormalizeJobData, unknown, string> {
-    const name = orgQueueName(QUEUES.NORMALIZE, orgId);
-    const existing = normalizeQueues.get(name);
-    if (existing) return existing;
-
-    const queue = new Queue<NormalizeJobData, unknown, string>(name, {
-      connection: redis as never,
-    });
-    normalizeQueues.set(name, queue);
-    return queue;
-  }
-
   return new Worker<IngestionJobData, void, string>(
     queueName,
     async (job) => {
@@ -243,7 +225,13 @@ export function createIngestionWorker(
         });
         await completeRun(db, data.syncRunId);
 
-        await enqueueNormalizeJob(getNormalizeQueue(data.orgId), data);
+        await enqueueNormalizeJob(
+          getOrCreateQueue<NormalizeJobData>(
+            redis,
+            orgQueueName(QUEUES.NORMALIZE, data.orgId),
+          ),
+          data,
+        );
 
         logger.info("Ingestion job completed", {
           orgId: data.orgId,
@@ -286,7 +274,7 @@ export function createIngestionWorker(
 }
 
 async function enqueueNormalizeJob(
-  queue: Queue<NormalizeJobData, unknown, string>,
+  queue: ReturnType<typeof getOrCreateQueue<NormalizeJobData>>,
   data: IngestionJobData,
 ): Promise<void> {
   const jobId = assertBullMqName(

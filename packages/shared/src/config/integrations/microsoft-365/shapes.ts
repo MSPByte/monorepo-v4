@@ -51,6 +51,19 @@ export const M365IdentitiesShape: SchemaFields = {
     trackable: true,
     ingestPath: 'mfaEnforced',
     required: false
+  },
+  assignedRoleTemplateIds: {
+    label: 'Assigned Roles',
+    type: 'string',
+    modality: 'array',
+    trackable: true,
+    ingestPath: 'assignedRoleTemplateIds',
+    required: false,
+    reference: {
+      table: 'm365Roles',
+      valueColumn: 'templateId',
+      labelColumn: 'name'
+    }
   }
 };
 

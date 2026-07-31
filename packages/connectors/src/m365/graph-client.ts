@@ -167,17 +167,20 @@ export class M365GraphClient {
     }
   }
 
-  // Fetches all pages of a Graph collection endpoint via @odata.nextLink.
-  // If the response status is in ignoreStatuses, returns items collected so far ([] if first page).
-  async getAll<T>(url: string, opts?: { ignoreStatuses?: number[] }): Promise<T[]> {
+  // Yields each page of a Graph collection endpoint via @odata.nextLink. Use
+  // this instead of getAll when the caller can process rows incrementally —
+  // it avoids buffering the whole result set in memory for large tenants.
+  async *pages<T>(
+    url: string,
+    opts?: { ignoreStatuses?: number[] }
+  ): AsyncGenerator<T[], void, void> {
     const token = await this.getToken();
-    const items: T[] = [];
     let nextLink: string | null = url;
     while (nextLink) {
       const res = await this.fetchWithRetry(nextLink, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      if (opts?.ignoreStatuses?.includes(res.status)) return items;
+      if (opts?.ignoreStatuses?.includes(res.status)) return;
       if (res.status === 401) {
         throw Object.assign(new Error('M365 auth rejected'), { failParent: true });
       }
@@ -186,19 +189,27 @@ export class M365GraphClient {
         throw new Error(`Graph API error ${res.status}: ${nextLink} – ${body}`);
       }
       const body = (await res.json()) as { value?: T[]; '@odata.nextLink'?: string };
-      if (Array.isArray(body.value)) items.push(...body.value);
+      if (Array.isArray(body.value) && body.value.length > 0) yield body.value;
       nextLink = body['@odata.nextLink'] ?? null;
     }
+  }
+
+  // Convenience wrapper: buffers all pages into one array. Prefer `pages()`
+  // for large collections.
+  async getAll<T>(url: string, opts?: { ignoreStatuses?: number[] }): Promise<T[]> {
+    const items: T[] = [];
+    for await (const page of this.pages<T>(url, opts)) items.push(...page);
     return items;
   }
 
-  async getDelta<T>(
+  // Yields each page of a delta query. The final `return` value is the
+  // deltaLink cursor to persist for the next incremental sync.
+  async *deltaPages<T>(
     initialUrl: string,
     cursor?: string,
     opts?: { ignoreStatuses?: number[] }
-  ): Promise<{ items: T[]; cursor?: string }> {
+  ): AsyncGenerator<T[], string | undefined, void> {
     const token = await this.getToken();
-    const items: T[] = [];
     let nextLink: string | null = cursor ?? initialUrl;
     let deltaLink: string | undefined;
 
@@ -206,7 +217,7 @@ export class M365GraphClient {
       const res = await this.fetchWithRetry(nextLink, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      if (opts?.ignoreStatuses?.includes(res.status)) return { items, cursor: deltaLink };
+      if (opts?.ignoreStatuses?.includes(res.status)) return deltaLink;
       if (res.status === 401) {
         throw Object.assign(new Error('M365 auth rejected'), { failParent: true });
       }
@@ -219,11 +230,25 @@ export class M365GraphClient {
         '@odata.nextLink'?: string;
         '@odata.deltaLink'?: string;
       };
-      if (Array.isArray(body.value)) items.push(...body.value);
+      if (Array.isArray(body.value) && body.value.length > 0) yield body.value;
       nextLink = body['@odata.nextLink'] ?? null;
       deltaLink = body['@odata.deltaLink'] ?? deltaLink;
     }
 
-    return { items, cursor: deltaLink };
+    return deltaLink;
+  }
+
+  async getDelta<T>(
+    initialUrl: string,
+    cursor?: string,
+    opts?: { ignoreStatuses?: number[] }
+  ): Promise<{ items: T[]; cursor?: string }> {
+    const items: T[] = [];
+    const gen = this.deltaPages<T>(initialUrl, cursor, opts);
+    while (true) {
+      const step = await gen.next();
+      if (step.done) return { items, cursor: step.value };
+      items.push(...step.value);
+    }
   }
 }

@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
-import { Queue } from "bullmq";
 import type { Redis } from "ioredis";
 import { syncRuns, integrationLinks } from "@mspbyte/drizzle";
 import {
@@ -9,6 +8,7 @@ import {
   orgQueueName,
   QUEUES,
 } from "./queues.js";
+import { getOrCreateQueue } from "./queue-registry.js";
 import type { IngestionJobData, SyncMode } from "./ingestion.js";
 
 type Db = any;
@@ -49,9 +49,10 @@ export async function enqueueIngestionJob(
     .returning({ id: syncRuns.id });
 
   const queueName = orgQueueName(QUEUES.INGEST, params.orgId);
-  const queue = new Queue<IngestionJobData, { syncRunId: string; jobId: string }, string>(queueName, {
-    connection: redis as never,
-  });
+  const queue = getOrCreateQueue<IngestionJobData, { syncRunId: string; jobId: string }>(
+    redis,
+    queueName,
+  );
 
   try {
     const jobName = assertBullMqName(
@@ -91,8 +92,6 @@ export async function enqueueIngestionJob(
       .set({ status: "enqueue_failed", finishedAt: new Date().toISOString() })
       .where(eq(syncRuns.id, syncRun.id));
     throw error;
-  } finally {
-    await queue.close();
   }
 }
 

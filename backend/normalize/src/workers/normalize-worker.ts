@@ -1,7 +1,12 @@
-import { Queue, Worker } from "bullmq";
+import { Worker } from "bullmq";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
 import type { NormalizeJobData, PolicyJobData } from "@mspbyte/pipeline";
-import { orgQueueName, pipelineJobPriority, QUEUES } from "@mspbyte/pipeline";
+import {
+  getOrCreateQueue,
+  orgQueueName,
+  pipelineJobPriority,
+  QUEUES,
+} from "@mspbyte/pipeline";
 import { env, requireEncryptionKey } from "../env.js";
 import { serializeError } from "../errors.js";
 import { logger } from "../logger.js";
@@ -84,31 +89,25 @@ async function enqueuePolicyJob(
   bullmqJobId: string,
 ): Promise<void> {
   const queueName = orgQueueName(QUEUES.POLICY, data.orgId);
-  const queue = new Queue<PolicyJobData, unknown, string>(queueName, {
-    connection: redis as never,
-  });
+  const queue = getOrCreateQueue<PolicyJobData>(redis, queueName);
   const jobId = `policy_${data.syncRunId}_${data.type}`;
 
-  try {
-    await queue.add("policy", data, {
-      jobId,
-      attempts: 3,
-      backoff: { type: "exponential", delay: 5_000 },
-      priority: pipelineJobPriority(data.provider),
-      removeOnComplete: 1_000,
-      removeOnFail: 5_000,
-    });
-    logger.info("Policy job enqueued", {
-      orgId: data.orgId,
-      linkId: data.linkId,
-      provider: data.provider,
-      type: data.type,
-      syncRunId: data.syncRunId,
-      normalizeJobId: bullmqJobId,
-      policyJobId: jobId,
-      queueName,
-    });
-  } finally {
-    await queue.close();
-  }
+  await queue.add("policy", data, {
+    jobId,
+    attempts: 3,
+    backoff: { type: "exponential", delay: 5_000 },
+    priority: pipelineJobPriority(data.provider),
+    removeOnComplete: 1_000,
+    removeOnFail: 5_000,
+  });
+  logger.info("Policy job enqueued", {
+    orgId: data.orgId,
+    linkId: data.linkId,
+    provider: data.provider,
+    type: data.type,
+    syncRunId: data.syncRunId,
+    normalizeJobId: bullmqJobId,
+    policyJobId: jobId,
+    queueName,
+  });
 }

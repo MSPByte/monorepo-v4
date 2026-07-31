@@ -5,6 +5,7 @@ import { serializeError } from "./errors.js";
 import { registerBuiltInAdapters } from "./adapters/index.js";
 import { scheduleDueIngestion } from "./scheduler.js";
 import { createOrgWorkerManager } from "./workers/org-worker-manager.js";
+import { closeQueuesFor } from "@mspbyte/pipeline";
 
 registerBuiltInAdapters();
 
@@ -21,6 +22,7 @@ async function shutdown(signal: string) {
   if (workerRefreshInterval) clearInterval(workerRefreshInterval);
 
   await workerManager.close();
+  await closeQueuesFor(redis);
   await closeRedis(redis);
 }
 

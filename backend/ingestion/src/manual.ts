@@ -2,7 +2,7 @@ import { closeRedis, createRedis } from "./redis.js";
 import { registerBuiltInAdapters } from "./adapters/index.js";
 import { enqueueManualIngestion } from "./scheduler.js";
 import { logger } from "./logger.js";
-import type { SyncMode } from "@mspbyte/pipeline";
+import { closeQueuesFor, type SyncMode } from "@mspbyte/pipeline";
 
 type Args = {
   orgId?: string;
@@ -53,5 +53,6 @@ try {
 
   logger.info("Manual ingestion job queued", result);
 } finally {
+  await closeQueuesFor(redis);
   await closeRedis(redis);
 }

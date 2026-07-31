@@ -665,6 +665,14 @@ function buildSqlFilter(table: Record<string, unknown>, filter: unknown): unknow
       case 'missing':
         pushed.push(sql`${column} is null`);
         break;
+      case 'containsAny':
+      case 'notContainsAny': {
+        const values = toStringArray(condition.value);
+        if (values.length === 0) continue;
+        const overlap = sql`${column} && ${values}::text[]`;
+        pushed.push(op === 'containsAny' ? overlap : sql`not (${overlap})`);
+        break;
+      }
       default:
         continue;
     }
@@ -864,6 +872,14 @@ function matchesCondition(row: JsonObject, condition: unknown): boolean {
           : false;
     case 'notContains':
       return !matchesCondition(row, { ...condition, op: 'contains' });
+    case 'containsAny': {
+      const values = toStringArray(expected);
+      if (!Array.isArray(actual)) return false;
+      const rowValues = new Set(actual.map((v) => String(v)));
+      return values.some((v) => rowValues.has(v));
+    }
+    case 'notContainsAny':
+      return !matchesCondition(row, { ...condition, op: 'containsAny' });
     case 'gt':
       return comparable(actual) > comparable(expected);
     case 'gte':
@@ -957,4 +973,12 @@ function isObject(value: unknown): value is JsonObject {
 
 function toCamel(value: string): string {
   return value.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());
+}
+
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry)).filter((entry) => entry.length > 0);
+  }
+  if (typeof value === 'string' && value.length > 0) return [value];
+  return [];
 }

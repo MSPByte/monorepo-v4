@@ -1,6 +1,6 @@
 <!-- TODO: Findings Implementation -->
 <script lang="ts">
-  import { getContext } from 'svelte';
+  import { getContext, onMount } from 'svelte';
   import { useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
   import { authStore } from '$lib/stores/auth.store.svelte';
@@ -13,6 +13,7 @@
     relativeDateColumn,
   } from '$lib/components/data-table/column-defs';
   import type { DataTableColumn, RowAction } from '$lib/components/data-table/types';
+  import RolesCell from '$lib/components/data-table/cells/roles-cell.svelte';
   import IdentitySheet from './_identity-sheet.svelte';
   import ResetPasswordDialog from './_reset-password-dialog.svelte';
   import type { m365Identities } from '@mspbyte/drizzle';
@@ -28,8 +29,26 @@
   type IdentityRow = typeof m365Identities.$inferSelect & Record<string, unknown>;
 
   let selectedIdentity = $state<IdentityRow | null>(null);
+  let roleMap = $state<Record<string, string>>({});
 
-  const columns: DataTableColumn<IdentityRow>[] = [
+  onMount(async () => {
+    try {
+      const params = new URLSearchParams({
+        table: 'm365Roles',
+        valueColumn: 'templateId',
+        labelColumn: 'name',
+        limit: '500',
+      });
+      const res = await fetch(`/api/table-reference?${params}`);
+      if (!res.ok) return;
+      const rows = (await res.json()) as { value: string; label: string }[];
+      roleMap = Object.fromEntries(rows.map((r) => [r.value, r.label]));
+    } catch {
+      // Fall back to raw templateIds if the lookup fails.
+    }
+  });
+
+  const columns: DataTableColumn<IdentityRow>[] = $derived([
     textColumn<IdentityRow>('name', 'Name'),
     textColumn<IdentityRow>('email', 'Email'),
     {
@@ -56,8 +75,14 @@
       falseLabel: 'Not Enforced',
       falseVariant: 'destructive',
     }),
+    {
+      key: 'assignedRoleTemplateIds',
+      title: 'Roles',
+      cellComponent: RolesCell,
+      cellProps: { roleMap },
+    },
     relativeDateColumn<IdentityRow>('lastSignInAt', 'Last Sign-in'),
-  ];
+  ]);
 
   const canWrite = $derived(authStore.isAllowed('Vendors.Write'));
 

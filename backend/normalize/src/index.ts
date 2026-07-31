@@ -3,6 +3,7 @@ import { env } from "./env.js";
 import { serializeError } from "./errors.js";
 import { logger } from "./logger.js";
 import { createOrgWorkerManager } from "./workers/org-worker-manager.js";
+import { closeQueuesFor } from "@mspbyte/pipeline";
 
 const redis = createRedis();
 const workerManager = createOrgWorkerManager(redis);
@@ -15,6 +16,7 @@ async function shutdown(signal: string) {
   if (workerRefreshInterval) clearInterval(workerRefreshInterval);
 
   await workerManager.close();
+  await closeQueuesFor(redis);
   await closeRedis(redis);
 }
 

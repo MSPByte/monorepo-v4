@@ -19,6 +19,7 @@
   import { Textarea } from '$lib/components/ui/textarea/index.js';
   import { Switch } from '$lib/components/ui/switch/index.js';
   import SingleSelect from '$lib/components/single-select.svelte';
+  import ReferenceMultiSelect from '$lib/components/reference-multi-select.svelte';
   import TagInserter from '$lib/components/tag-inserter.svelte';
   import Separator from '$lib/components/ui/separator/separator.svelte';
 
@@ -33,7 +34,12 @@
     field: string;
     op: string;
     value: string;
+    values?: string[];
   };
+
+  function isSetOp(op: string) {
+    return op === 'containsAny' || op === 'notContainsAny';
+  }
 
   type ConditionKind = 'candidates' | 'expectations';
   type PolicyDefinition = Record<string, unknown>;
@@ -131,12 +137,19 @@
 
   function conditionFromDefinition(condition: unknown): ConditionDraft | null {
     if (!isRecord(condition) || typeof condition.field !== 'string') return null;
-    return {
+    const op = typeof condition.op === 'string' ? condition.op : 'eq';
+    const draft: ConditionDraft = {
       id: newCondition().id,
       field: condition.field,
-      op: typeof condition.op === 'string' ? condition.op : 'eq',
-      value: stringValue(condition.value),
+      op,
+      value: '',
     };
+    if (isSetOp(op)) {
+      draft.values = Array.isArray(condition.value) ? condition.value.map(stringValue) : [];
+    } else {
+      draft.value = stringValue(condition.value);
+    }
+    return draft;
   }
 
   function conditionsFromDefinition(value: unknown) {
@@ -180,6 +193,8 @@
       return [
         { value: 'contains', label: 'Contains' },
         { value: 'notContains', label: 'Does not contain' },
+        { value: 'containsAny', label: 'Contains any of' },
+        { value: 'notContainsAny', label: 'Contains none of' },
         { value: 'exists', label: 'Exists' },
         { value: 'missing', label: 'Is missing' },
       ];
@@ -255,6 +270,11 @@
     const field = fieldFor(condition.field);
     if (!field) return null;
     if (!opNeedsValue(condition.op)) return { field: field.ingestPath, op: condition.op };
+    if (isSetOp(condition.op)) {
+      const values = (condition.values ?? []).filter((v) => v.length > 0);
+      if (values.length === 0) return null;
+      return { field: field.ingestPath, op: condition.op, value: values };
+    }
     return {
       field: field.ingestPath,
       op: condition.op,
@@ -404,10 +424,17 @@
       options={ops}
       selected={condition.op}
       disabled={!selectedField}
-      onchange={(op) => updateCondition(kind, condition.id, { op, value: '' })}
+      onchange={(op) => updateCondition(kind, condition.id, { op, value: '', values: [] })}
     />
     {#if selectedField && opNeedsValue(condition.op)}
-      {#if selectedField.field.type === 'boolean'}
+      {#if isSetOp(condition.op) && selectedField.field.reference}
+        <ReferenceMultiSelect
+          ref={selectedField.field.reference}
+          selected={condition.values ?? []}
+          placeholder="Select values"
+          onchange={(values) => updateCondition(kind, condition.id, { values })}
+        />
+      {:else if selectedField.field.type === 'boolean'}
         <SingleSelect
           options={booleanOptions}
           selected={condition.value}

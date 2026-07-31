@@ -16,7 +16,12 @@ export class M365Connector {
 
   readonly users: {
     listAll: (select: string) => Promise<unknown[]>;
+    pages: (select: string) => AsyncGenerator<unknown[], void, void>;
     delta: (select: string, cursor?: string) => Promise<{ items: unknown[]; cursor?: string }>;
+    deltaPages: (
+      select: string,
+      cursor?: string
+    ) => AsyncGenerator<unknown[], string | undefined, void>;
     listForInboxRules: () => Promise<Array<{ userPrincipalName: string; accountEnabled: boolean }>>;
     authMethods: (userId: string) => Promise<{ value: Array<Record<string, unknown>> }>;
     update: (userId: string, patch: Record<string, unknown>) => Promise<void>;
@@ -43,6 +48,7 @@ export class M365Connector {
 
   readonly devices: {
     listAll: (select: string) => Promise<unknown[]>;
+    pages: (select: string) => AsyncGenerator<unknown[], void, void>;
   };
 
   readonly oauthGrants: {
@@ -96,8 +102,17 @@ export class M365Connector {
       listAll: (select) =>
         this.client.getAll(`https://graph.microsoft.com/v1.0/users?$select=${select}`),
 
+      pages: (select) =>
+        this.client.pages(`https://graph.microsoft.com/v1.0/users?$select=${select}`),
+
       delta: (select, cursor) =>
         this.client.getDelta(
+          `https://graph.microsoft.com/v1.0/users/delta?$select=${select}`,
+          cursor
+        ),
+
+      deltaPages: (select, cursor) =>
+        this.client.deltaPages(
           `https://graph.microsoft.com/v1.0/users/delta?$select=${select}`,
           cursor
         ),
@@ -167,7 +182,10 @@ export class M365Connector {
 
     this.devices = {
       listAll: (select) =>
-        this.client.getAll(`https://graph.microsoft.com/v1.0/devices?$select=${select}`)
+        this.client.getAll(`https://graph.microsoft.com/v1.0/devices?$select=${select}`),
+
+      pages: (select) =>
+        this.client.pages(`https://graph.microsoft.com/v1.0/devices?$select=${select}`)
     };
 
     this.oauthGrants = {
