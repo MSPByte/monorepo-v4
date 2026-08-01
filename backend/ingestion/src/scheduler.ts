@@ -1,16 +1,30 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
-import { getCatalogDb, getTenantServiceDbByOrgId, organization } from "@mspbyte/drizzle-catalog";
+import { and, eq, isNull } from "drizzle-orm";
+import {
+  getCatalogDb,
+  getTenantServiceDbByOrgId,
+  organization,
+  pipelineOrgWhere,
+} from "@mspbyte/drizzle-catalog";
 import { integrationLinks, integrations, syncContext } from "@mspbyte/drizzle";
 import {
   enqueueIngestionJob,
+  getActiveIngestionRunTypes,
+  getOrCreateQueue,
+  getScheduledIngestionKeys,
   hasActiveIngestionRun,
+  nextIngestionJobId,
+  orgQueueName,
+  QUEUES,
+  scheduledKey,
+  type IngestionJobData,
   type SyncMode,
 } from "@mspbyte/pipeline";
-import { INTEGRATIONS, type FacetSyncConfig, type ProviderId } from "@mspbyte/shared";
 import { env, hasMicrosoftCredentials, requireEncryptionKey } from "./env.js";
 import { logger } from "./logger.js";
+import { serializeError } from "./errors.js";
 import type { RedisConnection } from "./redis.js";
 import { maybeGetAdapter } from "./adapters/registry.js";
+import { scheduleNextRun } from "./schedule-planner.js";
 
 type Db = any;
 
@@ -25,6 +39,11 @@ export type EnqueueIngestionParams = {
   force?: boolean;
 };
 
+// Safety-net poller. In steady state, every (link, facet) already has a
+// self-scheduled delayed job sitting in Redis — this scan finds and repairs
+// the gaps: brand-new links, links whose settings changed, links whose
+// delayed job vanished (Redis eviction, worker crashed before scheduleNextRun
+// could fire, etc). Runs on a slow cadence (~5 min).
 export async function scheduleDueIngestion(
   redis: RedisConnection,
   triggerType: TriggerType = "scheduled",
@@ -35,73 +54,114 @@ export async function scheduleDueIngestion(
     .from(organization)
     .where(activeOrgWhere());
 
-  logger.info("Scanning active organizations for due ingestion work", {
+  logger.info("Safety-net scan for orgs missing scheduled ingestion", {
     orgCount: orgs.length,
-    requireDevOrgs: env.REQUIRE_DEV_ORGS,
     runtimeEnvironment: env.RUNTIME_ENVIRONMENT,
+    triggerType,
   });
 
-  for (const org of orgs) {
-    const tenant = await getTenantServiceDbByOrgId(org.id, requireEncryptionKey(), env.CATALOG_DATABASE_URL);
-    const rows = await listActiveLinks(tenant.db);
+  await runWithConcurrency(orgs, env.SCHEDULE_ORG_CONCURRENCY, async (org) => {
+    try {
+      await scanOrg(redis, org);
+    } catch (error) {
+      // Isolate per-org failures so one bad tenant DB doesn't stall the whole
+      // scan for the other orgs running in parallel.
+      logger.error("Scheduler scan failed for organization", {
+        orgId: org.id,
+        error: serializeError(error),
+      });
+    }
+  });
+}
 
-    for (const row of rows) {
-      const adapter = maybeGetAdapter(row.link.integrationId);
-      if (!adapter) {
-        logger.debug("Skipping integration link without registered ingestion adapter", {
-          orgId: org.id,
-          linkId: row.link.id,
-          integrationId: row.link.integrationId,
-        });
-        continue;
-      }
+async function scanOrg(
+  redis: RedisConnection,
+  org: { id: string; isDev: boolean },
+): Promise<void> {
+  const tenant = await getTenantServiceDbByOrgId(
+    org.id,
+    requireEncryptionKey(),
+    env.CATALOG_DATABASE_URL,
+  );
+  const rows = await listActiveLinks(tenant.db);
+  if (rows.length === 0) return;
 
-      if (!isProviderReady(row.link.integrationId)) {
-        logger.warn("Skipping integration link because provider credentials are not configured", {
-          orgId: org.id,
-          linkId: row.link.id,
-          integrationId: row.link.integrationId,
-        });
-        continue;
-      }
+  // One Redis fetch per org: pull every delayed/waiting/active/paused job in
+  // the ingest queue and build a Set of (linkId::facet) keys we can check
+  // inline. Cheap even for hundreds of scheduled facets.
+  const scheduled = await getScheduledIngestionKeys(redis, org.id);
 
-      if (row.credentialExpiration && new Date(row.credentialExpiration).getTime() <= Date.now()) {
-        logger.warn("Skipping integration link with expired credentials", {
-          orgId: org.id,
-          linkId: row.link.id,
-          integrationId: row.link.integrationId,
-        });
-        continue;
-      }
+  for (const row of rows) {
+    const adapter = maybeGetAdapter(row.link.integrationId);
+    if (!adapter) {
+      logger.debug("Skipping integration link without registered ingestion adapter", {
+        orgId: org.id,
+        linkId: row.link.id,
+        integrationId: row.link.integrationId,
+      });
+      continue;
+    }
 
-      for (const type of adapter.types) {
-        if (await hasActiveIngestionRun(tenant.db, row.link.id, type, env.ACTIVE_RUN_STALE_MS)) continue;
+    if (!isProviderReady(row.link.integrationId)) {
+      logger.warn("Skipping integration link because provider credentials are not configured", {
+        orgId: org.id,
+        linkId: row.link.id,
+        integrationId: row.link.integrationId,
+      });
+      continue;
+    }
 
-        const decision = await decideSyncMode(tenant.db, row.link.id, row.link.integrationId, type);
-        if (!decision.due) continue;
+    if (row.credentialExpiration && new Date(row.credentialExpiration).getTime() <= Date.now()) {
+      logger.warn("Skipping integration link with expired credentials", {
+        orgId: org.id,
+        linkId: row.link.id,
+        integrationId: row.link.integrationId,
+      });
+      continue;
+    }
 
-        const result = await enqueueIngestionJob(redis, tenant.db, {
-          orgId: org.id,
-          link: row.link,
-          integrationConfig: row.integrationConfig,
-          type,
-          mode: decision.mode,
-          cursor: decision.cursor,
-        });
+    // In-flight syncRuns block scheduling: a manual run may be executing right
+    // now, and the worker's finally block will re-schedule the delayed next on
+    // completion.
+    const activeTypes = await getActiveIngestionRunTypes(
+      tenant.db,
+      row.link.id,
+      env.ACTIVE_RUN_STALE_MS,
+    );
 
-        logger.info("Queued ingestion job", {
-          orgId: org.id,
-          linkId: row.link.id,
-          integrationId: row.link.integrationId,
-          type,
-          mode: decision.mode,
-          syncRunId: result.syncRunId,
-          bullmqJobId: result.jobId,
-          triggerType,
-        });
-      }
+    for (const facet of adapter.types) {
+      if (scheduled.has(scheduledKey(row.link.id, facet))) continue;
+      if (activeTypes.has(facet)) continue;
+
+      await scheduleNextRun(redis, tenant.db, {
+        orgId: org.id,
+        linkId: row.link.id,
+        integrationId: row.link.integrationId,
+        siteId: row.link.siteId ?? undefined,
+        externalId: row.link.externalId,
+        linkMeta: row.link.meta,
+        integrationConfig: row.integrationConfig,
+        facet,
+      });
     }
   }
+}
+
+async function runWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  const limit = Math.max(1, Math.min(concurrency, items.length));
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      await fn(items[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: limit }, worker));
 }
 
 export async function enqueueManualIngestion(
@@ -141,6 +201,18 @@ export async function enqueueManualIngestion(
       ? await getStoredCursor(tenant.db, params.linkId, row.link.integrationId, params.type)
       : undefined;
 
+  // Cancel any delayed "next" job for this (link, facet). Otherwise the
+  // manual run + delayed next could both fire close together, doubling work.
+  // The worker's finally block will re-schedule a fresh delayed next when the
+  // manual run completes.
+  const queue = getOrCreateQueue<IngestionJobData>(
+    redis,
+    orgQueueName(QUEUES.INGEST, params.orgId),
+  );
+  await queue.remove(nextIngestionJobId(params.linkId, params.type)).catch(() => {
+    /* noop */
+  });
+
   const result = await enqueueIngestionJob(redis, tenant.db, {
     orgId: params.orgId,
     link: row.link,
@@ -177,68 +249,10 @@ async function listActiveLinks(db: Db) {
 }
 
 function activeOrgWhere() {
-  const filters = [eq(organization.status, "active")];
-
-  if (env.REQUIRE_DEV_ORGS) filters.push(eq(organization.isDev, true));
-  if (env.TARGET_ORG_IDS.length > 0) {
-    filters.push(inArray(organization.id, env.TARGET_ORG_IDS));
-  }
-
-  return and(...filters);
-}
-
-async function decideSyncMode(
-  db: Db,
-  linkId: string,
-  integrationId: string,
-  type: string,
-): Promise<{ due: boolean; mode: SyncMode; cursor?: string }> {
-  const syncConfig = getFacetSyncConfig(integrationId, type);
-  if (syncConfig?.enabled === false) return { due: false, mode: "full" };
-
-  const [context] = await db
-    .select()
-    .from(syncContext)
-    .where(
-      and(
-        eq(syncContext.linkId, linkId),
-        eq(syncContext.integrationId, integrationId),
-        eq(syncContext.type, type),
-      ),
-    )
-    .limit(1);
-
-  if (!context?.lastSuccessAt) return { due: true, mode: "full" };
-
-  if (!syncConfig?.supportsIncremental) {
-    const intervalMs = syncConfig?.intervalMs ?? env.FULL_SYNC_INTERVAL_MS;
-    return {
-      due: Date.now() - dateMs(context.lastSuccessAt)! >= intervalMs,
-      mode: "full",
-    };
-  }
-
-  const now = Date.now();
-  const fullIntervalMs = syncConfig.fullIntervalMs ?? syncConfig.intervalMs ?? env.FULL_SYNC_INTERVAL_MS;
-  const incrementalIntervalMs =
-    syncConfig.incrementalIntervalMs ?? syncConfig.intervalMs ?? env.INCREMENTAL_SYNC_INTERVAL_MS;
-  const lastFullAt = dateMs(context.fullSyncAt);
-  const lastIncrementalAt = dateMs(context.incrementalSyncAt ?? context.lastSuccessAt);
-
-  if (!lastFullAt || now - lastFullAt >= fullIntervalMs) {
-    return { due: true, mode: "full" };
-  }
-
-  if (context.cursor && (!lastIncrementalAt || now - lastIncrementalAt >= incrementalIntervalMs)) {
-    return { due: true, mode: "incremental", cursor: context.cursor };
-  }
-
-  return { due: false, mode: "full" };
-}
-
-function getFacetSyncConfig(integrationId: string, type: string): FacetSyncConfig | undefined {
-  const integration = INTEGRATIONS[integrationId as ProviderId];
-  return integration?.supportedFacets.find((facet) => facet.facet === type)?.sync;
+  return pipelineOrgWhere({
+    isProduction: env.IS_PRODUCTION,
+    targetOrgIds: env.TARGET_ORG_IDS,
+  });
 }
 
 function isProviderReady(integrationId: string): boolean {
@@ -265,11 +279,4 @@ async function getStoredCursor(
     .limit(1);
 
   return context?.cursor ?? undefined;
-}
-
-function dateMs(value: string | Date | null | undefined): number | undefined {
-  if (!value) return undefined;
-  const date = value instanceof Date ? value : new Date(value);
-  const time = date.getTime();
-  return Number.isNaN(time) ? undefined : time;
 }

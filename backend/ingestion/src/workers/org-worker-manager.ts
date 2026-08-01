@@ -1,6 +1,5 @@
 import type { Worker } from "bullmq";
-import { and, eq, inArray } from "drizzle-orm";
-import { getCatalogDb, organization } from "@mspbyte/drizzle-catalog";
+import { getCatalogDb, organization, pipelineOrgWhere } from "@mspbyte/drizzle-catalog";
 import { orgQueueName, QUEUES } from "@mspbyte/pipeline";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
@@ -27,7 +26,6 @@ export function createOrgWorkerManager(redis: RedisConnection) {
       logger.info("Started ingestion worker for organization", {
         orgId,
         queueName,
-        requireDevOrgs: env.REQUIRE_DEV_ORGS,
         runtimeEnvironment: env.RUNTIME_ENVIRONMENT,
       });
     }
@@ -52,11 +50,8 @@ export function createOrgWorkerManager(redis: RedisConnection) {
 }
 
 function activeOrgWhere() {
-  const filters = [eq(organization.status, "active")];
-
-  if (env.TARGET_ORG_IDS.length > 0) {
-    filters.push(inArray(organization.id, env.TARGET_ORG_IDS));
-  }
-
-  return and(...filters);
+  return pipelineOrgWhere({
+    isProduction: env.IS_PRODUCTION,
+    targetOrgIds: env.TARGET_ORG_IDS,
+  });
 }

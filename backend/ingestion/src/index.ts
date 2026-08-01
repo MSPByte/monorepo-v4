@@ -4,6 +4,11 @@ import { logger } from "./logger.js";
 import { serializeError } from "./errors.js";
 import { registerBuiltInAdapters } from "./adapters/index.js";
 import { scheduleDueIngestion } from "./scheduler.js";
+import {
+  acquireSchedulerLease,
+  releaseSchedulerLease,
+  schedulerInstanceId,
+} from "./scheduler-lock.js";
 import { createOrgWorkerManager } from "./workers/org-worker-manager.js";
 import { closeQueuesFor } from "@mspbyte/pipeline";
 
@@ -22,8 +27,28 @@ async function shutdown(signal: string) {
   if (workerRefreshInterval) clearInterval(workerRefreshInterval);
 
   await workerManager.close();
+  if (env.SCHEDULER_ENABLED) await releaseSchedulerLease(redis);
   await closeQueuesFor(redis);
   await closeRedis(redis);
+}
+
+async function runSchedulerTick(): Promise<void> {
+  const lease = await acquireSchedulerLease(redis, env.SCHEDULER_LOCK_TTL_MS).catch((error) => {
+    logger.error("Failed to acquire scheduler lease", { error: serializeError(error) });
+    return { acquired: false };
+  });
+  if (!lease.acquired) {
+    logger.debug("Scheduler lease held by another replica; skipping tick", {
+      instanceId: schedulerInstanceId(),
+    });
+    return;
+  }
+
+  try {
+    await scheduleDueIngestion(redis, "scheduled");
+  } catch (error) {
+    logger.error("Scheduled ingestion scan failed", { error: serializeError(error) });
+  }
 }
 
 await workerManager.sync();
@@ -35,12 +60,10 @@ workerRefreshInterval = setInterval(() => {
 }, env.WORKER_REFRESH_INTERVAL_MS);
 
 if (env.SCHEDULER_ENABLED) {
-  await scheduleDueIngestion(redis, "scheduled");
+  await runSchedulerTick();
 
   schedulerInterval = setInterval(() => {
-    void scheduleDueIngestion(redis, "scheduled").catch((error) => {
-      logger.error("Scheduled ingestion scan failed", { error: serializeError(error) });
-    });
+    void runSchedulerTick();
   }, env.SCHEDULE_INTERVAL_MS);
 }
 

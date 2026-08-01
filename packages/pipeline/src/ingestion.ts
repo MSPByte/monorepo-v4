@@ -13,7 +13,11 @@ export type IngestionJobData = {
   integrationId: IngestionProviderId;
   provider: IngestionProviderId;
   type: IngestionFacet;
-  syncRunId: string;
+  // Optional at enqueue time. Immediate enqueues (manual / one-shot) create
+  // the syncRuns row up front for early lifecycle tracking; delayed
+  // self-scheduled enqueues omit it so we don't keep hours-old "pending" runs
+  // in the DB. The worker creates one at start when this is absent.
+  syncRunId?: string;
   mode: SyncMode;
   cursor?: string;
   linkMeta?: Record<string, unknown>;

@@ -1,7 +1,7 @@
 import { UnrecoverableError, Worker } from "bullmq";
+import { eq } from "drizzle-orm";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
 import { syncRuns } from "@mspbyte/drizzle";
-import { eq } from "drizzle-orm";
 import {
   assertBullMqName,
   getOrCreateQueue,
@@ -32,6 +32,7 @@ import {
 import { projectionSteps } from "../contracts/registry.js";
 import { runProjectionSteps } from "../contracts/runner.js";
 import { serializeError } from "../errors.js";
+import { scheduleNextRun } from "../schedule-planner.js";
 
 export function createIngestionWorker(
   redis: RedisConnection,
@@ -49,7 +50,11 @@ export function createIngestionWorker(
       );
 
       const db = tenant.db;
-      const bullmqJobId = String(job.id ?? data.syncRunId);
+      // Delayed / self-scheduled jobs don't create a syncRuns row up front
+      // (they'd otherwise sit as "pending" for hours). Create one on demand
+      // when the job actually starts running.
+      const syncRunId = data.syncRunId ?? (await createSyncRunAtStart(db, data, String(job.id)));
+      const bullmqJobId = String(job.id ?? syncRunId);
       let ingestStageId: string | undefined;
       let projectStageId: string | undefined;
       let batchIndex = 0;
@@ -68,39 +73,42 @@ export function createIngestionWorker(
         provider: data.provider,
         type: data.type,
         mode: data.mode,
-        syncRunId: data.syncRunId,
+        syncRunId,
         jobId: bullmqJobId,
       });
 
-      const [syncRun] = await db
-        .select({ id: syncRuns.id })
-        .from(syncRuns)
-        .where(eq(syncRuns.id, data.syncRunId))
-        .limit(1);
-      if (!syncRun) {
-        logger.warn("Discarding orphaned ingestion job because sync run is missing", {
-          orgId: data.orgId,
-          linkId: data.linkId,
-          provider: data.provider,
-          type: data.type,
-          syncRunId: data.syncRunId,
-          jobId: bullmqJobId,
-        });
-        throw new UnrecoverableError(
-          `Ingestion sync run ${data.syncRunId} is missing for job ${bullmqJobId}`,
-        );
+      if (data.syncRunId) {
+        // Pre-created row (manual / immediate enqueue) — confirm it exists.
+        const [existing] = await db
+          .select({ id: syncRuns.id })
+          .from(syncRuns)
+          .where(eq(syncRuns.id, data.syncRunId))
+          .limit(1);
+        if (!existing) {
+          logger.warn("Discarding orphaned ingestion job because sync run is missing", {
+            orgId: data.orgId,
+            linkId: data.linkId,
+            provider: data.provider,
+            type: data.type,
+            syncRunId: data.syncRunId,
+            jobId: bullmqJobId,
+          });
+          throw new UnrecoverableError(
+            `Ingestion sync run ${data.syncRunId} is missing for job ${bullmqJobId}`,
+          );
+        }
       }
 
       try {
         ingestStageId = await startStage(db, {
-          syncRunId: data.syncRunId,
+          syncRunId,
           integrationId: data.integrationId,
           bullmqJobId,
           type: data.type,
           stage: "ingest",
         });
         projectStageId = await startStage(db, {
-          syncRunId: data.syncRunId,
+          syncRunId,
           integrationId: data.integrationId,
           bullmqJobId,
           type: data.type,
@@ -133,7 +141,7 @@ export function createIngestionWorker(
               siteId: data.siteId,
               provider: data.provider,
               type: data.type,
-              syncRunId: data.syncRunId,
+              syncRunId,
               mode: data.mode,
               batchIndex,
             };
@@ -209,7 +217,7 @@ export function createIngestionWorker(
             linkId: data.linkId,
             provider: data.provider,
             type: data.type,
-            syncRunId: data.syncRunId,
+            syncRunId,
             rawBatchId: bullmqJobId,
           },
           projectionSteps,
@@ -223,7 +231,7 @@ export function createIngestionWorker(
           mode: data.mode,
           cursor: nextCursor,
         });
-        await completeRun(db, data.syncRunId);
+        await completeRun(db, syncRunId);
 
         await enqueueNormalizeJob(
           getOrCreateQueue<NormalizeJobData>(
@@ -231,6 +239,7 @@ export function createIngestionWorker(
             orgQueueName(QUEUES.NORMALIZE, data.orgId),
           ),
           data,
+          syncRunId,
         );
 
         logger.info("Ingestion job completed", {
@@ -238,7 +247,7 @@ export function createIngestionWorker(
           linkId: data.linkId,
           provider: data.provider,
           type: data.type,
-          syncRunId: data.syncRunId,
+          syncRunId,
           recordsIn,
           projected: projectTotals,
           batches: batchIndex,
@@ -252,23 +261,58 @@ export function createIngestionWorker(
           type: data.type,
           error,
         });
-        await failRun(db, data.syncRunId, error);
+        await failRun(db, syncRunId, error);
 
         logger.error("Ingestion job failed", {
           orgId: data.orgId,
           linkId: data.linkId,
           provider: data.provider,
           type: data.type,
-          syncRunId: data.syncRunId,
+          syncRunId,
           error: serializeError(error),
         });
 
         throw error;
+      } finally {
+        // Self-schedule the next run for this (link, facet). Fires on both
+        // success and terminal failure so a broken integration continues to
+        // retry on its backoff schedule instead of stalling forever. Errors
+        // here are logged but never thrown — the safety-net poller will
+        // catch a missing schedule within a few minutes anyway.
+        try {
+          await scheduleNextRun(redis, db, {
+            orgId: data.orgId,
+            linkId: data.linkId,
+            integrationId: data.integrationId,
+            siteId: data.siteId,
+            externalId:
+              typeof data.linkMeta?.externalId === "string"
+                ? (data.linkMeta.externalId as string)
+                : null,
+            linkMeta: data.linkMeta,
+            integrationConfig: data.integrationConfig,
+            facet: data.type,
+          });
+        } catch (scheduleError) {
+          logger.error("Failed to schedule next ingestion run", {
+            orgId: data.orgId,
+            linkId: data.linkId,
+            provider: data.provider,
+            type: data.type,
+            error: serializeError(scheduleError),
+          });
+        }
       }
     },
     {
       connection: redis as never,
       concurrency: env.WORKER_CONCURRENCY,
+      // Ingestion runs can span several minutes on large tenants (M365 full
+      // sync, PowerShell facets). BullMQ's default 30s lock would let another
+      // worker steal the job and cause duplicate ingestion. BullMQ auto-renews
+      // the lock in the background — this is just the timeout if renewal
+      // fails.
+      lockDuration: env.WORKER_LOCK_DURATION_MS,
     },
   );
 }
@@ -276,9 +320,10 @@ export function createIngestionWorker(
 async function enqueueNormalizeJob(
   queue: ReturnType<typeof getOrCreateQueue<NormalizeJobData>>,
   data: IngestionJobData,
+  syncRunId: string,
 ): Promise<void> {
   const jobId = assertBullMqName(
-    `normalize_${data.syncRunId}_${data.type}`,
+    `normalize_${syncRunId}_${data.type}`,
     "BullMQ job id",
   );
   await queue.add(
@@ -289,7 +334,7 @@ async function enqueueNormalizeJob(
       siteId: data.siteId,
       provider: data.provider,
       type: data.type,
-      syncRunId: data.syncRunId,
+      syncRunId,
     },
     {
       jobId,
@@ -300,6 +345,31 @@ async function enqueueNormalizeJob(
       removeOnFail: 5_000,
     },
   );
+}
+
+// Creates the syncRuns row on demand for delayed / self-scheduled jobs that
+// arrive without a pre-created row. Immediate-enqueue paths (manual runs,
+// tRPC) still create the row up front so the frontend can show "queued"
+// state immediately after the API call.
+async function createSyncRunAtStart(
+  db: any,
+  data: IngestionJobData,
+  bullmqJobId: string,
+): Promise<string> {
+  const now = new Date().toISOString();
+  const [row] = await db
+    .insert(syncRuns)
+    .values({
+      linkId: data.linkId,
+      integrationId: data.integrationId,
+      bullmqJobId,
+      type: data.type,
+      status: "running",
+      mode: data.mode,
+      startedAt: now,
+    })
+    .returning({ id: syncRuns.id });
+  return row.id;
 }
 
 function chunk<T>(items: T[], size: number): T[][] {

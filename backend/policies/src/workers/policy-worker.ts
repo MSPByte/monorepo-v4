@@ -72,6 +72,7 @@ export function createPolicyWorker(
     {
       connection: redis as never,
       concurrency: env.WORKER_CONCURRENCY,
+      lockDuration: env.WORKER_LOCK_DURATION_MS,
     },
   );
 }

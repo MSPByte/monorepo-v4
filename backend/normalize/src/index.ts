@@ -40,6 +40,5 @@ process.once("SIGTERM", () => {
 
 logger.info("backend/normalize has started", {
   workerConcurrency: env.WORKER_CONCURRENCY,
-  requireDevOrgs: env.REQUIRE_DEV_ORGS,
   runtimeEnvironment: env.RUNTIME_ENVIRONMENT,
 });

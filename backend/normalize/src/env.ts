@@ -9,12 +9,6 @@ function integer(name: string, fallback: number): number {
   return parsed;
 }
 
-function boolean(name: string, fallback: boolean): boolean {
-  const value = process.env[name];
-  if (!value) return fallback;
-  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
-}
-
 function stringList(name: string, fallback?: string): string[] {
   const value = process.env[name] ?? fallback;
   if (!value) return [];
@@ -48,15 +42,11 @@ export const env = {
   LOG_LEVEL: process.env.LOG_LEVEL ?? "info",
   WORKER_CONCURRENCY: integer("NORMALIZE_WORKER_CONCURRENCY", 4),
   WORKER_REFRESH_INTERVAL_MS: integer("NORMALIZE_WORKER_REFRESH_INTERVAL_MS", 60_000),
-  REQUIRE_DEV_ORGS: boolean("NORMALIZE_REQUIRE_DEV_ORGS", !IS_PRODUCTION),
+  WORKER_LOCK_DURATION_MS: integer("NORMALIZE_WORKER_LOCK_DURATION_MS", 5 * 60_000),
   TARGET_ORG_IDS: stringList("NORMALIZE_ORG_IDS", process.env.PIPELINE_ORG_IDS),
 };
 
 export function requireEncryptionKey(): string {
   if (!env.ENCRYPTION_KEY) throw new Error("ENCRYPTION_KEY is not set");
   return env.ENCRYPTION_KEY;
-}
-
-export function canProcessOrg(org: { isDev: boolean }): boolean {
-  return !env.REQUIRE_DEV_ORGS || org.isDev;
 }

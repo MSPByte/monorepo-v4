@@ -79,6 +79,7 @@ export function createNormalizeWorker(
     {
       connection: redis as never,
       concurrency: env.WORKER_CONCURRENCY,
+      lockDuration: env.WORKER_LOCK_DURATION_MS,
     },
   );
 }

@@ -5,7 +5,9 @@ import { syncRuns, integrationLinks } from "@mspbyte/drizzle";
 import {
   assertBullMqName,
   ingestionRootJobId,
+  nextIngestionJobId,
   orgQueueName,
+  pipelineJobPriority,
   QUEUES,
 } from "./queues.js";
 import { getOrCreateQueue } from "./queue-registry.js";
@@ -95,35 +97,143 @@ export async function enqueueIngestionJob(
   }
 }
 
+export type EnqueueNextIngestionParams = {
+  orgId: string;
+  linkId: string;
+  integrationId: string;
+  siteId?: string;
+  externalId?: string | null;
+  linkMeta?: unknown;
+  integrationConfig?: unknown;
+  type: string;
+  mode: SyncMode;
+  cursor?: string;
+  delayMs: number;
+};
+
+// Enqueues the *next* scheduled run of an ingestion facet as a delayed
+// BullMQ job. Uses a deterministic jobId so redundant enqueue attempts (from
+// the worker at completion + the safety-net poller) are dedup'd. Unlike
+// enqueueIngestionJob, this does not create a syncRuns row — the worker
+// creates one when the job actually starts, so we don't accumulate hours-old
+// "pending" rows for facets that run every few hours.
+export async function enqueueNextIngestion(
+  redis: Redis,
+  params: EnqueueNextIngestionParams,
+): Promise<{ jobId: string; delayMs: number }> {
+  const queueName = orgQueueName(QUEUES.INGEST, params.orgId);
+  const queue = getOrCreateQueue<IngestionJobData>(redis, queueName);
+  const jobId = nextIngestionJobId(params.linkId, params.type);
+
+  // Remove any prior scheduled entry (delayed / waiting / completed / failed)
+  // so the new delay + payload actually take effect. `remove` is a no-op if
+  // the job doesn't exist.
+  await queue.remove(jobId).catch(() => {
+    /* noop */
+  });
+
+  const jobName = assertBullMqName(
+    `ingest_${params.integrationId}_${params.type}_next`,
+    "BullMQ job name",
+  );
+
+  await queue.add(
+    jobName,
+    {
+      orgId: params.orgId,
+      linkId: params.linkId,
+      siteId: params.siteId,
+      integrationId: params.integrationId,
+      provider: params.integrationId,
+      type: params.type,
+      mode: params.mode,
+      cursor: params.cursor,
+      linkMeta: linkMetaWithExternalId(params.linkMeta, params.externalId ?? null),
+      integrationConfig: asRecord(params.integrationConfig),
+    },
+    {
+      jobId,
+      delay: Math.max(0, params.delayMs),
+      attempts: 3,
+      backoff: { type: "exponential", delay: 5_000 },
+      priority: pipelineJobPriority(params.integrationId),
+      removeOnComplete: 100,
+      removeOnFail: 500,
+    },
+  );
+
+  return { jobId, delayMs: Math.max(0, params.delayMs) };
+}
+
+// Returns the set of (linkId, facet) tuples that already have a
+// scheduled / waiting / active job in this org's ingest queue. Used by the
+// safety-net poller to skip facets that don't need re-scheduling.
+export async function getScheduledIngestionKeys(
+  redis: Redis,
+  orgId: string,
+): Promise<Set<string>> {
+  const queueName = orgQueueName(QUEUES.INGEST, orgId);
+  const queue = getOrCreateQueue<IngestionJobData>(redis, queueName);
+  const jobs = await queue.getJobs(["delayed", "waiting", "active", "paused"]);
+  const keys = new Set<string>();
+  for (const job of jobs) {
+    if (!job?.data) continue;
+    keys.add(scheduledKey(job.data.linkId, job.data.type));
+  }
+  return keys;
+}
+
+export function scheduledKey(linkId: string, facet: string): string {
+  return `${linkId}::${facet}`;
+}
+
 export async function hasActiveIngestionRun(
   db: Db,
   linkId: string,
   type: string,
   staleAfterMs: number,
 ): Promise<boolean> {
-  const [run] = await db
-    .select({ id: syncRuns.id, createdAt: syncRuns.createdAt })
+  const active = await getActiveIngestionRunTypes(db, linkId, staleAfterMs);
+  return active.has(type);
+}
+
+// Batched version of hasActiveIngestionRun — one query per link returns the
+// set of facet types with an in-flight run. Stale runs are marked failed as
+// a side effect so the caller sees only fresh in-flight work.
+export async function getActiveIngestionRunTypes(
+  db: Db,
+  linkId: string,
+  staleAfterMs: number,
+): Promise<Set<string>> {
+  const runs = await db
+    .select({ id: syncRuns.id, type: syncRuns.type, createdAt: syncRuns.createdAt })
     .from(syncRuns)
     .where(
       and(
         eq(syncRuns.linkId, linkId),
-        eq(syncRuns.type, type),
         inArray(syncRuns.status, ["pending", "queued", "running"]),
       ),
-    )
-    .limit(1);
-
-  if (!run) return false;
+    );
 
   const staleBefore = Date.now() - staleAfterMs;
-  if (new Date(run.createdAt).getTime() > staleBefore) return true;
+  const active = new Set<string>();
+  const staleIds: string[] = [];
 
-  await db
-    .update(syncRuns)
-    .set({ status: "failed", finishedAt: new Date().toISOString() })
-    .where(eq(syncRuns.id, run.id));
+  for (const run of runs as Array<{ id: string; type: string; createdAt: string | Date }>) {
+    const createdMs =
+      run.createdAt instanceof Date ? run.createdAt.getTime() : new Date(run.createdAt).getTime();
+    if (createdMs > staleBefore) active.add(run.type);
+    else staleIds.push(run.id);
+  }
 
-  return false;
+  if (staleIds.length > 0) {
+    await db
+      .update(syncRuns)
+      .set({ status: "failed", finishedAt: new Date().toISOString() })
+      .where(inArray(syncRuns.id, staleIds));
+  }
+
+  return active;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

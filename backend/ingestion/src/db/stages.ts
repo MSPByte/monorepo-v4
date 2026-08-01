@@ -1,7 +1,6 @@
-import { and, eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { syncContext, syncRuns, syncRunStages } from "@mspbyte/drizzle";
 import type { SyncMode } from "@mspbyte/pipeline";
-import { sql } from "drizzle-orm";
 
 type Db = any;
 
@@ -139,27 +138,17 @@ export async function recordFetchFailure(
   },
 ): Promise<void> {
   const now = new Date().toISOString();
-  const [existing] = await db
-    .select({ consecutiveFailures: syncContext.consecutiveFailures })
-    .from(syncContext)
-    .where(
-      and(
-        eq(syncContext.linkId, params.linkId),
-        eq(syncContext.integrationId, params.integrationId),
-        eq(syncContext.type, params.type),
-      ),
-    )
-    .limit(1);
 
-  const consecutiveFailures = (existing?.consecutiveFailures ?? 0) + 1;
-
+  // Increment in a single UPSERT so concurrent failures for the same
+  // (link, integration, type) tuple can't lose updates. The row starts at 1
+  // on first insert, and each conflict adds 1 to the current row value.
   await db
     .insert(syncContext)
     .values({
       linkId: params.linkId,
       integrationId: params.integrationId,
       type: params.type,
-      consecutiveFailures,
+      consecutiveFailures: 1,
       lastFailureAt: now,
       lastErrorClass: errorClass(params.error),
       lastErrorMessage: errorMessage(params.error),
@@ -168,7 +157,7 @@ export async function recordFetchFailure(
     .onConflictDoUpdate({
       target: [syncContext.linkId, syncContext.integrationId, syncContext.type],
       set: {
-        consecutiveFailures,
+        consecutiveFailures: sql`${syncContext.consecutiveFailures} + 1`,
         lastFailureAt: now,
         lastErrorClass: errorClass(params.error),
         lastErrorMessage: errorMessage(params.error),
