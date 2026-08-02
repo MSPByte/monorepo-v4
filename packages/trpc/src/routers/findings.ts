@@ -59,6 +59,44 @@ function tableLabel(table?: string | null): string | null {
   return getPolicyTableShape(table)?.label ?? toProper(table.split('.').pop() ?? table);
 }
 
+// Return the fully-qualified physical table name (schema.table_snake) for a
+// PolicyTableShape identifier. `null` if the table isn't in the registry.
+function physicalTableName(table: string): string | null {
+  const shape = getPolicyTableShape(table);
+  if (!shape) return null;
+  const snake = shape.table.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+  const schema =
+    shape.targetType === 'person' || shape.targetType === 'asset' ? 'canonical' : 'vendors';
+  return `${schema}.${snake}`;
+}
+
+const FRIENDLY_FIELDS = ['email', 'hostname', 'display_name', 'name'] as const;
+
+// Look up a human-readable label for a vendor/canonical row, so DATA SOURCES
+// shows "alice@contoso.com" instead of a Graph object id.
+async function friendlyVendorName(
+  db: any,
+  table: string,
+  recordId: string
+): Promise<string | null> {
+  const fqn = physicalTableName(table);
+  if (!fqn) return null;
+  try {
+    const rows = (await db.execute(sql`
+      select to_jsonb(t.*) as data from ${sql.raw(fqn)} t where t.id = ${recordId} limit 1
+    `)) as Iterable<{ data: Record<string, unknown> | null }>;
+    const data = [...rows][0]?.data;
+    if (!data || typeof data !== 'object') return null;
+    for (const field of FRIENDLY_FIELDS) {
+      const value = (data as Record<string, unknown>)[field];
+      if (typeof value === 'string' && value.length > 0) return value;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function canonicalHref(
   resourceType: string,
   resourceId: string,
@@ -192,10 +230,17 @@ export const findingsRouter = t.router({
     // For integration_link-scoped findings (e.g. tenant-wide policy count checks)
     // the view falls back to the raw resource_id (link UUID) since no canonical
     // asset/person joined. Prefer the human-readable link name.
-    const canonicalName =
+    let canonicalName =
       row.resourceType === 'integration_link' && row.linkName && row.linkName !== '-'
         ? row.linkName
         : row.resourceName;
+    // If the resource is a vendor row (e.g. m365_identity), the view coalesces
+    // resource_name down to the external id. Swap in a friendly field from the
+    // vendor row (email/hostname/display_name/name) when available.
+    if (row.resourceTable && row.resourceType !== 'person' && row.resourceType !== 'asset') {
+      const friendly = await friendlyVendorName(ctx.db, row.resourceTable, row.resourceId);
+      if (friendly) canonicalName = friendly;
+    }
     dataSources.push({
       kind: 'canonical',
       label: canonicalLabel,
@@ -219,20 +264,25 @@ export const findingsRouter = t.router({
         )
         .catch(() => []);
       const seen = new Set<string>();
-      for (const source of sources) {
+      const friendlyLookups = await Promise.all(
+        sources.map((source) =>
+          friendlyVendorName(ctx.db, source.vendorTable, source.vendorRecordId)
+        )
+      );
+      sources.forEach((source, index) => {
         const key = `${source.vendorTable}:${source.externalId}`;
-        if (seen.has(key)) continue;
+        if (seen.has(key)) return;
         seen.add(key);
         dataSources.push({
           kind: 'vendor',
           label: tableLabel(source.vendorTable) ?? toProper(source.vendorTable),
           table: source.vendorTable,
-          name: source.externalId,
+          name: friendlyLookups[index] ?? source.externalId,
           href: null,
           externalId: source.externalId,
           provider: source.provider
         });
-      }
+      });
     }
 
     // Friendly source badges for the header (deduped labels).

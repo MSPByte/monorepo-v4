@@ -199,6 +199,15 @@ export const assetsRouter = t.router({
         : [];
       const linkById = new Map(links.map((link) => [link.id, link]));
 
+      // Roll up findings from anywhere: findings anchored directly to this
+      // canonical asset, plus findings against any vendor record confirmed
+      // to map to this asset (Sophos endpoint, M365 device, etc.). Ids are
+      // random UUIDs, so a resourceId match is unambiguous.
+      const vendorRecordIds = sources
+        .filter((source) => source.status === 'confirmed')
+        .map((source) => source.vendorRecordId);
+      const rolledUpIds = [input.id, ...vendorRecordIds];
+
       const assetFindings = await ctx.db
         .select({
           id: findingsWithContext.id,
@@ -222,8 +231,7 @@ export const assetsRouter = t.router({
         .from(findingsWithContext)
         .where(
           and(
-            eq(findingsWithContext.resourceType, 'asset'),
-            eq(findingsWithContext.resourceId, input.id),
+            inArray(findingsWithContext.resourceId, rolledUpIds),
             inArray(findingsWithContext.status, [...OPEN_STATUSES])
           )
         )

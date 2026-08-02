@@ -1,6 +1,5 @@
 <script lang="ts">
   import { getContext } from 'svelte';
-  import { goto } from '$app/navigation';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
   import type { AppRouter } from '@mspbyte/trpc';
@@ -19,6 +18,7 @@
     textColumn,
   } from '$lib/components/data-table/column-defs';
   import FindingStatusBadge from '$lib/components/domain/finding-status-badge.svelte';
+  import FindingSheet from '$lib/components/domain/finding-sheet.svelte';
   import { toServerTableInput } from '$lib/components/domain/server-table';
   import SignalStrip from '$lib/components/panel/signal-strip.svelte';
   import SignalCell from '$lib/components/panel/signal-cell.svelte';
@@ -42,6 +42,9 @@
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const qc = useQueryClient();
+
+  let selectedFindingId = $state<string | null>(null);
+  let refreshKey = $state(0);
 
   const overview = createQuery(() => ({
     queryKey: ['findings.overview'],
@@ -333,10 +336,20 @@
     {columns}
     {views}
     {rowActions}
+    {refreshKey}
     enableRowSelection
     defaultPageSize={25}
     defaultSort={{ field: 'severity', dir: 'desc' }}
-    onrowclick={(row) => goto(`/findings/${row.id}`)}
+    onrowclick={(row) => (selectedFindingId = row.id)}
     signalStrip={strip}
   />
 </div>
+
+<FindingSheet
+  findingId={selectedFindingId}
+  onclose={() => (selectedFindingId = null)}
+  onchange={() => {
+    refreshKey += 1;
+    invalidate();
+  }}
+/>

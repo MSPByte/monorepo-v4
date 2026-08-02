@@ -9,7 +9,6 @@ export type PolicyTableShape = {
   targetType: 'tenant' | 'site' | 'integration_link' | 'person' | 'asset' | 'vendor';
   providerId?: string;
   facet?: ProviderFacet;
-  canonicalResourceTypes?: ('person' | 'asset')[];
   /**
    * Where this table is browsable in the UI. `path` is the data-table route and
    * `searchField` is the column to filter on (operator `eq`) to isolate a single
@@ -185,7 +184,6 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     targetType: 'vendor',
     providerId: 'microsoft-365',
     facet: ProviderFacet.M365Identities,
-    canonicalResourceTypes: ['person'],
     route: { path: '/microsoft-365/identities', searchField: 'externalId' },
     shape: getFacetShape(ProviderFacet.M365Identities)
   },
@@ -206,7 +204,6 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     targetType: 'vendor',
     providerId: 'microsoft-365',
     facet: ProviderFacet.M365Devices,
-    canonicalResourceTypes: ['asset'],
     route: { path: '/microsoft-365/devices', searchField: 'externalId' },
     shape: getFacetShape(ProviderFacet.M365Devices)
   },
@@ -217,7 +214,6 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     targetType: 'vendor',
     providerId: 'sophos-partner',
     facet: ProviderFacet.SophosEndpoints,
-    canonicalResourceTypes: ['asset'],
     route: { path: '/sophos-partner/endpoints', searchField: 'externalId' },
     shape: getFacetShape(ProviderFacet.SophosEndpoints)
   },
@@ -228,7 +224,6 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     targetType: 'vendor',
     providerId: 'sophos-partner',
     facet: ProviderFacet.SophosFirewalls,
-    canonicalResourceTypes: ['asset'],
     route: { path: '/sophos-partner/firewalls', searchField: 'externalId' },
     shape: getFacetShape(ProviderFacet.SophosFirewalls)
   },
@@ -239,7 +234,6 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     targetType: 'vendor',
     providerId: 'dattormm',
     facet: ProviderFacet.DattoEndpoints,
-    canonicalResourceTypes: ['asset'],
     route: { path: '/dattormm/endpoints', searchField: 'externalId' },
     shape: getFacetShape(ProviderFacet.DattoEndpoints)
   },
@@ -250,7 +244,6 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     targetType: 'vendor',
     providerId: 'cove',
     facet: ProviderFacet.CoveEndpoints,
-    canonicalResourceTypes: ['asset'],
     route: { path: '/cove/endpoints', searchField: 'externalId' },
     shape: getFacetShape(ProviderFacet.CoveEndpoints)
   }

@@ -66,7 +66,6 @@
   let candidateConditions = $state<ConditionDraft[]>([]);
   let expectationConditions = $state<ConditionDraft[]>([newCondition()]);
   let threshold = $state('1');
-  let outputResource = $state('source');
   let titleTemplate = $state('{{hostname}}{{displayName}}{{name}} failed policy expectation');
   let summary = $state('');
   let recommendation = $state('');
@@ -96,13 +95,6 @@
     const scopeGroups = Array.from(scopeByGroup, ([heading, tags]) => ({ heading, tags }));
     return [rowGroup, ...scopeGroups];
   });
-  const outputOptions = $derived.by(() => [
-    { value: 'source', label: `Failing ${selectedTable.label} row` },
-    ...(selectedTable.canonicalResourceTypes ?? []).map((type) => ({
-      value: type,
-      label: type === 'person' ? 'Linked Person record' : 'Linked Asset record',
-    })),
-  ]);
   const severityOptions = [
     { value: '4', label: 'Critical' },
     { value: '3', label: 'High' },
@@ -256,7 +248,6 @@
   function resetForTable() {
     candidateConditions = [];
     expectationConditions = [newCondition()];
-    outputResource = 'source';
   }
 
   function coerceValue(value: string, field: FlatField | null) {
@@ -301,7 +292,6 @@
       scope: { trigger: selectedTable.table },
       filter: filterFrom(candidateConditions),
       expectations: serializeConditions(expectationConditions),
-      ...(outputResource !== 'source' ? { canonicalResource: { type: outputResource } } : {}),
     };
     if (mode === 'tableThreshold') {
       return { ...base, threshold: Number(threshold) };
@@ -327,18 +317,6 @@
       expectationConditions = [newCondition()];
     }
     threshold = stringValue(definition.threshold ?? 1);
-    if (
-      isRecord(definition.canonicalResource) &&
-      typeof definition.canonicalResource.type === 'string'
-    ) {
-      outputResource = (selectedTable.canonicalResourceTypes ?? []).includes(
-        definition.canonicalResource.type as 'person' | 'asset'
-      )
-        ? definition.canonicalResource.type
-        : 'source';
-    } else {
-      outputResource = 'source';
-    }
     titleTemplate =
       typeof definition.title === 'string'
         ? definition.title
@@ -368,12 +346,7 @@
         description: description || null,
         category: category || null,
         providerId: selectedTable.providerId ?? null,
-        targetType:
-          outputResource === 'source'
-            ? selectedTable.targetType
-            : outputResource === 'person'
-              ? 'person'
-              : 'asset',
+        targetType: selectedTable.targetType,
         severity: Number(severity),
         enabled,
         recommendation: recommendation || null,
@@ -502,7 +475,7 @@
           </div>
         </div>
 
-        <div class="grid gap-3 md:grid-cols-3">
+        <div class="grid gap-3 md:grid-cols-2">
           <label class="grid gap-1 text-sm font-medium"
             >Data source
             <SingleSelect options={tableOptions} bind:selected={table} onchange={resetForTable} />
@@ -511,19 +484,6 @@
             >Evaluation
             <SingleSelect options={modeOptions} bind:selected={mode} />
           </label>
-          {#if outputOptions.length > 1}
-            <label class="grid gap-1 text-sm font-medium"
-              >Finding resource
-              <SingleSelect options={outputOptions} bind:selected={outputResource} />
-            </label>
-          {:else}
-            <div class="grid gap-1 text-sm">
-              <div class="font-medium">Finding resource</div>
-              <div class="rounded-md border bg-muted/30 px-3 py-2 text-muted-foreground">
-                Findings attach to the failing {selectedTable.label} row.
-              </div>
-            </div>
-          {/if}
         </div>
 
         <div class="grid gap-3 rounded-md border p-3">

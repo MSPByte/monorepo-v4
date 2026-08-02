@@ -185,9 +185,17 @@ export const assetsWithSites = canonicalSchema
     left join lateral (
       select count(*)::int as open_finding_count
       from policy.findings pf
-      where pf.resource_type = 'asset'
-        and pf.resource_id = a.id::text
-        and pf.status in ('open', 'acknowledged', 'regressed')
+      where pf.status in ('open', 'acknowledged', 'regressed')
+        and (
+          (pf.resource_type = 'asset' and pf.resource_id = a.id::text)
+          or pf.resource_id in (
+            select es.vendor_record_id::text
+            from canonical.entity_sources es
+            where es.canonical_type = 'asset'
+              and es.canonical_id = a.id
+              and es.status = 'confirmed'
+          )
+        )
     ) f on true
   `);
 
@@ -235,9 +243,17 @@ export const peopleWithSites = canonicalSchema
     left join lateral (
       select count(*)::int as open_finding_count
       from policy.findings pf
-      where pf.resource_type = 'person'
-        and pf.resource_id = p.id::text
-        and pf.status in ('open', 'acknowledged', 'regressed')
+      where pf.status in ('open', 'acknowledged', 'regressed')
+        and (
+          (pf.resource_type = 'person' and pf.resource_id = p.id::text)
+          or pf.resource_id in (
+            select es.vendor_record_id::text
+            from canonical.entity_sources es
+            where es.canonical_type = 'person'
+              and es.canonical_id = p.id
+              and es.status = 'confirmed'
+          )
+        )
     ) f on true
   `);
 

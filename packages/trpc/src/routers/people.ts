@@ -199,6 +199,15 @@ export const peopleRouter = t.router({
         : [];
       const linkById = new Map(links.map((link) => [link.id, link]));
 
+      // Roll up findings from anywhere: findings anchored directly to this
+      // canonical person, plus findings against any vendor record that has
+      // been confirmed to map to this person (e.g. an M365 identity). All
+      // ids here are random UUIDs, so a resourceId match is unambiguous.
+      const vendorRecordIds = sources
+        .filter((source) => source.status === 'confirmed')
+        .map((source) => source.vendorRecordId);
+      const rolledUpIds = [input.id, ...vendorRecordIds];
+
       const personFindings = await ctx.db
         .select({
           id: findingsWithContext.id,
@@ -222,8 +231,7 @@ export const peopleRouter = t.router({
         .from(findingsWithContext)
         .where(
           and(
-            eq(findingsWithContext.resourceType, 'person'),
-            eq(findingsWithContext.resourceId, input.id),
+            inArray(findingsWithContext.resourceId, rolledUpIds),
             inArray(findingsWithContext.status, [...OPEN_STATUSES])
           )
         )

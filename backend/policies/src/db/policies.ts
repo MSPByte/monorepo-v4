@@ -1,10 +1,8 @@
 import { and, eq, inArray, ne, notInArray, sql } from 'drizzle-orm';
 import {
-  assets,
   assetsWithSites,
   coveEndpoints,
   dattoEndpoints,
-  entitySources,
   findings,
   integrationLinks,
   m365Devices,
@@ -18,7 +16,6 @@ import {
   m365Policies,
   m365RiskyUsers,
   m365TeamsConfig,
-  people,
   peopleWithSites,
   policies,
   policyAssignments,
@@ -83,7 +80,6 @@ type TableEntry = {
   table: unknown;
   resourceType: string;
   resourceTable: string;
-  sourceTable?: string;
 };
 
 const tableRegistry: Record<string, TableEntry> = {
@@ -100,14 +96,12 @@ const tableRegistry: Record<string, TableEntry> = {
   m365Identities: {
     table: m365Identities,
     resourceType: 'm365_identity',
-    resourceTable: 'vendors.m365_identities',
-    sourceTable: 'm365_identities'
+    resourceTable: 'vendors.m365_identities'
   },
   m365Policies: {
     table: m365Policies,
     resourceType: 'm365_policy',
-    resourceTable: 'vendors.m365_policies',
-    sourceTable: 'm365_policies'
+    resourceTable: 'vendors.m365_policies'
   },
   m365Licenses: {
     table: m365Licenses,
@@ -122,8 +116,7 @@ const tableRegistry: Record<string, TableEntry> = {
   m365Devices: {
     table: m365Devices,
     resourceType: 'm365_device',
-    resourceTable: 'vendors.m365_devices',
-    sourceTable: 'm365_devices'
+    resourceTable: 'vendors.m365_devices'
   },
   m365OAuthGrants: {
     table: m365OAuthGrants,
@@ -520,13 +513,17 @@ async function evaluateRowExpectation(
     candidates.map(async (row) => {
       const failed = expectations.filter((expectation) => !matchesCondition(row, expectation));
       if (!failed.length) return null;
-      const resource = await findingResourceForRow(db, entry, row, definition);
+      const resource = findingResourceForRow(entry, row, definition);
       const renderCtx = { ...row, ...context.scope };
+      const rowSiteId = stringValue(readPath(row, 'siteId'), null);
+      const rowLinkId = stringValue(readPath(row, 'linkId'), null);
       return buildFinding(context, {
         resourceType: resource.resourceType,
         resourceTable: resource.resourceTable,
         resourceId: resource.resourceId,
         resourceExternalId: resource.resourceExternalId,
+        siteIdOverride: rowSiteId,
+        linkIdOverride: rowLinkId,
         title:
           renderTemplate(stringValue(definition.title, context.policy.name), renderCtx) ??
           context.policy.name,
@@ -545,51 +542,16 @@ async function evaluateRowExpectation(
   return findingsForRows.filter((finding): finding is ProducedFinding => finding !== null);
 }
 
-async function findingResourceForRow(
-  db: Db,
+function findingResourceForRow(
   entry: TableEntry,
   row: JsonObject,
   definition: JsonObject
-): Promise<{
+): {
   resourceType: string;
   resourceTable: string | null;
   resourceId: string;
   resourceExternalId: string | null;
-}> {
-  const canonicalResource = isObject(definition.canonicalResource)
-    ? definition.canonicalResource
-    : null;
-  const canonicalType = String(canonicalResource?.type ?? '');
-  const rowId = String(readPath(row, 'id') ?? '');
-
-  if (entry.sourceTable && rowId && (canonicalType === 'person' || canonicalType === 'asset')) {
-    const [source] = await db
-      .select({
-        canonicalId: entitySources.canonicalId,
-        externalId: entitySources.externalId
-      })
-      .from(entitySources)
-      .where(
-        and(
-          eq(entitySources.vendorTable, entry.sourceTable),
-          eq(entitySources.vendorRecordId, rowId),
-          eq(entitySources.canonicalType, canonicalType),
-          eq(entitySources.status, 'confirmed')
-        )
-      )
-      .limit(1)
-      .catch(() => []);
-
-    if (source?.canonicalId) {
-      return {
-        resourceType: canonicalType,
-        resourceTable: canonicalType === 'person' ? 'canonical.people' : 'canonical.assets',
-        resourceId: String(source.canonicalId),
-        resourceExternalId: source.externalId ?? stringValue(readPath(row, 'externalId'), null)
-      };
-    }
-  }
-
+} {
   return {
     resourceType: String(definition.resourceType ?? entry.resourceType),
     resourceTable: entry.resourceTable,
@@ -799,6 +761,8 @@ function buildFinding(
     summary: string | null;
     recommendation: string | null;
     evidence: JsonObject;
+    siteIdOverride?: string | null;
+    linkIdOverride?: string | null;
   }
 ): ProducedFinding {
   const fingerprint = [
@@ -816,8 +780,8 @@ function buildFinding(
     policySetId: context.policySetId,
     policyAssignmentId: context.assignment.id,
     providerId: context.policy.providerId ?? context.provider,
-    linkId: context.linkId ?? context.assignment.linkId ?? null,
-    siteId: context.siteId ?? context.assignment.siteId ?? null,
+    linkId: context.linkId ?? input.linkIdOverride ?? context.assignment.linkId ?? null,
+    siteId: context.siteId ?? input.siteIdOverride ?? context.assignment.siteId ?? null,
     resourceType: input.resourceType,
     resourceTable: input.resourceTable,
     resourceId: input.resourceId,
