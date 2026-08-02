@@ -19,6 +19,7 @@
   import { Textarea } from '$lib/components/ui/textarea/index.js';
   import { Switch } from '$lib/components/ui/switch/index.js';
   import SingleSelect from '$lib/components/single-select.svelte';
+  import MultiSelect from '$lib/components/multi-select.svelte';
   import ReferenceMultiSelect from '$lib/components/reference-multi-select.svelte';
   import TagInserter from '$lib/components/tag-inserter.svelte';
   import Separator from '$lib/components/ui/separator/separator.svelte';
@@ -53,6 +54,23 @@
     queryFn: () => (policyId ? trpc.policies.byId.query({ id: policyId }) : Promise.resolve(null)),
   }));
 
+  const articlesQuery = createQuery(() => ({
+    queryKey: ['wiki.articles.list.forBuilder'],
+    queryFn: () => trpc.wiki.articles.list.query(),
+  }));
+
+  const existingLinksQuery = createQuery(() => ({
+    queryKey: ['wiki.articleLinks.forPolicy', policyId],
+    queryFn: () =>
+      policyId
+        ? trpc.wiki.articleLinks.listForTarget.query({
+            targetType: 'policy',
+            targetId: policyId,
+          })
+        : Promise.resolve([]),
+    enabled: !!policyId,
+  }));
+
   let nextId = 1;
   let loadedPolicyId = $state('');
   let saving = $state(false);
@@ -69,9 +87,20 @@
   let titleTemplate = $state('{{hostname}}{{displayName}}{{name}} failed policy expectation');
   let summary = $state('');
   let recommendation = $state('');
+  let linkedArticleIds = $state<string[]>([]);
+  let loadedLinksPolicyId = $state('');
   let titleRef = $state<HTMLInputElement | null>(null);
   let summaryRef = $state<HTMLTextAreaElement | null>(null);
   let recommendationRef = $state<HTMLTextAreaElement | null>(null);
+
+  const articleOptions = $derived(
+    (articlesQuery.data ?? [])
+      .filter((article) => article.status !== 'archived')
+      .map((article) => ({
+        value: article.id,
+        label: `${article.kbId} — ${article.title}`,
+      })),
+  );
 
   const selectedTable = $derived.by<PolicyTableShape>(() => {
     return PolicyTableShapes.find((shape) => shape.table === table) ?? PolicyTableShapes[0]!;
@@ -326,6 +355,13 @@
     loadedPolicyId = policy.id;
   });
 
+  $effect(() => {
+    const links = existingLinksQuery.data;
+    if (!links || !policyId || loadedLinksPolicyId === policyId) return;
+    linkedArticleIds = links.map((link) => link.articleId);
+    loadedLinksPolicyId = policyId;
+  });
+
   async function savePolicy() {
     if (!name.trim()) {
       toast.error('Policy name is required');
@@ -354,15 +390,28 @@
       };
       if (editing) {
         await trpc.policies.update.mutate({ id: policyId, ...payload });
+        await trpc.wiki.articleLinks.setForTarget.mutate({
+          targetType: 'policy',
+          targetId: policyId,
+          articleIds: linkedArticleIds,
+        });
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ['policies.byId', policyId] }),
           queryClient.invalidateQueries({ queryKey: ['policies.list'] }),
           queryClient.invalidateQueries({ queryKey: ['policies.tableData'] }),
+          queryClient.invalidateQueries({ queryKey: ['wiki.articleLinks.forPolicy', policyId] }),
         ]);
         toast.success('Policy saved');
         await goto(`/policies/${policyId}`);
       } else {
         const created = await trpc.policies.create.mutate(payload);
+        if (linkedArticleIds.length > 0) {
+          await trpc.wiki.articleLinks.setForTarget.mutate({
+            targetType: 'policy',
+            targetId: created.id,
+            articleIds: linkedArticleIds,
+          });
+        }
         toast.success('Policy created');
         await goto(`/policies/${created.id}`);
       }
@@ -584,6 +633,19 @@
               />
             </div>
             <Textarea bind:ref={recommendationRef} bind:value={recommendation} />
+          </div>
+          <div class="grid gap-1 text-sm">
+            <span class="font-medium">Linked Wiki articles</span>
+            <MultiSelect
+              options={articleOptions}
+              bind:selected={linkedArticleIds}
+              placeholder="Attach reference articles"
+              searchPlaceholder="Search articles..."
+              maxDisplay={3}
+            />
+            <span class="text-xs text-muted-foreground">
+              Surfaced on findings from this policy for quick tech reference.
+            </span>
           </div>
         </div>
       </Card.Content>

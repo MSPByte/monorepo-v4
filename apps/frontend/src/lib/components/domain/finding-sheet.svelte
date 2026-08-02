@@ -46,6 +46,22 @@
     enabled: !!findingId,
   }));
 
+  const policyId = $derived(findingQuery.data?.policyId ?? null);
+
+  const linkedArticlesQuery = createQuery(() => ({
+    queryKey: ['wiki.articleLinks.forPolicy.sheet', policyId],
+    queryFn: () =>
+      trpc.wiki.articleLinks.listForTarget.query({
+        targetType: 'policy',
+        targetId: policyId!,
+      }),
+    enabled: !!policyId,
+    // If the viewer lacks Wiki.Read the endpoint 403s — hide the section quietly.
+    retry: false,
+  }));
+
+  const linkedArticles = $derived(linkedArticlesQuery.data ?? []);
+
   $effect(() => {
     const finding = findingQuery.data;
     if (!finding) return;
@@ -196,6 +212,24 @@
         <section class="space-y-3">
           <h3 class="text-sm font-medium">Recommendation</h3>
           <p class="text-sm text-muted-foreground">{finding.recommendation}</p>
+          {#if linkedArticles.length > 0}
+            <ul class="space-y-1 pt-1">
+              {#each linkedArticles as article}
+                <li>
+                  <a
+                    href={`/wiki/${article.articleId}`}
+                    class="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
+                  >
+                    <ExternalLinkIcon class="size-3.5 shrink-0" />
+                    <span class="font-mono text-xs text-muted-foreground">
+                      KB{String(article.kbNumber).padStart(3, '0')}
+                    </span>
+                    <span class="truncate">{article.title}</span>
+                  </a>
+                </li>
+              {/each}
+            </ul>
+          {/if}
         </section>
 
         <section class="space-y-3 border-t pt-4">

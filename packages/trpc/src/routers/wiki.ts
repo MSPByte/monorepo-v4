@@ -3,6 +3,7 @@ import {
   articles,
   articleDrafts,
   articleContexts,
+  articleLinks,
   tags,
   articleTags,
   articleOverrides,
@@ -1696,11 +1697,107 @@ const locksRouter = t.router({
     })
 });
 
+// ── Article Links ─────────────────────────────────────────
+//
+// Polymorphic wiki.article_links rows connect an article to another entity
+// (e.g. a policy). Reads require Wiki.Read; writes are gated per target type
+// — policies require Policies.Write, since the operator is annotating a
+// policy, not authoring wiki content.
+
+const linkTargetTypes = ['policy'] as const;
+const linkTargetTypeSchema = z.enum(linkTargetTypes);
+
+function requireWriteForTarget(
+  ctx: Context,
+  targetType: (typeof linkTargetTypes)[number]
+) {
+  if (targetType === 'policy') {
+    if (!ctx.can('Policies.Write')) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Policies.Write permission required'
+      });
+    }
+  }
+}
+
+const articleLinksRouter = t.router({
+  listForTarget: authProcedure
+    .input(
+      z.object({
+        targetType: linkTargetTypeSchema,
+        targetId: z.string()
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      if (!ctx.can('Wiki.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Wiki.Read permission required' });
+      }
+      return ctx.db
+        .select({
+          articleId: articles.id,
+          kbNumber: articles.kbNumber,
+          title: articles.title,
+          slug: articles.slug,
+          status: articles.status
+        })
+        .from(articleLinks)
+        .innerJoin(articles, eq(articleLinks.articleId, articles.id))
+        .where(
+          and(
+            eq(articleLinks.targetType, input.targetType),
+            eq(articleLinks.targetId, input.targetId)
+          )
+        )
+        .orderBy(asc(articles.kbNumber));
+    }),
+
+  setForTarget: authProcedure
+    .input(
+      z.object({
+        targetType: linkTargetTypeSchema,
+        targetId: z.string(),
+        articleIds: z.array(z.string().uuid())
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      requireWriteForTarget(ctx, input.targetType);
+
+      const relationship = 'reference';
+      const unique = [...new Set(input.articleIds)];
+
+      await ctx.db
+        .delete(articleLinks)
+        .where(
+          and(
+            eq(articleLinks.targetType, input.targetType),
+            eq(articleLinks.targetId, input.targetId),
+            eq(articleLinks.relationship, relationship)
+          )
+        );
+
+      if (unique.length > 0) {
+        await ctx.db.insert(articleLinks).values(
+          unique.map((articleId) => ({
+            articleId,
+            targetType: input.targetType,
+            targetId: input.targetId,
+            relationship,
+            createdBy: ctx.user.id
+          }))
+        );
+      }
+
+      return { count: unique.length };
+    })
+});
+
 // ── Combined Wiki Router ──────────────────────────────────
 
 export const wikiRouter = t.router({
   contexts: contextsRouter,
   articles: articlesRouter,
+  articleLinks: articleLinksRouter,
   drafts: draftsRouter,
   tags: tagsRouter,
   overrides: overridesRouter,

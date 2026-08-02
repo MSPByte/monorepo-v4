@@ -51,6 +51,22 @@
     queryFn: () => trpc.findings.byId.query({ id }),
   }));
 
+  const linkedPolicyId = $derived(findingQuery.data?.policyId ?? null);
+
+  const linkedArticlesQuery = createQuery(() => ({
+    queryKey: ['wiki.articleLinks.forPolicy.page', linkedPolicyId],
+    queryFn: () =>
+      trpc.wiki.articleLinks.listForTarget.query({
+        targetType: 'policy',
+        targetId: linkedPolicyId!,
+      }),
+    enabled: !!linkedPolicyId,
+    // Silently hide the section when the viewer lacks Wiki.Read (403).
+    retry: false,
+  }));
+
+  const linkedArticles = $derived(linkedArticlesQuery.data ?? []);
+
   // Prev/next only make sense within the active queue (open + regressed).
   // Suppressed/resolved detail pages get no navigation.
   const canNavigateQueue = $derived(
@@ -489,6 +505,30 @@
             <SectionPanel code="03" title="RECOMMENDATION">
               <p class="text-sm leading-relaxed text-foreground/90">{finding.recommendation}</p>
             </SectionPanel>
+
+            {#if linkedArticles.length > 0}
+              <SectionPanel code="04" title="RESOURCES">
+                {#snippet aside()}
+                  {linkedArticles.length} article{linkedArticles.length === 1 ? '' : 's'}
+                {/snippet}
+                <div class="space-y-1">
+                  {#each linkedArticles as article}
+                    <a
+                      href={`/wiki/${article.articleId}`}
+                      class="flex items-center justify-between gap-3 border-b border-border/40 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40"
+                    >
+                      <div class="flex min-w-0 items-baseline gap-2">
+                        <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                          KB{String(article.kbNumber).padStart(3, '0')}
+                        </span>
+                        <span class="truncate">{article.title}</span>
+                      </div>
+                      <ArrowUpRight class="size-3 shrink-0 text-muted-foreground" />
+                    </a>
+                  {/each}
+                </div>
+              </SectionPanel>
+            {/if}
           </div>
 
           <!-- RIGHT COLUMN -->
