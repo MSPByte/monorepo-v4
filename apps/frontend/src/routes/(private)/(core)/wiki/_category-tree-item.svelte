@@ -3,6 +3,7 @@
   import { getContext } from 'svelte';
   import { createMutation, useQueryClient } from '@tanstack/svelte-query';
   import type { createTrpcClient } from '$lib/trpc';
+  import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import * as Collapsible from '$lib/components/ui/collapsible/index.js';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
   import CategoryTreeItem from './_category-tree-item.svelte';
@@ -67,6 +68,7 @@
   let renameValue = $state('');
   let addingChild = $state(false);
   let newChildName = $state('');
+  let deleteDialogOpen = $state(false);
 
   const updateContextMut = createMutation(() => ({
     mutationFn: (input: { id: string; name: string }) =>
@@ -213,7 +215,7 @@
             <DropdownMenu.Separator />
             <DropdownMenu.Item
               class="gap-2 cursor-pointer text-destructive focus:text-destructive"
-              onclick={() => removeContextMut.mutate(category.id)}
+              onclick={() => (deleteDialogOpen = true)}
             >
               <Trash2 class="size-3.5" /> Delete
             </DropdownMenu.Item>
@@ -222,6 +224,27 @@
       </div>
     {/if}
   </div>
+
+  <AlertDialog.Root bind:open={deleteDialogOpen}>
+    <AlertDialog.Content>
+      <AlertDialog.Header>
+        <AlertDialog.Title>Delete {category.name}?</AlertDialog.Title>
+        <AlertDialog.Description>
+          This removes this context and any child contexts. Articles are moved to the parent
+          context.
+        </AlertDialog.Description>
+      </AlertDialog.Header>
+      <AlertDialog.Footer>
+        <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+        <AlertDialog.Action
+          class="bg-destructive text-destructive-foreground hover:bg-destructive/80"
+          onclick={() => removeContextMut.mutate(category.id)}
+        >
+          Delete
+        </AlertDialog.Action>
+      </AlertDialog.Footer>
+    </AlertDialog.Content>
+  </AlertDialog.Root>
 
   <Collapsible.Root open={isOpen}>
     <Collapsible.Content>

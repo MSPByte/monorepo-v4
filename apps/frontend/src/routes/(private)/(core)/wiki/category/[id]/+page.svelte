@@ -193,15 +193,6 @@
         </div>
 
         <div class="flex w-fit items-center gap-2">
-          {#if siblingContexts.length > 1}
-            <div class="w-44">
-              <SingleSelect
-                options={siblingContexts.map((sc) => ({ label: sc.name, value: sc.id }))}
-                selected={context.id}
-                onchange={(v) => goto(`/wiki/category/${v}`)}
-              />
-            </div>
-          {/if}
           <Button
             variant="outline"
             size="sm"
@@ -293,25 +284,40 @@
       </Dialog.Content>
     </Dialog.Root>
 
-    <div class="grid min-h-0 flex-1 grid-cols-[20rem_minmax(0,1fr)] overflow-hidden">
-      <aside class="flex min-h-0 flex-col border-r bg-card/30">
-        <div class="flex h-12 shrink-0 items-center justify-between border-b px-4">
-          <h2 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Subcontexts
-          </h2>
-          <span class="text-xs tabular-nums text-muted-foreground">{childContexts.length}</span>
+    <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div class="flex h-12 shrink-0 items-center gap-3 border-b px-6">
+        <h2 class="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Articles
+        </h2>
+        <div class="relative min-w-0 max-w-md flex-1">
+          <Search
+            class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            bind:value={articleSearch}
+            placeholder="Search articles in this context…"
+            class="h-8 pl-8 text-sm"
+          />
         </div>
+        <span class="shrink-0 text-xs tabular-nums text-muted-foreground">
+          {searchedArticles.length} / {contextArticles.length}
+        </span>
+      </div>
 
-        <div class="min-h-0 flex-1 overflow-y-auto p-3">
-          {#if childContexts.length > 0}
-            <div class="space-y-1.5">
+      <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        {#if childContexts.length > 0 && !articleSearch.trim()}
+          <div class="mb-6">
+            <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Subcontexts
+            </h3>
+            <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
               {#each childContexts as child (child.id)}
                 {@const childCount = getContextChildren(child.id, allContexts).length}
                 {@const childArticleCount = getArticleCount(child.id)}
                 {@const linkedCount = getLinkedArticleCount(child.id)}
                 <a
                   href="/wiki/category/{child.id}"
-                  class="group flex items-center gap-3 rounded-md border bg-background px-3 py-2.5 transition-colors hover:border-primary/30 hover:bg-primary/10"
+                  class="group flex items-center gap-3 rounded-md border bg-card/40 px-3 py-2.5 transition-colors hover:border-primary/30 hover:bg-primary/10"
                 >
                   <span
                     class="rounded-md bg-muted p-1.5 text-muted-foreground group-hover:text-primary"
@@ -320,7 +326,7 @@
                   </span>
                   <div class="min-w-0 flex-1">
                     <div class="flex min-w-0 items-center justify-between gap-2">
-                      <h3 class="truncate text-sm font-medium">{child.name}</h3>
+                      <h4 class="truncate text-sm font-medium">{child.name}</h4>
                       <ArrowRight
                         class="size-3.5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100"
                       />
@@ -336,94 +342,67 @@
                 </a>
               {/each}
             </div>
-          {:else}
-            <div class="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-              No subcontexts.
-            </div>
-          {/if}
-        </div>
-      </aside>
-
-      <section class="flex min-h-0 min-w-0 flex-col">
-        <div class="flex h-12 shrink-0 items-center gap-3 border-b px-4">
-          <h2 class="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Articles
-          </h2>
-          <div class="relative min-w-0 flex-1">
-            <Search
-              class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-            />
-            <Input
-              bind:value={articleSearch}
-              placeholder="Search articles…"
-              class="h-8 pl-8 text-sm"
-            />
           </div>
-          <span class="shrink-0 text-xs tabular-nums text-muted-foreground">
-            {searchedArticles.length} / {contextArticles.length}
-          </span>
-        </div>
+        {/if}
 
-        <div class="min-h-0 flex-1 overflow-y-auto p-4">
-          {#if articlesQuery.isLoading}
-            <Loader />
-          {:else if searchedArticles.length > 0}
-            <div class="space-y-2">
-              {#each searchedArticles as article (article.id)}
-                <a
-                  href="/wiki/{article.id}"
-                  class="group flex items-center gap-3 rounded-lg border bg-card/60 px-4 py-3 transition-colors hover:border-primary/30 hover:bg-primary/10"
-                >
-                  <FileText class="size-4 shrink-0 text-muted-foreground" />
-                  <div class="min-w-0 flex-1">
-                    <div class="flex min-w-0 items-center gap-2">
-                      <span class="truncate text-sm font-medium group-hover:text-primary">
-                        {article.title}
-                      </span>
-                      {#if article.contextRole === 'linked'}
-                        <Badge variant="outline" class="gap-1 px-1.5 py-0 text-xs">
-                          <Link class="size-3" />
-                          linked
-                        </Badge>
-                      {/if}
-                    </div>
-                    <p class="truncate text-xs text-muted-foreground">
-                      {article.kbId} · {article.createdBy?.name ?? ''}
-                    </p>
-                  </div>
-                  <div class="flex shrink-0 items-center gap-2">
-                    {#each article.tags.slice(0, 2) as tag (tag.id)}
-                      <span
-                        class="rounded-full px-1.5 py-0 text-xs"
-                        style="background-color: {tag.color}18; color: {tag.color}"
-                      >
-                        {tag.name}
-                      </span>
-                    {/each}
-                    {#if article.lock}
-                      <span title="Locked by {article.lock.lockedBy.name}">
-                        <Lock class="size-3.5 text-warning" />
-                      </span>
-                    {/if}
-                    <span class="flex items-center gap-1 text-xs text-muted-foreground">
-                      <Clock class="size-3" />
-                      {relativeTime(article.updatedAt)}
+        {#if articlesQuery.isLoading}
+          <Loader />
+        {:else if searchedArticles.length > 0}
+          <div class="space-y-2">
+            {#each searchedArticles as article (article.id)}
+              <a
+                href="/wiki/{article.id}"
+                class="group flex items-center gap-3 rounded-lg border bg-card/60 px-4 py-3 transition-colors hover:border-primary/30 hover:bg-primary/10"
+              >
+                <FileText class="size-4 shrink-0 text-muted-foreground" />
+                <div class="min-w-0 flex-1">
+                  <div class="flex min-w-0 items-center gap-2">
+                    <span class="truncate text-sm font-medium group-hover:text-primary">
+                      {article.title}
                     </span>
+                    {#if article.contextRole === 'linked'}
+                      <Badge variant="outline" class="gap-1 px-1.5 py-0 text-xs">
+                        <Link class="size-3" />
+                        linked
+                      </Badge>
+                    {/if}
                   </div>
-                </a>
-              {/each}
-            </div>
-          {:else if articleSearch.trim()}
-            <div class="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-              No articles match this search.
-            </div>
-          {:else}
-            <div class="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-              No articles are currently home or linked here.
-            </div>
-          {/if}
-        </div>
-      </section>
-    </div>
+                  <p class="truncate text-xs text-muted-foreground">
+                    {article.kbId} · {article.createdBy?.name ?? ''}
+                  </p>
+                </div>
+                <div class="flex shrink-0 items-center gap-2">
+                  {#each article.tags.slice(0, 2) as tag (tag.id)}
+                    <span
+                      class="rounded-full px-1.5 py-0 text-xs"
+                      style="background-color: {tag.color}18; color: {tag.color}"
+                    >
+                      {tag.name}
+                    </span>
+                  {/each}
+                  {#if article.lock}
+                    <span title="Locked by {article.lock.lockedBy.name}">
+                      <Lock class="size-3.5 text-warning" />
+                    </span>
+                  {/if}
+                  <span class="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Clock class="size-3" />
+                    {relativeTime(article.updatedAt)}
+                  </span>
+                </div>
+              </a>
+            {/each}
+          </div>
+        {:else if articleSearch.trim()}
+          <div class="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+            No articles match this search.
+          </div>
+        {:else}
+          <div class="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+            No articles are currently home or linked here.
+          </div>
+        {/if}
+      </div>
+    </section>
   </FadeIn>
 {/if}

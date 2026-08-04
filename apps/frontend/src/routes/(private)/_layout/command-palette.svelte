@@ -18,7 +18,7 @@
       .map((i) => ({
         id: i.id,
         label: INTEGRATIONS[i.id as ProviderId].name,
-      })),
+      }))
   );
 
   const sitesQuery = createQuery(() => ({
@@ -83,7 +83,7 @@
         {#each sitesQuery.data ?? [] as site}
           <Command.Item
             value={`site:${site.name}:${site.id}`}
-            onSelect={() => run(() => (scopeStore.currentSite = site.id))}
+            onSelect={() => run(() => goto(`/sites/${site.id}`))}
           >
             {site.name}
           </Command.Item>

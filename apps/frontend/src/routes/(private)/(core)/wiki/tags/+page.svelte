@@ -7,6 +7,7 @@
   import Input from '$lib/components/ui/input/input.svelte';
   import Separator from '$lib/components/ui/separator/separator.svelte';
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
+  import * as Dialog from '$lib/components/ui/dialog/index.js';
   import Loader from '$lib/components/transition/loader.svelte';
   import FadeIn from '$lib/components/transition/fade-in.svelte';
 
@@ -63,7 +64,7 @@
   let selectedTagId = $state<string | null>(null);
   let tagSearch = $state('');
   let articleSearch = $state('');
-  let addingTag = $state(false);
+  let newTagDialogOpen = $state(false);
   let newTagLabel = $state('');
   let newTagColor = $state('oklch(0.62 0.188 259.8)');
   let editingId = $state<string | null>(null);
@@ -123,16 +124,19 @@
     editingId = null;
   }
 
-  function commitAdd() {
-    const name = newTagLabel.trim();
-    if (!name) {
-      addingTag = false;
-      return;
-    }
-    createTagMut.mutate({ name, color: newTagColor });
+  function openNewTagDialog() {
     newTagLabel = '';
     newTagColor = 'oklch(0.62 0.188 259.8)';
-    addingTag = false;
+    newTagDialogOpen = true;
+  }
+
+  function commitAdd() {
+    const name = newTagLabel.trim();
+    if (!name) return;
+    createTagMut.mutate({ name, color: newTagColor });
+    newTagDialogOpen = false;
+    newTagLabel = '';
+    newTagColor = 'oklch(0.62 0.188 259.8)';
   }
 
   function relativeTime(iso: string): string {
@@ -156,8 +160,11 @@
           <Tag class="size-5 text-primary" />
           Tags
         </h1>
+        <p class="mt-0.5 text-sm text-muted-foreground">
+          Cross-cutting labels for articles. Pick a tag to see everything it covers.
+        </p>
       </div>
-      <Button size="sm" class="gap-1.5" onclick={() => (addingTag = !addingTag)}>
+      <Button size="sm" class="gap-1.5" onclick={openNewTagDialog}>
         <Plus class="size-3.5" />
         New Tag
       </Button>
@@ -165,13 +172,9 @@
 
     <Separator />
 
-    <div
-      class="grid min-h-0 flex-1 overflow-hidden"
-      class:grid-cols-[20rem_minmax(0,1fr)]={selectedTagId}
-      class:grid-cols-1={!selectedTagId}
-    >
+    <div class="grid min-h-0 flex-1 grid-cols-[20rem_minmax(0,1fr)] overflow-hidden">
       <!-- Tag list sidebar -->
-      <div class="flex min-h-0 flex-col border-r bg-card/30">
+      <div class="flex min-h-0 flex-col overflow-hidden border-r bg-card/30">
         <div class="flex h-12 shrink-0 items-center gap-3 border-b px-4">
           <div class="relative min-w-0 flex-1">
             <Search
@@ -184,49 +187,6 @@
           </span>
         </div>
 
-        {#if addingTag}
-          <div class="flex items-center gap-3 border-b bg-primary/5 px-4 py-2.5">
-            <div class="flex items-center gap-1">
-              {#each PRESET_COLORS as color (color)}
-                <button
-                  class={cn(
-                    'size-4 rounded-full border-2 transition-transform hover:scale-110',
-                    newTagColor === color ? 'border-foreground scale-110' : 'border-transparent'
-                  )}
-                  style="background-color: {color}"
-                  onclick={() => (newTagColor = color)}
-                  aria-label="Select color"
-                ></button>
-              {/each}
-            </div>
-            <input
-              bind:value={newTagLabel}
-              placeholder="Tag name…"
-              class="flex-1 border-b border-border/60 bg-transparent py-0.5 text-sm outline-none placeholder:text-muted-foreground/50"
-              onkeydown={(e) => {
-                if (e.key === 'Enter') commitAdd();
-                if (e.key === 'Escape') {
-                  addingTag = false;
-                  newTagLabel = '';
-                }
-              }}
-              autofocus
-            />
-            <button onclick={commitAdd} class="shrink-0 text-primary hover:opacity-80">
-              <Check class="size-4" />
-            </button>
-            <button
-              onclick={() => {
-                addingTag = false;
-                newTagLabel = '';
-              }}
-              class="shrink-0 text-muted-foreground hover:opacity-80"
-            >
-              <X class="size-4" />
-            </button>
-          </div>
-        {/if}
-
         <div class="min-h-0 flex-1 overflow-y-auto p-3">
           {#if filteredTags.length > 0}
             <div class="space-y-1.5">
@@ -235,24 +195,24 @@
                 <div class="group relative">
                   {#if editingId === tag.id}
                     <div
-                      class="flex w-full items-center gap-3 rounded-md border bg-background px-3 py-2.5"
+                      class="flex w-full flex-col gap-2 rounded-md border bg-background px-3 py-2.5"
                     >
-                      <div class="flex min-w-0 flex-1 items-center gap-2">
-                        <div class="flex gap-0.5">
-                          {#each PRESET_COLORS as color (color)}
-                            <button
-                              class={cn(
-                                'size-3.5 rounded-full border transition-transform hover:scale-110',
-                                editColor === color
-                                  ? 'border-foreground scale-110'
-                                  : 'border-transparent'
-                              )}
-                              style="background-color: {color}"
-                              aria-label="Select color"
-                              onclick={() => (editColor = color)}
-                            ></button>
-                          {/each}
-                        </div>
+                      <div class="flex flex-wrap gap-1">
+                        {#each PRESET_COLORS as color (color)}
+                          <button
+                            class={cn(
+                              'size-4 shrink-0 rounded-full border-2 transition-transform hover:scale-110',
+                              editColor === color
+                                ? 'scale-110 border-foreground'
+                                : 'border-transparent'
+                            )}
+                            style="background-color: {color}"
+                            aria-label="Select color"
+                            onclick={() => (editColor = color)}
+                          ></button>
+                        {/each}
+                      </div>
+                      <div class="flex min-w-0 items-center gap-2">
                         <input
                           bind:value={editLabel}
                           class="min-w-0 flex-1 border-b border-border bg-transparent text-sm outline-none"
@@ -262,10 +222,16 @@
                           }}
                           autofocus
                         />
-                        <button onclick={commitEdit} class="text-primary">
+                        <button
+                          onclick={commitEdit}
+                          class="shrink-0 text-primary hover:opacity-80"
+                        >
                           <Check class="size-3.5" />
                         </button>
-                        <button onclick={() => (editingId = null)} class="text-muted-foreground">
+                        <button
+                          onclick={() => (editingId = null)}
+                          class="shrink-0 text-muted-foreground hover:opacity-80"
+                        >
                           <X class="size-3.5" />
                         </button>
                       </div>
@@ -273,7 +239,7 @@
                   {:else}
                     <button
                       class={cn(
-                        'group flex w-full items-center gap-3 rounded-md border bg-background px-3 py-2.5 text-left transition-colors hover:border-primary/30 hover:bg-primary/10',
+                        'group flex w-full min-w-0 items-center gap-3 rounded-md border bg-background px-3 py-2.5 text-left transition-colors hover:border-primary/30 hover:bg-primary/10',
                         selectedTagId === tag.id && 'border-primary/30 bg-primary/10'
                       )}
                       onclick={() => {
@@ -282,17 +248,17 @@
                       }}
                     >
                       <span
-                        class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium"
+                        class="inline-flex min-w-0 items-center gap-1.5 truncate rounded-full px-2 py-0.5 text-xs font-medium"
                         style="background-color: {tag.color}18; color: {tag.color}; border: 1px solid {tag.color}30"
                       >
                         <span
-                          class="inline-block size-1.5 rounded-full"
+                          class="inline-block size-1.5 shrink-0 rounded-full"
                           style="background-color: {tag.color}"
                         ></span>
-                        {tag.name}
+                        <span class="truncate">{tag.name}</span>
                       </span>
-                      <span class="text-xs tabular-nums text-muted-foreground">
-                        {tagCount} article{tagCount === 1 ? '' : 's'}
+                      <span class="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+                        {tagCount}
                       </span>
                     </button>
                     <div
@@ -344,29 +310,43 @@
                 </div>
               {/each}
             </div>
-          {:else}
+          {:else if tagSearch.trim()}
             <div
               class="flex flex-col items-center justify-center py-12 text-center text-muted-foreground"
             >
-              <Tag class="mb-2 size-8 opacity-30" />
-              <p class="text-sm">No tags found</p>
+              <Search class="mb-2 size-8 opacity-30" />
+              <p class="text-sm">No tags match "{tagSearch}"</p>
+            </div>
+          {:else}
+            <div
+              class="flex flex-col items-center justify-center gap-3 py-12 text-center text-muted-foreground"
+            >
+              <Tag class="size-8 opacity-30" />
+              <div class="space-y-1">
+                <p class="text-sm font-medium">No tags yet</p>
+                <p class="max-w-[16rem] text-xs">
+                  Tags cut across contexts — great for topics like "runbook" or "post-incident".
+                </p>
+              </div>
+              <Button size="sm" variant="outline" class="gap-1.5" onclick={openNewTagDialog}>
+                <Plus class="size-3.5" />
+                New Tag
+              </Button>
             </div>
           {/if}
         </div>
       </div>
 
       <!-- Article detail panel -->
-      {#if selectedTagId}
-        <section class="flex min-h-0 min-w-0 flex-col">
+      <section class="flex min-h-0 min-w-0 flex-col">
+        {#if selectedTagId && selectedTag}
           <div class="flex h-12 shrink-0 items-center gap-3 border-b px-4">
-            {#if selectedTag}
-              <span
-                class="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium"
-                style="background-color: {selectedTag.color}18; color: {selectedTag.color}; border: 1px solid {selectedTag.color}30"
-              >
-                {selectedTag.name}
-              </span>
-            {/if}
+            <span
+              class="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium"
+              style="background-color: {selectedTag.color}18; color: {selectedTag.color}; border: 1px solid {selectedTag.color}30"
+            >
+              {selectedTag.name}
+            </span>
             <div class="relative min-w-0 flex-1">
               <Search
                 class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
@@ -383,6 +363,7 @@
             <button
               onclick={() => (selectedTagId = null)}
               class="text-muted-foreground hover:text-foreground"
+              title="Clear selection"
             >
               <X class="size-4" />
             </button>
@@ -441,8 +422,74 @@
               </div>
             {/if}
           </div>
-        </section>
-      {/if}
+        {:else}
+          <div
+            class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground"
+          >
+            <Tag class="size-10 opacity-30" />
+            <div class="space-y-1">
+              <p class="text-sm font-medium">Select a tag</p>
+              <p class="max-w-sm text-xs">
+                Pick one from the list to see every article that uses it. Tags work across contexts.
+              </p>
+            </div>
+          </div>
+        {/if}
+      </section>
     </div>
   </FadeIn>
 {/if}
+
+<Dialog.Root bind:open={newTagDialogOpen}>
+  <Dialog.Content>
+    <Dialog.Header>
+      <Dialog.Title>New Tag</Dialog.Title>
+      <Dialog.Description>
+        Tags cut across contexts. Pick a color and give it a short label.
+      </Dialog.Description>
+    </Dialog.Header>
+
+    <div class="flex flex-col gap-3 px-4 py-2">
+      <div class="flex flex-wrap items-center gap-2">
+        {#each PRESET_COLORS as color (color)}
+          <button
+            class={cn(
+              'size-6 rounded-full border-2 transition-transform hover:scale-110',
+              newTagColor === color ? 'scale-110 border-foreground' : 'border-transparent'
+            )}
+            style="background-color: {color}"
+            onclick={() => (newTagColor = color)}
+            aria-label="Select color"
+          ></button>
+        {/each}
+      </div>
+      <Input
+        bind:value={newTagLabel}
+        placeholder="Tag name…"
+        onkeydown={(e) => {
+          if (e.key === 'Enter') commitAdd();
+        }}
+      />
+      {#if newTagLabel.trim()}
+        <div class="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>Preview:</span>
+          <span
+            class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium"
+            style="background-color: {newTagColor}18; color: {newTagColor}; border: 1px solid {newTagColor}30"
+          >
+            <span
+              class="inline-block size-1.5 rounded-full"
+              style="background-color: {newTagColor}"
+            ></span>
+            {newTagLabel.trim()}
+          </span>
+        </div>
+      {/if}
+    </div>
+
+    <Dialog.Footer>
+      <Button variant="outline" onclick={() => (newTagDialogOpen = false)}>Cancel</Button>
+      <Button disabled={!newTagLabel.trim()} onclick={commitAdd}>Create</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
