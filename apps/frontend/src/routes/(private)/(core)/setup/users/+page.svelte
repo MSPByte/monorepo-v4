@@ -2,6 +2,7 @@
   import { getContext } from 'svelte';
   import { createQuery } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
+  import { showErrorToast } from '$lib/utils/errors';
   import { enhance } from '$app/forms';
   import type { createTrpcClient } from '$lib/trpc';
   import { DataTable } from '$lib/components/data-table';
@@ -246,7 +247,7 @@
       toast.success('Grant removed');
       grantsRefresh++;
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : String(err));
+      showErrorToast(err, 'Action failed. Please try again.');
     }
   }
 </script>

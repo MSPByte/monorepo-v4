@@ -5,6 +5,7 @@
   import { Plus, Save, Trash2, Undo2 } from '@lucide/svelte';
   import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
   import { toast } from 'svelte-sonner';
+  import { showErrorToast } from '$lib/utils/errors';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
 
@@ -191,7 +192,7 @@
       await refreshFramework();
       toast.success('Framework updated');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to update framework');
+      showErrorToast(error, 'Failed to update framework.');
     } finally {
       savingIdentity = false;
     }
@@ -207,7 +208,7 @@
       await refreshFramework();
       toast.success('Framework policies updated');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to update framework policies');
+      showErrorToast(error, 'Failed to update framework policies.');
     } finally {
       savingMembership = false;
     }
@@ -237,7 +238,7 @@
       await refreshAssignments();
       toast.success('Mapping added');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to add mapping');
+      showErrorToast(error, 'Failed to add mapping.');
     } finally {
       savingAssignment = false;
     }

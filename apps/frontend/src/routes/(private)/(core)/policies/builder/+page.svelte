@@ -5,6 +5,7 @@
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { Plus, Save, Trash2 } from '@lucide/svelte';
   import { toast } from 'svelte-sonner';
+  import { showErrorToast } from '$lib/utils/errors';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import {
@@ -416,7 +417,7 @@
         await goto(`/policies/${created.id}`);
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to save policy');
+      showErrorToast(error, 'Failed to save policy.');
     } finally {
       saving = false;
     }

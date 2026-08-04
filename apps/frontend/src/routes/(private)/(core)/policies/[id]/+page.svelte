@@ -4,6 +4,7 @@
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { ArrowLeft, Pencil, Plus, Save, Trash2 } from '@lucide/svelte';
   import { toast } from 'svelte-sonner';
+  import { showErrorToast } from '$lib/utils/errors';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import FindingCard from '$lib/components/domain/finding-card.svelte';
@@ -162,7 +163,7 @@
       await queryClient.invalidateQueries({ queryKey: ['frameworks.list'] });
       toast.success('Framework membership saved');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to save framework membership');
+      showErrorToast(error, 'Failed to save framework membership.');
     } finally {
       savingFrameworks = false;
     }
@@ -190,7 +191,7 @@
       await refreshAssignments();
       toast.success('Assignment created');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to create assignment');
+      showErrorToast(error, 'Failed to create assignment.');
     } finally {
       savingAssignment = false;
     }

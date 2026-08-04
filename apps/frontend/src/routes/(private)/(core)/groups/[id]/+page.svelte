@@ -4,6 +4,7 @@
   import { page } from '$app/state';
   import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
+  import { showErrorToast } from '$lib/utils/errors';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
 
@@ -154,7 +155,7 @@
       addOpen = false;
       toast.success(ids.length === 1 ? 'Site added' : `${ids.length} sites added`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to add sites');
+      showErrorToast(error, 'Failed to add sites.');
     } finally {
       adding = false;
     }
@@ -168,7 +169,7 @@
       await trpc.siteGroups.removeMember.mutate({ siteGroupId: id, siteId });
       await invalidateGroup();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to remove site');
+      showErrorToast(error, 'Failed to remove site.');
     } finally {
       removingSiteId = null;
     }

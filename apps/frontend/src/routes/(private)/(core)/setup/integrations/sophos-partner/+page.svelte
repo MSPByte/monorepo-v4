@@ -13,6 +13,7 @@
   import { Settings, TriangleAlert, LoaderCircle } from '@lucide/svelte';
   import { enhance } from '$app/forms';
   import { toast } from 'svelte-sonner';
+  import { toUserMessage, logError } from '$lib/utils/errors';
   import { goto } from '$app/navigation';
   import { authStore } from '$lib/stores/auth.store.svelte';
   import type { PageProps } from './$types';
@@ -111,7 +112,11 @@
               return async ({ result }) => {
                 testingConnection = false;
                 if (result.type === 'success') toast.success('Connection test successful!');
-                else toast.error((result as any).data?.error ?? 'Connection test failed');
+                else {
+                  const raw = (result as any).data?.error;
+                  logError(raw, 'sophos-partner:test');
+                  toast.error(toUserMessage(raw, 'Connection test failed. Check the credentials.'));
+                }
               };
             }
             savingConfig = true;
@@ -121,7 +126,9 @@
                 configSheetOpen = false;
                 toast.success('Settings saved!');
               } else {
-                toast.error((result as any).data?.error ?? 'Save failed');
+                const raw = (result as any).data?.error;
+                logError(raw, 'sophos-partner:save');
+                toast.error(toUserMessage(raw, 'Failed to save settings.'));
               }
             };
           }}

@@ -2,6 +2,7 @@
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
   import { toast } from 'svelte-sonner';
+  import { showErrorToast } from '$lib/utils/errors';
   import { Plus } from '@lucide/svelte';
   import { useQueryClient } from '@tanstack/svelte-query';
   import type { AppRouter } from '@mspbyte/trpc';
@@ -72,7 +73,7 @@
       toast.success('Group created');
       goto(`/groups/${row.id}`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to create group');
+      showErrorToast(error, 'Failed to create group.');
     } finally {
       creating = false;
     }

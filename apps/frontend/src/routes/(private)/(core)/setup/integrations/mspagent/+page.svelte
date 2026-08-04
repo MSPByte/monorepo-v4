@@ -22,6 +22,7 @@
   } from '@lucide/svelte';
   import { enhance } from '$app/forms';
   import { toast } from 'svelte-sonner';
+  import { toUserMessage, logError } from '$lib/utils/errors';
   import { goto } from '$app/navigation';
   import { authStore } from '$lib/stores/auth.store.svelte';
   import Loader from '$lib/components/transition/loader.svelte';
@@ -163,7 +164,9 @@
             toast.success(`Check complete: ${ok}/${result.data.checkResult.length} sites OK`);
           }
         } else if (result.type === 'failure') {
-          toast.error(result.data?.error ?? 'Check failed');
+          const raw = result.data?.error;
+          logError(raw, 'mspagent:check');
+          toast.error(toUserMessage(raw, 'Check failed. Please try again.'));
         }
       };
     };
@@ -185,15 +188,19 @@
 
         if (result.type === 'success') {
           const { pushed, failed, errors } = result.data ?? {};
-          if (failed > 0) toast.error(`Pushed ${pushed}, failed ${failed}: ${errors?.join(', ')}`);
-          else
+          if (failed > 0) {
+            logError(errors, 'mspagent:push:partial');
+            toast.warning(`Pushed ${pushed}, failed ${failed}. Check the audit log for details.`);
+          } else
             toast.success(
               siteId
                 ? 'Variable pushed successfully'
                 : `Successfully pushed ${pushed} site variable${pushed !== 1 ? 's' : ''}`
             );
         } else if (result.type === 'failure') {
-          toast.error(result.data?.error ?? 'Push failed');
+          const raw = result.data?.error;
+          logError(raw, 'mspagent:push');
+          toast.error(toUserMessage(raw, 'Push failed. Please try again.'));
         }
       };
     };

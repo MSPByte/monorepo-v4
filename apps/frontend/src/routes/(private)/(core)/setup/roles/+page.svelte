@@ -2,6 +2,7 @@
   import { getContext } from 'svelte';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
+  import { showErrorToast } from '$lib/utils/errors';
   import type { createTrpcClient } from '$lib/trpc';
   import { DataTable } from '$lib/components/data-table';
   import type {
@@ -218,7 +219,7 @@
       targetRole = null;
       refreshKey++;
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : String(err));
+      showErrorToast(err, 'Action failed. Please try again.');
     } finally {
       submitting = false;
     }

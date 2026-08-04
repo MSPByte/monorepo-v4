@@ -2,6 +2,7 @@
   import { getContext } from 'svelte';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
+  import { showErrorToast } from '$lib/utils/errors';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
@@ -110,7 +111,7 @@
       groupDialogOpen = false;
       toast.success('Group membership updated');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to update groups');
+      showErrorToast(error, 'Failed to update groups.');
     } finally {
       savingGroup = false;
     }
@@ -125,7 +126,7 @@
       });
       await refreshGroups();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to remove group');
+      showErrorToast(error, 'Failed to remove group.');
     }
   }
 

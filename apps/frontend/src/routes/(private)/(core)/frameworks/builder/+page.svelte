@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { Save } from '@lucide/svelte';
   import { toast } from 'svelte-sonner';
+  import { showErrorToast } from '$lib/utils/errors';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import Button from '$lib/components/ui/button/button.svelte';
@@ -35,7 +36,7 @@
       toast.success('Framework created');
       await goto(`/frameworks/${created.id}`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to create framework');
+      showErrorToast(error, 'Failed to create framework.');
     } finally {
       saving = false;
     }
