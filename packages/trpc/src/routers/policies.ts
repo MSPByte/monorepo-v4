@@ -18,7 +18,6 @@ import { ActionLabels, PolicyTableShapes } from "@mspbyte/shared";
 import { t, authProcedure } from "../trpc.js";
 import type { Context } from "../context.js";
 import { queryTableData, tableDataInputSchema } from "./table-data.js";
-import { shortId } from "../short-id.js";
 
 const targetTypeSchema = z.enum([
   "tenant",
@@ -239,12 +238,7 @@ export const policiesRouter = t.router({
     .input(policyInputSchema)
     .mutation(async ({ ctx, input }) => {
       requirePoliciesWrite(ctx);
-      const idBase = input.name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/(^-|-$)/g, "")
-        .slice(0, 44);
-      const id = `custom-${idBase || "policy"}-${shortId(6)}`;
+      const id = randomUUID();
       const [row] = await ctx.db
         .insert(policies)
         .values({

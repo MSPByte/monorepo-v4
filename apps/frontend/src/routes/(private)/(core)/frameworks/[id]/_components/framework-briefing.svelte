@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Callsign from '$lib/components/panel/callsign.svelte';
   import { formatRelativeDate } from '$lib/utils/format';
 
   type Props = {
@@ -26,7 +25,7 @@
     policyCount,
     mappingCount,
     createdAt,
-    updatedAt
+    updatedAt,
   }: Props = $props();
 </script>
 
@@ -49,7 +48,6 @@
           <p class="mt-0.5 max-w-3xl truncate text-xs text-muted-foreground">{description}</p>
         {/if}
       </div>
-      <Callsign prefix="FRWK" {id} title="Framework callsign — first 4 chars of ID" />
     </div>
   </div>
 
