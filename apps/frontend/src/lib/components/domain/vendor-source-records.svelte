@@ -72,7 +72,9 @@
   const canWrite = $derived(authStore.isAllowed('Assets.Write'));
   const canDelete = $derived(authStore.isAllowed('Assets.Delete'));
 
-  const confirmedCount = $derived(sources.filter((s) => (s.status ?? 'confirmed') === 'confirmed').length);
+  const confirmedCount = $derived(
+    sources.filter((s) => (s.status ?? 'confirmed') === 'confirmed').length
+  );
   const candidateCount = $derived(sources.filter((s) => s.status === 'candidate').length);
 
   let addOpen = $state(false);
@@ -120,7 +122,9 @@
 
   function invalidate() {
     qc.invalidateQueries({ queryKey });
-    qc.invalidateQueries({ queryKey: ['entitySources.candidateVendorRecords', canonicalType, canonicalId] });
+    qc.invalidateQueries({
+      queryKey: ['entitySources.candidateVendorRecords', canonicalType, canonicalId],
+    });
   }
 
   const linkMut = createMutation(() => ({
@@ -200,18 +204,11 @@
         operator: 'eq',
         value: source.externalId,
       },
-      ...(source.linkId
-        ? [
-            {
-              id: 'canonical-source-link',
-              field: 'linkId',
-              operator: 'eq' as const,
-              value: source.linkId,
-            },
-          ]
-        : []),
     ]);
+
     const params = new URLSearchParams({ filters });
+    if (source.linkId) params.set('linkId', source.linkId);
+
     return `${route.path}?${params.toString()}`;
   }
 
@@ -247,7 +244,7 @@
       <div class="min-w-0">
         <div class="flex items-center gap-1.5 truncate">
           {#if href}
-            <a href={href} class="truncate hover:underline">
+            <a {href} target="_blank" class="truncate hover:underline">
               {source.label ?? prettyText(source.table ?? 'Source')}
             </a>
           {:else}
@@ -267,7 +264,9 @@
             </span>
           {/if}
         </div>
-        <div class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+        <div
+          class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground"
+        >
           {source.provider ?? 'provider'}{source.confidence !== undefined
             ? ` · ${source.confidence}% conf`
             : ''}
@@ -276,10 +275,7 @@
     </div>
     <div class="min-w-0 font-mono text-[11.5px] text-muted-foreground">
       {#if source.linkId}
-        <a
-          href={sourceIntegrationHref(source) ?? '#'}
-          class="truncate hover:underline"
-        >
+        <a href={sourceIntegrationHref(source) ?? '#'} class="truncate hover:underline">
           {source.linkName ?? source.linkId}
         </a>
       {:else}
@@ -289,7 +285,8 @@
     <div class="flex shrink-0 items-center gap-1">
       {#if href}
         <a
-          href={href}
+          {href}
+          target="_blank"
           class="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
         >
           open <ArrowUpRight class="size-3" />
@@ -447,9 +444,7 @@
                         <span> · {candidate.subtitle}</span>
                       {/if}
                     </div>
-                    <div
-                      class="truncate font-mono text-[10px] text-muted-foreground/70"
-                    >
+                    <div class="truncate font-mono text-[10px] text-muted-foreground/70">
                       {candidate.linkName ?? candidate.externalId}
                     </div>
                   </div>
@@ -463,7 +458,9 @@
             {/each}
           </ul>
         {:else}
-          <div class="flex flex-col items-center justify-center gap-1 py-8 text-xs text-muted-foreground">
+          <div
+            class="flex flex-col items-center justify-center gap-1 py-8 text-xs text-muted-foreground"
+          >
             <span>no matches</span>
             {#if !searchDebounced}
               <span class="text-[10.5px] text-muted-foreground/70">start typing to search</span>

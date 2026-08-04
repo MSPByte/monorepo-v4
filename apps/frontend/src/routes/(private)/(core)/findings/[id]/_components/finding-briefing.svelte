@@ -1,8 +1,6 @@
 <script lang="ts">
-  import Callsign from '$lib/components/panel/callsign.svelte';
   import FindingSeverityBadge from '$lib/components/domain/finding-severity-badge.svelte';
   import FindingStatusBadge from '$lib/components/domain/finding-status-badge.svelte';
-  import { formatRelativeDate } from '$lib/utils/format';
 
   type Props = {
     id: string;
@@ -60,7 +58,6 @@
 
   <!-- Categorical pills -->
   <div class="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-6 pb-2 font-mono text-[10.5px]">
-    <Callsign prefix="FIND" {id} title="Finding callsign — first 4 chars of ID" />
     <FindingSeverityBadge {severity} />
     <FindingStatusBadge {status} />
   </div>

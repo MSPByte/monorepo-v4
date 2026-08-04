@@ -221,17 +221,8 @@
       ? (definition.filter as { conditions: unknown[] }).conditions
       : []}
   <FadeIn class="flex size-full flex-col overflow-hidden">
-    <div class="border-b bg-background/80 px-6 py-5">
-      <div class="mx-auto flex max-w-7xl flex-col gap-4">
-        <Button
-          href="/policies"
-          variant="ghost"
-          size="sm"
-          class="w-fit gap-2 px-0 hover:bg-transparent"
-        >
-          <ArrowLeft class="size-4" />
-          Policies
-        </Button>
+    <div class="border-b bg-card px-6 py-5">
+      <div class="flex w-full flex-col gap-4">
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div class="min-w-0 space-y-2">
             <div class="flex flex-wrap items-center gap-2">

@@ -16,11 +16,17 @@
   import RolesCell from '$lib/components/data-table/cells/roles-cell.svelte';
   import IdentitySheet from './_identity-sheet.svelte';
   import ResetPasswordDialog from './_reset-password-dialog.svelte';
+  import GroupPickerDialog from '../_actions/group-picker-dialog.svelte';
+  import LicensePickerDialog from '../_actions/license-picker-dialog.svelte';
+  import RolePickerDialog from '../_actions/role-picker-dialog.svelte';
   import type { m365Identities } from '@mspbyte/drizzle';
   import LogOutIcon from '@lucide/svelte/icons/log-out';
   import ShieldOffIcon from '@lucide/svelte/icons/shield-off';
   import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
   import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+  import UsersIcon from '@lucide/svelte/icons/users';
+  import KeySquareIcon from '@lucide/svelte/icons/key-square';
+  import ShieldIcon from '@lucide/svelte/icons/shield';
 
   const trpc = getContext<ReturnType<typeof createTrpcClient>>('trpc');
   const queryClient = useQueryClient();
@@ -51,20 +57,23 @@
   const columns: DataTableColumn<IdentityRow>[] = $derived([
     textColumn<IdentityRow>('name', 'Name'),
     textColumn<IdentityRow>('email', 'Email'),
-    {
-      key: 'type',
-      title: 'Type',
-      sortable: true,
-      filter: {
-        type: 'select',
-        operators: ['eq'],
-        options: [
-          { label: 'Member', value: 'member' },
-          { label: 'Guest', value: 'guest' },
-          { label: 'Service', value: 'service' },
-        ],
-      },
-    },
+    textColumn<IdentityRow>(
+      'type',
+      'Type',
+      undefined,
+      { pretty: true },
+      {
+        filter: {
+          type: 'select',
+          operators: ['eq'],
+          options: [
+            { label: 'Member', value: 'member' },
+            { label: 'Guest', value: 'guest' },
+            { label: 'Service', value: 'service' },
+          ],
+        },
+      }
+    ),
     boolBadgeColumn<IdentityRow>('enabled', 'Status', {
       trueLabel: 'Enabled',
       falseLabel: 'Disabled',
@@ -90,6 +99,47 @@
   let resetDialogOpen = $state(false);
   let resetTargets = $state<Array<{ id: string; name: string; email: string }>>([]);
   let resetOnComplete = $state<(() => Promise<void>) | null>(null);
+
+  // Membership dialogs (group/license/role) — one Manage dialog per kind, shared
+  // across row-actions and the sheet. Manage actions require every selected
+  // identity to share one tenant (Graph API options are tenant-scoped); Reset
+  // Password / Enable / Disable / Revoke are per-identity and stay enabled
+  // across tenants.
+  let membershipOpen = $state<null | 'group' | 'license' | 'role'>(null);
+  let membershipTargets = $state<IdentityRow[]>([]);
+  let membershipLinkIdOverride = $state<string | null>(null);
+  let membershipRefetch = $state<(() => Promise<void>) | null>(null);
+
+  const membershipLabel = $derived(
+    membershipTargets.length === 1
+      ? membershipTargets[0]?.email || membershipTargets[0]?.name || 'user'
+      : `${membershipTargets.length} identities`
+  );
+  const membershipLinkId = $derived(membershipLinkIdOverride ?? '');
+
+  // Returns a single linkId if every row shares it (or the active scope's link),
+  // else null — used both by openMembership and the row-action disabled check.
+  function resolveSharedLinkId(rows: IdentityRow[]): string | null {
+    if (rows.length === 0) return null;
+    if (currentLinkId) return currentLinkId;
+    const linkIds = new Set(rows.map((r) => String(r.linkId)));
+    return linkIds.size === 1 ? [...linkIds][0]! : null;
+  }
+
+  const manageDisabled = (rows: IdentityRow[]) => resolveSharedLinkId(rows) === null;
+
+  function openMembership(
+    kind: 'group' | 'license' | 'role',
+    rows: IdentityRow[],
+    refetch: () => Promise<void>
+  ) {
+    const link = resolveSharedLinkId(rows);
+    if (!link) return;
+    membershipLinkIdOverride = link;
+    membershipTargets = rows;
+    membershipRefetch = refetch;
+    membershipOpen = kind;
+  }
 
   async function invalidateAfter() {
     await queryClient.invalidateQueries({ queryKey: ['vendor.tableData'] });
@@ -120,41 +170,11 @@
       ? []
       : [
           {
-            label: 'Revoke Sessions',
-            icon: LogOutIcon,
-            variant: 'outline',
-            onclick: async (rows, fetchData, { setProgress }) => {
-              const ids = idsOf(rows);
-              if (ids.length === 0) return;
-              setProgress(`Revoking sessions for ${ids.length}...`);
-              const result = await trpc.vendor.revokeM365IdentitySessions.mutate({ ids });
-              await invalidateAfter();
-              await fetchData();
-              summarize('Revoke Sessions', result.updated, result.failed, result.skipped);
-            },
-          },
-          {
-            label: 'Disable',
-            icon: ShieldOffIcon,
-            variant: 'outline',
-            disabled: (rows) => rows.length === 0 || rows.every((r) => r['enabled'] === false),
-            onclick: async (rows, fetchData, { setProgress }) => {
-              const ids = idsOf(rows);
-              if (ids.length === 0) return;
-              setProgress(`Disabling ${ids.length}...`);
-              const result = await trpc.vendor.setM365IdentityEnabled.mutate({
-                ids,
-                enabled: false,
-              });
-              await invalidateAfter();
-              await fetchData();
-              summarize('Disable', result.updated, result.failed, result.skipped);
-            },
-          },
-          {
             label: 'Enable',
             icon: ShieldCheckIcon,
             variant: 'outline',
+            group: 'Status',
+            preserveSelection: true,
             disabled: (rows) => rows.length === 0 || rows.every((r) => r['enabled'] === true),
             onclick: async (rows, fetchData, { setProgress }) => {
               const ids = idsOf(rows);
@@ -170,9 +190,47 @@
             },
           },
           {
+            label: 'Disable',
+            icon: ShieldOffIcon,
+            variant: 'outline',
+            group: 'Status',
+            preserveSelection: true,
+            disabled: (rows) => rows.length === 0 || rows.every((r) => r['enabled'] === false),
+            onclick: async (rows, fetchData, { setProgress }) => {
+              const ids = idsOf(rows);
+              if (ids.length === 0) return;
+              setProgress(`Disabling ${ids.length}...`);
+              const result = await trpc.vendor.setM365IdentityEnabled.mutate({
+                ids,
+                enabled: false,
+              });
+              await invalidateAfter();
+              await fetchData();
+              summarize('Disable', result.updated, result.failed, result.skipped);
+            },
+          },
+          {
+            label: 'Revoke Sessions',
+            icon: LogOutIcon,
+            variant: 'outline',
+            group: 'Status',
+            preserveSelection: true,
+            onclick: async (rows, fetchData, { setProgress }) => {
+              const ids = idsOf(rows);
+              if (ids.length === 0) return;
+              setProgress(`Revoking sessions for ${ids.length}...`);
+              const result = await trpc.vendor.revokeM365IdentitySessions.mutate({ ids });
+              await invalidateAfter();
+              await fetchData();
+              summarize('Revoke Sessions', result.updated, result.failed, result.skipped);
+            },
+          },
+          {
             label: 'Reset Password',
             icon: KeyRoundIcon,
             variant: 'outline',
+            group: 'Password',
+            preserveSelection: true,
             onclick: async (rows, fetchData) => {
               if (rows.length === 0) return;
               resetTargets = rows.map((r) => ({
@@ -185,6 +243,33 @@
               };
               resetDialogOpen = true;
             },
+          },
+          {
+            label: 'Manage Groups',
+            icon: UsersIcon,
+            variant: 'outline',
+            group: 'Manage',
+            preserveSelection: true,
+            disabled: manageDisabled,
+            onclick: (rows, fetchData) => openMembership('group', rows, fetchData),
+          },
+          {
+            label: 'Manage Licenses',
+            icon: KeySquareIcon,
+            variant: 'outline',
+            group: 'Manage',
+            preserveSelection: true,
+            disabled: manageDisabled,
+            onclick: (rows, fetchData) => openMembership('license', rows, fetchData),
+          },
+          {
+            label: 'Manage Roles',
+            icon: ShieldIcon,
+            variant: 'outline',
+            group: 'Manage',
+            preserveSelection: true,
+            disabled: manageDisabled,
+            onclick: (rows, fetchData) => openMembership('role', rows, fetchData),
           },
         ]
   );
@@ -201,6 +286,7 @@
   {columns}
   enableRowSelection={canWrite}
   {rowActions}
+  actionMode="dropdown"
   onrowclick={(row) => openDrawer(row as IdentityRow)}
 />
 
@@ -216,5 +302,38 @@
   onOpenChange={(open) => (resetDialogOpen = open)}
   onSuccess={async () => {
     if (resetOnComplete) await resetOnComplete();
+  }}
+/>
+
+<GroupPickerDialog
+  open={membershipOpen === 'group'}
+  onOpenChange={(open) => (membershipOpen = open ? 'group' : null)}
+  linkId={membershipLinkId}
+  identityIds={membershipTargets.map((r) => r.id)}
+  identityLabel={membershipLabel}
+  onSuccess={async () => {
+    if (membershipRefetch) await membershipRefetch();
+  }}
+/>
+
+<LicensePickerDialog
+  open={membershipOpen === 'license'}
+  onOpenChange={(open) => (membershipOpen = open ? 'license' : null)}
+  linkId={membershipLinkId}
+  identityIds={membershipTargets.map((r) => r.id)}
+  identityLabel={membershipLabel}
+  onSuccess={async () => {
+    if (membershipRefetch) await membershipRefetch();
+  }}
+/>
+
+<RolePickerDialog
+  open={membershipOpen === 'role'}
+  onOpenChange={(open) => (membershipOpen = open ? 'role' : null)}
+  linkId={membershipLinkId}
+  identityIds={membershipTargets.map((r) => r.id)}
+  identityLabel={membershipLabel}
+  onSuccess={async () => {
+    if (membershipRefetch) await membershipRefetch();
   }}
 />

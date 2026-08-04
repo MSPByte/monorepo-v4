@@ -12,7 +12,7 @@ import {
   M365LicensesShape
 } from './shapes.js';
 
-export const CONSENT_VERSION = 4;
+export const CONSENT_VERSION = 5;
 
 export const REQUIRED_DIRECTORY_ROLES: Record<string, string> = {
   'Exchange Administrator': '29232cdf-9323-42fd-ade2-1d097af3e4de',

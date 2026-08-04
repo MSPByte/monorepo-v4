@@ -74,6 +74,10 @@ export interface RowAction<TData> {
   ) => void | Promise<void>;
   variant?: 'default' | 'destructive' | 'outline' | 'secondary' | 'ghost';
   disabled?: (rows: TData[]) => boolean;
+  /** Optional group name — used by dropdown actionMode to render section headers. */
+  group?: string;
+  /** Keep row selection after the action runs. Defaults to false. */
+  preserveSelection?: boolean;
 }
 
 /** Options passed to the fetchData callback on every re-fetch. */
@@ -110,6 +114,10 @@ export interface DataTableProps<TData> {
   // Config
   views?: TableView<TData>[];
   rowActions?: RowAction<TData>[];
+  /** How row actions render in the selection bar. Defaults to 'inline'. */
+  actionMode?: 'inline' | 'dropdown';
+  /** Optional label for the dropdown trigger (defaults to "Actions"). */
+  actionMenuLabel?: string;
   globalSearchFields?: string[];
   filterMap?: Record<string, string>;
   defaultPageSize?: number;

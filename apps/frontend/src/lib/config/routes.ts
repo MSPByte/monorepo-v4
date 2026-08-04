@@ -35,7 +35,7 @@ const ROUTES: Route[] = [
       { label: 'Sites', href: '/sites', permission: 'Sites.Read' },
       { label: 'Groups', href: '/groups', permission: 'Sites.Read' },
       { label: 'Assets', href: '/assets', permission: 'Assets.Read' },
-      { label: 'People', href: '/people', permission: 'People.Read' },
+      // { label: 'People', href: '/people', permission: 'People.Read' },
     ],
   },
   {
@@ -86,7 +86,7 @@ export function canSeeRoute(grants: PermissionGrant[] | null, route: Route): boo
 function filterRoute(
   grants: PermissionGrant[] | null,
   route: Route,
-  opts: { isDev: boolean },
+  opts: { isDev: boolean }
 ): Route | null {
   if (route.devOnly && !opts.isDev) return null;
   if (route.children?.length) {
@@ -113,7 +113,7 @@ function filterRoute(
 // data sent to the browser omits hidden routes.
 export function buildFilteredRouteMap(
   grants: PermissionGrant[] | null,
-  opts: { isDev: boolean },
+  opts: { isDev: boolean }
 ): Map<string, Route[]> {
   const map = new Map<string, Route[]>();
   map.set('top', []);

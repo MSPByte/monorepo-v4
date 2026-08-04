@@ -35,6 +35,8 @@
     views?: TableView<TData>[];
     enableRowSelection?: boolean;
     rowActions?: RowAction<TData>[];
+    actionMode?: 'inline' | 'dropdown';
+    actionMenuLabel?: string;
     onrowclick?: (row: TData) => void;
   }
 
@@ -49,6 +51,8 @@
     views = [],
     enableRowSelection = false,
     rowActions = [],
+    actionMode = 'inline',
+    actionMenuLabel,
     onrowclick,
   }: Props = $props();
 
@@ -194,6 +198,8 @@
       {views}
       {enableRowSelection}
       {rowActions}
+      {actionMode}
+      {actionMenuLabel}
       {onrowclick}
     />
   {/key}

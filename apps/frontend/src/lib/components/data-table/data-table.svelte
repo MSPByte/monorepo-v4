@@ -1,14 +1,17 @@
 <script lang="ts" generics="TData">
   import { untrack } from 'svelte';
+  import { toast } from 'svelte-sonner';
   import type { DataTableProps, TableFilter, TableView, PaginationInput, RowAction } from './types';
   import { cn } from '$lib/utils';
   import { Checkbox } from '$lib/components/ui/checkbox';
   import { Button } from '$lib/components/ui/button';
   import * as Dialog from '$lib/components/ui/dialog';
+  import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
   import * as Table from '$lib/components/ui/table';
   import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
   import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
   import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
+  import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
   import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
   import DataTableToolbar from './data-table-toolbar.svelte';
   import DataTablePagination from './data-table-pagination.svelte';
@@ -30,6 +33,8 @@
     enableURLState = true,
     views = [],
     rowActions = [],
+    actionMode = 'inline',
+    actionMenuLabel = 'Actions',
     globalSearchFields,
     filterMap,
     defaultPageSize = 100,
@@ -405,19 +410,46 @@
     actionProgress = message;
   }
 
+  // Preserve first-seen order of group names so callers control the layout.
+  function groupActions(
+    actions: RowAction<TData>[]
+  ): Array<{ name: string | null; actions: RowAction<TData>[] }> {
+    const groups = new Map<string | null, RowAction<TData>[]>();
+    for (const action of actions) {
+      const key = action.group ?? null;
+      const bucket = groups.get(key);
+      if (bucket) bucket.push(action);
+      else groups.set(key, [action]);
+    }
+    return [...groups.entries()].map(([name, actions]) => ({ name, actions }));
+  }
+
   async function executeAction(action: RowAction<TData>, rows: TData[]) {
     actionRunning = true;
     activeAction = action;
     actionProgress = `${action.label} for ${rows.length} row${rows.length === 1 ? '' : 's'}...`;
     try {
       await action.onclick(rows, fetchData, { setProgress: setActionProgress });
-      allSelected = false;
-      selectedRowIds = new Set();
+      if (!action.preserveSelection) {
+        allSelected = false;
+        selectedRowIds = new Set();
+      }
     } finally {
       actionRunning = false;
       activeAction = null;
       actionProgress = null;
     }
+  }
+
+  let actionMenuOpen = $state(false);
+
+  // Close the menu, then fire the action on the next tick so the dropdown's
+  // portal + focus trap has unmounted before a Dialog (or any focus-stealing
+  // UI the action might open) mounts. Prevents the menu from lingering above
+  // a blurred backdrop.
+  function triggerAction(action: RowAction<TData>) {
+    actionMenuOpen = false;
+    setTimeout(() => handleAction(action), 0);
   }
 
   async function handleAction(action: RowAction<TData>) {
@@ -432,6 +464,13 @@
       actionRunning = false;
       activeAction = null;
       actionProgress = null;
+    }
+
+    // In allSelected mode we skip the disabled check on the trigger button
+    // (rows aren't in memory yet), so re-check here now that we have them.
+    if (action.disabled && action.disabled(rows)) {
+      toast.info(`"${action.label}" isn't available for the current selection.`);
+      return;
     }
 
     if (action.variant === 'destructive') {
@@ -606,6 +645,86 @@
     <div
       class="flex items-center gap-2 rounded-md border border-muted bg-muted/50 p-2 justify-between"
     >
+      <div class="flex gap-2">
+        {#if actionMode === 'dropdown'}
+          {@const groupedActions = groupActions(rowActions)}
+          <DropdownMenu.Root bind:open={actionMenuOpen}>
+            <DropdownMenu.Trigger>
+              {#snippet child({ props })}
+                <Button
+                  {...props}
+                  variant="outline"
+                  size="sm"
+                  disabled={actionRunning}
+                  class="gap-1.5"
+                >
+                  {#if actionRunning}
+                    <LoaderCircleIcon class="h-4 w-4 animate-spin" />
+                  {/if}
+                  {actionMenuLabel}
+                  <ChevronDownIcon class="h-3.5 w-3.5 opacity-60" />
+                </Button>
+              {/snippet}
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content align="start" class="w-56">
+              {#each groupedActions as group, i (group.name ?? `__ungrouped-${i}`)}
+                {#if i > 0}
+                  <DropdownMenu.Separator />
+                {/if}
+                <DropdownMenu.Group>
+                  {#if group.name}
+                    <DropdownMenu.GroupHeading
+                      class="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+                    >
+                      {group.name}
+                    </DropdownMenu.GroupHeading>
+                  {/if}
+                  {#each group.actions as action}
+                    {@const isDisabled =
+                      actionRunning ||
+                      (!allSelected && action.disabled ? action.disabled(selectedRows) : false)}
+                    <DropdownMenu.Item
+                      class={cn(
+                        'gap-2 cursor-pointer',
+                        action.variant === 'destructive' &&
+                          'text-destructive focus:text-destructive'
+                      )}
+                      disabled={isDisabled}
+                      onSelect={() => triggerAction(action)}
+                    >
+                      {#if actionRunning && activeAction === action}
+                        <LoaderCircleIcon class="h-3.5 w-3.5 animate-spin" />
+                      {:else if action.icon}
+                        {@const Icon = action.icon}
+                        <Icon class="h-3.5 w-3.5" />
+                      {/if}
+                      <span>{action.label}</span>
+                    </DropdownMenu.Item>
+                  {/each}
+                </DropdownMenu.Group>
+              {/each}
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
+        {:else}
+          {#each rowActions as action}
+            <Button
+              variant={action.variant || 'outline'}
+              size="sm"
+              onclick={() => handleAction(action)}
+              disabled={actionRunning ||
+                (!allSelected && action.disabled ? action.disabled(selectedRows) : false)}
+            >
+              {#if actionRunning && activeAction === action}
+                <LoaderCircleIcon class="h-4 w-4 mr-2 animate-spin" />
+              {:else if action.icon}
+                {@const Icon = action.icon}
+                <Icon class="h-4 w-4 mr-2" />
+              {/if}
+              {action.label}
+            </Button>
+          {/each}
+        {/if}
+      </div>
       <span class="text-sm font-medium">
         {selectionCount} row{selectionCount !== 1 ? 's' : ''} selected
         {#if allSelected}
@@ -619,7 +738,7 @@
             }}
             disabled={actionRunning}>Clear selection</Button
           >
-        {:else if allRowsSelected && total > data.length}
+        {:else if total > data.length}
           <span class="text-muted-foreground mr-2"> of {total} total</span>
           <Button
             variant="ghost"
@@ -632,25 +751,6 @@
           >
         {/if}
       </span>
-      <div class="flex gap-2">
-        {#each rowActions as action}
-          <Button
-            variant={action.variant || 'outline'}
-            size="sm"
-            onclick={() => handleAction(action)}
-            disabled={actionRunning ||
-              (!allSelected && action.disabled ? action.disabled(selectedRows) : false)}
-          >
-            {#if actionRunning && activeAction === action}
-              <LoaderCircleIcon class="h-4 w-4 mr-2 animate-spin" />
-            {:else if action.icon}
-              {@const Icon = action.icon}
-              <Icon class="h-4 w-4 mr-2" />
-            {/if}
-            {action.label}
-          </Button>
-        {/each}
-      </div>
     </div>
   {/if}
 

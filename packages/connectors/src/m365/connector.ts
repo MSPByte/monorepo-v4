@@ -32,6 +32,10 @@ export class M365Connector {
   readonly groups: {
     listAll: (select: string) => Promise<unknown[]>;
     members: (groupId: string) => Promise<Array<{ id?: string }>>;
+    // 400 with "One or more added object references already exist" is treated as success
+    addMember: (groupId: string, userId: string) => Promise<void>;
+    // 404 is ignored (already not a member)
+    removeMember: (groupId: string, userId: string) => Promise<void>;
   };
 
   readonly directoryRoles: {
@@ -39,7 +43,19 @@ export class M365Connector {
   };
 
   readonly subscribedSkus: {
-    listAll: () => Promise<unknown[]>;
+    listAll: () => Promise<Array<{
+      skuId: string;
+      skuPartNumber: string;
+      capabilityStatus?: string;
+      consumedUnits?: number;
+      prepaidUnits?: {
+        enabled?: number;
+        suspended?: number;
+        warning?: number;
+        lockedOut?: number;
+      };
+      servicePlans?: Array<{ servicePlanName: string }>;
+    }>>;
   };
 
   readonly conditionalAccess: {
@@ -85,11 +101,28 @@ export class M365Connector {
     findOwn: () => Promise<{ id: string } | null>;
   };
 
+  readonly users_licenses: {
+    // Assigns and/or removes licenses in a single Graph call.
+    // Returns the fresh subscribedSkus snapshot so callers can decide whether
+    // to refresh cached counts.
+    modify: (
+      userId: string,
+      addSkuIds: string[],
+      removeSkuIds: string[]
+    ) => Promise<void>;
+  };
+
   readonly roleManagement: {
     directory: {
       roleAssignments: {
         // 409 Conflict (already assigned) is silently treated as success
         create: (principalId: string, roleDefinitionId: string) => Promise<void>;
+        list: (opts: {
+          principalId?: string;
+          roleDefinitionId?: string;
+        }) => Promise<Array<{ id: string; principalId: string; roleDefinitionId: string }>>;
+        // 404 is ignored (already removed)
+        delete: (assignmentId: string) => Promise<void>;
       };
     };
   };
@@ -156,7 +189,32 @@ export class M365Connector {
       members: (groupId) =>
         this.client.getAll<{ id?: string }>(
           `https://graph.microsoft.com/v1.0/groups/${groupId}/members?$select=id`
-        )
+        ),
+
+      addMember: async (groupId, userId) => {
+        try {
+          await this.client.post(
+            `https://graph.microsoft.com/v1.0/groups/${groupId}/members/$ref`,
+            {
+              '@odata.id': `https://graph.microsoft.com/v1.0/directoryObjects/${userId}`
+            }
+          );
+        } catch (err) {
+          if (
+            err instanceof Error &&
+            err.message.includes('One or more added object references already exist')
+          )
+            return;
+          throw err;
+        }
+      },
+
+      removeMember: async (groupId, userId) => {
+        await this.client.delete(
+          `https://graph.microsoft.com/v1.0/groups/${groupId}/members/${userId}/$ref`,
+          { ignoreStatuses: [404] }
+        );
+      }
     };
 
     this.directoryRoles = {
@@ -244,6 +302,18 @@ export class M365Connector {
       }
     };
 
+    this.users_licenses = {
+      modify: async (userId, addSkuIds, removeSkuIds) => {
+        await this.client.post(
+          `https://graph.microsoft.com/v1.0/users/${userId}/assignLicense`,
+          {
+            addLicenses: addSkuIds.map((skuId) => ({ skuId, disabledPlans: [] })),
+            removeLicenses: removeSkuIds
+          }
+        );
+      }
+    };
+
     this.roleManagement = {
       directory: {
         roleAssignments: {
@@ -263,6 +333,25 @@ export class M365Connector {
                 return;
               throw err;
             }
+          },
+          list: async ({ principalId, roleDefinitionId }) => {
+            const filters: string[] = [];
+            if (principalId) filters.push(`principalId eq '${principalId}'`);
+            if (roleDefinitionId) filters.push(`roleDefinitionId eq '${roleDefinitionId}'`);
+            const filter = filters.length ? `?$filter=${encodeURIComponent(filters.join(' and '))}` : '';
+            return this.client.getAll<{
+              id: string;
+              principalId: string;
+              roleDefinitionId: string;
+            }>(
+              `https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments${filter}`
+            );
+          },
+          delete: async (assignmentId) => {
+            await this.client.delete(
+              `https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments/${assignmentId}`,
+              { ignoreStatuses: [404] }
+            );
           }
         }
       }

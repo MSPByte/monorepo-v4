@@ -10,13 +10,14 @@
     type PaginationInput,
     type SignalStripApi,
   } from '$lib/components/data-table';
-  import { numberColumn, textColumn } from '$lib/components/data-table/column-defs';
+  import { numberColumn, stateColumn, textColumn } from '$lib/components/data-table/column-defs';
   import SourceBadge from '$lib/components/domain/source-badge.svelte';
   import { toServerTableInput } from '$lib/components/domain/server-table';
   import SignalStrip from '$lib/components/panel/signal-strip.svelte';
   import SignalCell from '$lib/components/panel/signal-cell.svelte';
   import SeverityRibbon from '$lib/components/panel/severity-ribbon.svelte';
   import CoverageMeter from '$lib/components/panel/coverage-meter.svelte';
+  import { prettyText } from '$lib/utils/format';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   type PersonRow = {
@@ -39,20 +40,25 @@
   const columns: DataTableColumn<PersonRow>[] = [
     textColumn<PersonRow>('displayName', 'Display Name'),
     textColumn<PersonRow>('primaryEmail', 'Primary Email'),
-    {
-      key: 'status',
-      title: 'Status',
-      sortable: true,
-      filter: {
-        type: 'select',
-        operators: ['eq'],
-        options: [
-          { label: 'Active', value: 'active' },
-          { label: 'Inactive', value: 'inactive' },
-          { label: 'Unknown', value: 'unknown' },
-        ],
+    stateColumn<PersonRow>(
+      'status',
+      'Status',
+      {
+        transform: (v) => (typeof v === 'string' ? prettyText(v) : 'Unknown'),
+        evaluate: (v) => (v === 'active' ? 'success' : 'warn'),
       },
-    },
+      {
+        filter: {
+          type: 'select',
+          operators: ['eq'],
+          options: [
+            { label: 'Active', value: 'active' },
+            { label: 'Inactive', value: 'inactive' },
+            { label: 'Unknown', value: 'unknown' },
+          ],
+        },
+      }
+    ),
     textColumn<PersonRow>('siteName', 'Site'),
     numberColumn<PersonRow>('openFindingCount', 'Open Findings'),
     { key: 'sourceList', title: 'Sources', searchable: true, cell: sourcesCell, width: '240px' },
@@ -60,7 +66,7 @@
 
   async function fetchData(input: PaginationInput) {
     const result = await trpc.people.tableData.query(
-      toServerTableInput(input, ['displayName', 'primaryEmail', 'status', 'siteName', 'sourceList']),
+      toServerTableInput(input, ['displayName', 'primaryEmail', 'status', 'siteName', 'sourceList'])
     );
     return { rows: result.rows as PersonRow[], total: result.total };
   }
@@ -125,10 +131,7 @@
         <div class="h-8"></div>
       {/if}
     </SignalCell>
-    <SignalCell
-      code="S"
-      label="Source Coverage"
-    >
+    <SignalCell code="S" label="Source Coverage">
       {#if overview.data}
         <div class="mt-0.5 flex items-baseline gap-2">
           <span class="font-mono text-xl font-semibold tabular-nums text-foreground">
@@ -151,11 +154,9 @@
       value={overview.data ? overview.data.unassigned.toLocaleString() : '—'}
       detail={overview.data && overview.data.unassigned > 0 ? 'no site linked' : 'all mapped'}
       tone={overview.data && overview.data.unassigned > 0 ? 'warning' : 'muted'}
-      onclick={
-        overview.data && overview.data.unassigned > 0
-          ? () => api.addFilter({ field: 'siteName', operator: 'eq', value: 'Unassigned' })
-          : undefined
-      }
+      onclick={overview.data && overview.data.unassigned > 0
+        ? () => api.addFilter({ field: 'siteName', operator: 'eq', value: 'Unassigned' })
+        : undefined}
     />
   </SignalStrip>
 {/snippet}
@@ -163,7 +164,9 @@
 <div class="flex size-full flex-col gap-4 overflow-hidden p-6">
   <div>
     <h1 class="text-2xl font-semibold tracking-normal">People</h1>
-    <p class="text-sm text-muted-foreground">Canonical identities and contacts with policy context.</p>
+    <p class="text-sm text-muted-foreground">
+      Canonical identities and contacts with policy context.
+    </p>
   </div>
 
   <DataTable

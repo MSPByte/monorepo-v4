@@ -434,6 +434,554 @@ function m365ClientCredentials(
   return { clientId, clientSecret };
 }
 
+type M365PairResult = {
+  identityId: string;
+  identityLabel: string;
+  relationId: string;
+  relationLabel: string;
+  success: boolean;
+  skipped?: boolean;
+  error?: string;
+};
+
+type M365PairResponse = {
+  batchId: string;
+  requested: number;
+  found: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  result: 'success' | 'failure' | 'partial';
+  results: M365PairResult[];
+};
+
+async function loadM365GroupRowsById(ctx: any, ids: string[]) {
+  return ctx.db
+    .select({
+      id: m365Groups.id,
+      linkId: m365Groups.linkId,
+      externalId: m365Groups.externalId,
+      name: m365Groups.name
+    })
+    .from(m365Groups)
+    .where(inArray(m365Groups.id, [...new Set(ids)]));
+}
+
+async function loadM365LicenseRowsById(ctx: any, ids: string[]) {
+  return ctx.db
+    .select({
+      id: m365Licenses.id,
+      linkId: m365Licenses.linkId,
+      skuId: m365Licenses.skuId,
+      skuPartNumber: m365Licenses.skuPartNumber,
+      friendlyName: m365Licenses.friendlyName,
+      totalUnits: m365Licenses.totalUnits,
+      consumedUnits: m365Licenses.consumedUnits
+    })
+    .from(m365Licenses)
+    .where(inArray(m365Licenses.id, [...new Set(ids)]));
+}
+
+async function loadM365RoleRowsById(ctx: any, ids: string[]) {
+  return ctx.db
+    .select({
+      id: m365Roles.id,
+      templateId: m365Roles.templateId,
+      name: m365Roles.name
+    })
+    .from(m365Roles)
+    .where(inArray(m365Roles.id, [...new Set(ids)]));
+}
+
+function summarizeResults(results: M365PairResult[]): {
+  updated: number;
+  skipped: number;
+  failed: number;
+  result: 'success' | 'failure' | 'partial';
+} {
+  const updated = results.filter((r) => r.success && !r.skipped).length;
+  const skipped = results.filter((r) => r.skipped).length;
+  const failed = results.filter((r) => !r.success).length;
+  return {
+    updated,
+    skipped,
+    failed,
+    result: failed === 0 ? 'success' : updated === 0 ? 'failure' : 'partial'
+  };
+}
+
+async function auditPair(
+  ctx: any,
+  batchId: string,
+  actionLabel: ActionLabels,
+  auditAction: 'update' | 'delete',
+  identity: M365IdentityRow,
+  relationType: 'group' | 'license' | 'role',
+  relationId: string,
+  relationExternalId: string,
+  relationLabel: string,
+  direction: 'add' | 'remove',
+  success: boolean,
+  error?: string
+) {
+  await ctx.db.insert(customerLogs).values({
+    siteId: identity.siteId,
+    actorType: 'user',
+    actorId: ctx.user.id,
+    actorLabel: ctx.user.name || ctx.user.email,
+    action: auditAction,
+    actionLabel,
+    targetType: 'm365_identity',
+    targetId: identity.id,
+    targetLabel: identity.email || identity.name,
+    result: success ? 'success' : 'failure',
+    errorMessage: error,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+    metadata: {
+      batchId,
+      vendor: 'microsoft-365',
+      externalId: identity.externalId,
+      linkId: identity.linkId,
+      tenantId: identity.tenantId,
+      tenantName: identity.tenantName,
+      relationType,
+      relationId,
+      relationExternalId,
+      relationLabel,
+      direction
+    }
+  });
+}
+
+async function runM365GroupPairAction(
+  ctx: any,
+  identityIds: string[],
+  groupIds: string[],
+  direction: 'add' | 'remove'
+): Promise<M365PairResponse> {
+  const [identityRows, groupRows] = await Promise.all([
+    loadM365IdentityRows(ctx, identityIds),
+    loadM365GroupRowsById(ctx, groupIds)
+  ]);
+  const scope = ctx.scopeFor('Vendors.Write');
+  const scopedIdentities =
+    scope === 'all'
+      ? identityRows
+      : identityRows.filter((r) => r.siteId && scope.includes(r.siteId));
+
+  if (scopedIdentities.length === 0 || groupRows.length === 0) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'No matching identities or groups found' });
+  }
+
+  const batchId = randomUUID();
+  const results: M365PairResult[] = [];
+  const actionLabel =
+    direction === 'add' ? ActionLabels.M365IdentityGroupAdd : ActionLabels.M365IdentityGroupRemove;
+  const auditAction: 'update' | 'delete' = direction === 'add' ? 'update' : 'delete';
+  const connectorCache = new Map<string, M365Connector>();
+  const changed: Array<{ identityId: string; groupId: string; linkId: string }> = [];
+
+  for (const identity of scopedIdentities) {
+    for (const group of groupRows) {
+      if (group.linkId !== identity.linkId) {
+        results.push({
+          identityId: identity.id,
+          identityLabel: identity.email || identity.name,
+          relationId: group.id,
+          relationLabel: group.name,
+          success: false,
+          error: 'Group belongs to a different tenant'
+        });
+        continue;
+      }
+
+      let success = false;
+      let error: string | undefined;
+
+      try {
+        if (!identity.tenantId) throw new Error('M365 tenant id is missing');
+        let connector = connectorCache.get(identity.linkId);
+        if (!connector) {
+          connector = m365IdentityConnector(ctx, identity.integrationConfig, identity.tenantId);
+          connectorCache.set(identity.linkId, connector);
+        }
+        if (direction === 'add') {
+          await connector.groups.addMember(group.externalId, identity.externalId);
+        } else {
+          await connector.groups.removeMember(group.externalId, identity.externalId);
+        }
+        success = true;
+      } catch (err) {
+        error = errorMessage(err);
+      }
+
+      results.push({
+        identityId: identity.id,
+        identityLabel: identity.email || identity.name,
+        relationId: group.id,
+        relationLabel: group.name,
+        success,
+        error
+      });
+
+      if (success) changed.push({ identityId: identity.id, groupId: group.id, linkId: group.linkId });
+
+      await auditPair(
+        ctx,
+        batchId,
+        actionLabel,
+        auditAction,
+        identity,
+        'group',
+        group.id,
+        group.externalId,
+        group.name,
+        direction,
+        success,
+        error
+      );
+    }
+  }
+
+  if (changed.length > 0) {
+    if (direction === 'add') {
+      await ctx.db
+        .insert(m365IdentityGroups)
+        .values(changed.map((c) => ({ identityId: c.identityId, groupId: c.groupId, linkId: c.linkId })))
+        .onConflictDoNothing();
+    } else {
+      for (const c of changed) {
+        await ctx.db
+          .delete(m365IdentityGroups)
+          .where(
+            and(
+              eq(m365IdentityGroups.identityId, c.identityId),
+              eq(m365IdentityGroups.groupId, c.groupId)
+            )
+          );
+      }
+    }
+  }
+
+  const summary = summarizeResults(results);
+  return {
+    batchId,
+    requested: identityIds.length * groupIds.length,
+    found: scopedIdentities.length * groupRows.length,
+    ...summary,
+    results
+  };
+}
+
+async function runM365LicensePairAction(
+  ctx: any,
+  identityIds: string[],
+  licenseIds: string[],
+  direction: 'add' | 'remove'
+): Promise<M365PairResponse> {
+  const [identityRows, licenseRows] = await Promise.all([
+    loadM365IdentityRows(ctx, identityIds),
+    loadM365LicenseRowsById(ctx, licenseIds)
+  ]);
+  const scope = ctx.scopeFor('Vendors.Write');
+  const scopedIdentities =
+    scope === 'all'
+      ? identityRows
+      : identityRows.filter((r) => r.siteId && scope.includes(r.siteId));
+
+  if (scopedIdentities.length === 0 || licenseRows.length === 0) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'No matching identities or licenses found' });
+  }
+
+  const batchId = randomUUID();
+  const results: M365PairResult[] = [];
+  const actionLabel =
+    direction === 'add'
+      ? ActionLabels.M365IdentityLicenseAdd
+      : ActionLabels.M365IdentityLicenseRemove;
+  const auditAction: 'update' | 'delete' = direction === 'add' ? 'update' : 'delete';
+  const connectorCache = new Map<string, M365Connector>();
+
+  // Live availability check per (link,sku). Fetched lazily on first use per link.
+  const availabilityByLink = new Map<string, Map<string, { enabled: number; consumed: number }>>();
+  async function getAvailability(link: string, connector: M365Connector) {
+    let map = availabilityByLink.get(link);
+    if (!map) {
+      map = new Map();
+      try {
+        const skus = await connector.subscribedSkus.listAll();
+        for (const sku of skus) {
+          map.set(sku.skuId, {
+            enabled: sku.prepaidUnits?.enabled ?? 0,
+            consumed: sku.consumedUnits ?? 0
+          });
+        }
+      } catch {
+        // Fall through — no live data means we skip pre-check.
+      }
+      availabilityByLink.set(link, map);
+    }
+    return map;
+  }
+
+  // Track skuIds per (link, identity) so we can also refresh assignedLicenses.
+  const perIdentityDelta = new Map<string, { added: Set<string>; removed: Set<string> }>();
+  function deltaFor(identityId: string) {
+    let d = perIdentityDelta.get(identityId);
+    if (!d) {
+      d = { added: new Set(), removed: new Set() };
+      perIdentityDelta.set(identityId, d);
+    }
+    return d;
+  }
+
+  for (const identity of scopedIdentities) {
+    for (const license of licenseRows) {
+      if (license.linkId !== identity.linkId) {
+        results.push({
+          identityId: identity.id,
+          identityLabel: identity.email || identity.name,
+          relationId: license.id,
+          relationLabel: license.friendlyName || license.skuPartNumber,
+          success: false,
+          error: 'License belongs to a different tenant'
+        });
+        continue;
+      }
+
+      let success = false;
+      let error: string | undefined;
+      let skipped = false;
+
+      try {
+        if (!identity.tenantId) throw new Error('M365 tenant id is missing');
+        let connector = connectorCache.get(identity.linkId);
+        if (!connector) {
+          connector = m365IdentityConnector(ctx, identity.integrationConfig, identity.tenantId);
+          connectorCache.set(identity.linkId, connector);
+        }
+
+        if (direction === 'add') {
+          const avail = await getAvailability(identity.linkId, connector);
+          const live = avail.get(license.skuId);
+          if (live && live.enabled - live.consumed <= 0) {
+            throw new Error(
+              `No available units for ${license.skuPartNumber} (${live.consumed}/${live.enabled})`
+            );
+          }
+          await connector.users_licenses.modify(identity.externalId, [license.skuId], []);
+          // Optimistically bump consumed so the next pair sees updated availability.
+          if (live) live.consumed += 1;
+        } else {
+          await connector.users_licenses.modify(identity.externalId, [], [license.skuId]);
+          const avail = availabilityByLink.get(identity.linkId);
+          const live = avail?.get(license.skuId);
+          if (live && live.consumed > 0) live.consumed -= 1;
+        }
+        success = true;
+      } catch (err) {
+        error = errorMessage(err);
+      }
+
+      results.push({
+        identityId: identity.id,
+        identityLabel: identity.email || identity.name,
+        relationId: license.id,
+        relationLabel: license.friendlyName || license.skuPartNumber,
+        success,
+        skipped,
+        error
+      });
+
+      if (success && !skipped) {
+        const delta = deltaFor(identity.id);
+        if (direction === 'add') delta.added.add(license.skuId);
+        else delta.removed.add(license.skuId);
+      }
+
+      await auditPair(
+        ctx,
+        batchId,
+        actionLabel,
+        auditAction,
+        identity,
+        'license',
+        license.id,
+        license.skuId,
+        license.friendlyName || license.skuPartNumber,
+        direction,
+        success,
+        error
+      );
+    }
+  }
+
+  // Refresh m365_identities.assigned_licenses and m365_licenses.consumed_units.
+  if (perIdentityDelta.size > 0) {
+    const identityMap = new Map(scopedIdentities.map((i) => [i.id, i]));
+    for (const [identityId, delta] of perIdentityDelta.entries()) {
+      const identity = identityMap.get(identityId);
+      if (!identity) continue;
+      const [row] = await ctx.db
+        .select({ assignedLicenses: m365Identities.assignedLicenses })
+        .from(m365Identities)
+        .where(eq(m365Identities.id, identityId))
+        .limit(1);
+      const current = new Set<string>(row?.assignedLicenses ?? []);
+      for (const s of delta.added) current.add(s);
+      for (const s of delta.removed) current.delete(s);
+      await ctx.db
+        .update(m365Identities)
+        .set({ assignedLicenses: [...current], updatedAt: new Date().toISOString() })
+        .where(eq(m365Identities.id, identityId));
+    }
+
+    // Sync consumedUnits from live availability where we fetched it.
+    for (const [linkId, avail] of availabilityByLink.entries()) {
+      for (const license of licenseRows) {
+        if (license.linkId !== linkId) continue;
+        const live = avail.get(license.skuId);
+        if (!live) continue;
+        await ctx.db
+          .update(m365Licenses)
+          .set({
+            consumedUnits: live.consumed,
+            totalUnits: live.enabled,
+            updatedAt: new Date().toISOString()
+          })
+          .where(eq(m365Licenses.id, license.id));
+      }
+    }
+  }
+
+  const summary = summarizeResults(results);
+  return {
+    batchId,
+    requested: identityIds.length * licenseIds.length,
+    found: scopedIdentities.length * licenseRows.length,
+    ...summary,
+    results
+  };
+}
+
+async function runM365RolePairAction(
+  ctx: any,
+  identityIds: string[],
+  roleIds: string[],
+  direction: 'add' | 'remove'
+): Promise<M365PairResponse> {
+  const [identityRows, roleRows] = await Promise.all([
+    loadM365IdentityRows(ctx, identityIds),
+    loadM365RoleRowsById(ctx, roleIds)
+  ]);
+  const scope = ctx.scopeFor('Vendors.Write');
+  const scopedIdentities =
+    scope === 'all'
+      ? identityRows
+      : identityRows.filter((r) => r.siteId && scope.includes(r.siteId));
+
+  if (scopedIdentities.length === 0 || roleRows.length === 0) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'No matching identities or roles found' });
+  }
+
+  const batchId = randomUUID();
+  const results: M365PairResult[] = [];
+  const actionLabel =
+    direction === 'add' ? ActionLabels.M365IdentityRoleAdd : ActionLabels.M365IdentityRoleRemove;
+  const auditAction: 'update' | 'delete' = direction === 'add' ? 'update' : 'delete';
+  const connectorCache = new Map<string, M365Connector>();
+  const changed: Array<{ identityId: string; roleId: string; linkId: string }> = [];
+
+  for (const identity of scopedIdentities) {
+    for (const role of roleRows) {
+      let success = false;
+      let error: string | undefined;
+
+      try {
+        if (!identity.tenantId) throw new Error('M365 tenant id is missing');
+        let connector = connectorCache.get(identity.linkId);
+        if (!connector) {
+          connector = m365IdentityConnector(ctx, identity.integrationConfig, identity.tenantId);
+          connectorCache.set(identity.linkId, connector);
+        }
+        if (direction === 'add') {
+          await connector.roleManagement.directory.roleAssignments.create(
+            identity.externalId,
+            role.templateId
+          );
+        } else {
+          const assignments = await connector.roleManagement.directory.roleAssignments.list({
+            principalId: identity.externalId,
+            roleDefinitionId: role.templateId
+          });
+          for (const a of assignments) {
+            await connector.roleManagement.directory.roleAssignments.delete(a.id);
+          }
+        }
+        success = true;
+      } catch (err) {
+        error = errorMessage(err);
+      }
+
+      results.push({
+        identityId: identity.id,
+        identityLabel: identity.email || identity.name,
+        relationId: role.id,
+        relationLabel: role.name,
+        success,
+        error
+      });
+
+      if (success) changed.push({ identityId: identity.id, roleId: role.id, linkId: identity.linkId });
+
+      await auditPair(
+        ctx,
+        batchId,
+        actionLabel,
+        auditAction,
+        identity,
+        'role',
+        role.id,
+        role.templateId,
+        role.name,
+        direction,
+        success,
+        error
+      );
+    }
+  }
+
+  if (changed.length > 0) {
+    if (direction === 'add') {
+      await ctx.db
+        .insert(m365IdentityRoles)
+        .values(changed.map((c) => ({ identityId: c.identityId, roleId: c.roleId, linkId: c.linkId })))
+        .onConflictDoNothing();
+    } else {
+      for (const c of changed) {
+        await ctx.db
+          .delete(m365IdentityRoles)
+          .where(
+            and(
+              eq(m365IdentityRoles.identityId, c.identityId),
+              eq(m365IdentityRoles.roleId, c.roleId)
+            )
+          );
+      }
+    }
+  }
+
+  const summary = summarizeResults(results);
+  return {
+    batchId,
+    requested: identityIds.length * roleIds.length,
+    found: scopedIdentities.length * roleRows.length,
+    ...summary,
+    results
+  };
+}
+
 export const vendorRouter = t.router({
   tableData: authProcedure
     .input(
@@ -1126,6 +1674,124 @@ export const vendorRouter = t.router({
       return { batchId, success, error: error ?? null };
     }),
 
+  addM365IdentitiesToGroups: authProcedure
+    .input(
+      z.object({
+        identityIds: z.array(z.uuid()).min(1).max(1000),
+        groupIds: z.array(z.uuid()).min(1).max(100)
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
+      }
+      return runM365GroupPairAction(ctx, input.identityIds, input.groupIds, 'add');
+    }),
+
+  removeM365IdentitiesFromGroups: authProcedure
+    .input(
+      z.object({
+        identityIds: z.array(z.uuid()).min(1).max(1000),
+        groupIds: z.array(z.uuid()).min(1).max(100)
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
+      }
+      return runM365GroupPairAction(ctx, input.identityIds, input.groupIds, 'remove');
+    }),
+
+  assignM365LicensesToIdentities: authProcedure
+    .input(
+      z.object({
+        identityIds: z.array(z.uuid()).min(1).max(1000),
+        licenseIds: z.array(z.uuid()).min(1).max(50)
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
+      }
+      return runM365LicensePairAction(ctx, input.identityIds, input.licenseIds, 'add');
+    }),
+
+  removeM365LicensesFromIdentities: authProcedure
+    .input(
+      z.object({
+        identityIds: z.array(z.uuid()).min(1).max(1000),
+        licenseIds: z.array(z.uuid()).min(1).max(50)
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
+      }
+      return runM365LicensePairAction(ctx, input.identityIds, input.licenseIds, 'remove');
+    }),
+
+  assignM365RolesToIdentities: authProcedure
+    .input(
+      z.object({
+        identityIds: z.array(z.uuid()).min(1).max(1000),
+        roleIds: z.array(z.uuid()).min(1).max(50)
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
+      }
+      return runM365RolePairAction(ctx, input.identityIds, input.roleIds, 'add');
+    }),
+
+  removeM365RolesFromIdentities: authProcedure
+    .input(
+      z.object({
+        identityIds: z.array(z.uuid()).min(1).max(1000),
+        roleIds: z.array(z.uuid()).min(1).max(50)
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
+      }
+      return runM365RolePairAction(ctx, input.identityIds, input.roleIds, 'remove');
+    }),
+
+  m365LicenseAvailability: authProcedure
+    .input(z.object({ linkId: z.uuid() }))
+    .query(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Read permission required' });
+      }
+      const [link] = await ctx.db
+        .select({
+          externalId: integrationLinks.externalId,
+          integrationConfig: integrations.config
+        })
+        .from(integrationLinks)
+        .innerJoin(integrations, eq(integrationLinks.integrationId, integrations.id))
+        .where(
+          and(
+            eq(integrationLinks.id, input.linkId),
+            eq(integrationLinks.integrationId, 'microsoft-365')
+          )
+        )
+        .limit(1);
+      if (!link?.externalId) return [] as Array<{ skuId: string; enabled: number; consumed: number }>;
+      try {
+        const connector = m365IdentityConnector(ctx, link.integrationConfig, link.externalId);
+        const skus = await connector.subscribedSkus.listAll();
+        return skus.map((s) => ({
+          skuId: s.skuId,
+          enabled: s.prepaidUnits?.enabled ?? 0,
+          consumed: s.consumedUnits ?? 0
+        }));
+      } catch {
+        return [] as Array<{ skuId: string; enabled: number; consumed: number }>;
+      }
+    }),
+
   identityDetails: authProcedure
     .input(z.object({ linkId: z.string().uuid(), identityId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
@@ -1134,13 +1800,17 @@ export const vendorRouter = t.router({
         linkRows,
         roles,
         groups,
+        licenses,
         directAssignments,
         groupAssignments,
         roleAssignments,
         allUsersPolicies
       ] = await Promise.all([
         ctx.db
-          .select({ externalId: m365Identities.externalId })
+          .select({
+            externalId: m365Identities.externalId,
+            assignedLicenses: m365Identities.assignedLicenses
+          })
           .from(m365Identities)
           .where(
             and(eq(m365Identities.id, input.identityId), eq(m365Identities.linkId, input.linkId))
@@ -1178,6 +1848,23 @@ export const vendorRouter = t.router({
             and(
               eq(m365IdentityGroups.identityId, input.identityId),
               eq(m365IdentityGroups.linkId, input.linkId)
+            )
+          ),
+        ctx.db
+          .select({
+            id: m365Licenses.id,
+            skuId: m365Licenses.skuId,
+            skuPartNumber: m365Licenses.skuPartNumber,
+            friendlyName: m365Licenses.friendlyName
+          })
+          .from(m365Licenses)
+          .where(
+            and(
+              eq(m365Licenses.linkId, input.linkId),
+              sql`${m365Licenses.skuId} = ANY(
+                SELECT unnest(assigned_licenses) FROM vendors.m365_identities
+                WHERE id = ${input.identityId}
+              )`
             )
           ),
         ctx.db
@@ -1321,6 +2008,7 @@ export const vendorRouter = t.router({
       return {
         roles,
         groups,
+        licenses,
         policies: Array.from(policyMap.values()),
         authMethods,
         authMethodsError
@@ -1410,6 +2098,69 @@ export const vendorRouter = t.router({
         .orderBy(m365Roles.name);
 
       return rows;
+    }),
+
+  m365GroupOptions: authProcedure
+    .input(z.object({ linkId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      return ctx.db
+        .select({
+          id: m365Groups.id,
+          name: m365Groups.name,
+          externalId: m365Groups.externalId,
+          mailEnabled: m365Groups.mailEnabled,
+          securityEnabled: m365Groups.securityEnabled
+        })
+        .from(m365Groups)
+        .where(eq(m365Groups.linkId, input.linkId))
+        .orderBy(m365Groups.name);
+    }),
+
+  m365LicenseOptions: authProcedure
+    .input(z.object({ linkId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      return ctx.db
+        .select({
+          id: m365Licenses.id,
+          skuId: m365Licenses.skuId,
+          skuPartNumber: m365Licenses.skuPartNumber,
+          friendlyName: m365Licenses.friendlyName,
+          totalUnits: m365Licenses.totalUnits,
+          consumedUnits: m365Licenses.consumedUnits,
+          enabled: m365Licenses.enabled
+        })
+        .from(m365Licenses)
+        .where(and(eq(m365Licenses.linkId, input.linkId), eq(m365Licenses.enabled, true)))
+        .orderBy(m365Licenses.friendlyName);
+    }),
+
+  m365RoleOptions: authProcedure
+    .input(z.object({}).optional())
+    .query(async ({ ctx }) => {
+      return ctx.db
+        .select({
+          id: m365Roles.id,
+          templateId: m365Roles.templateId,
+          name: m365Roles.name,
+          description: m365Roles.description
+        })
+        .from(m365Roles)
+        .orderBy(m365Roles.name);
+    }),
+
+  m365IdentityOptions: authProcedure
+    .input(z.object({ linkId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      return ctx.db
+        .select({
+          id: m365Identities.id,
+          name: m365Identities.name,
+          email: m365Identities.email,
+          enabled: m365Identities.enabled
+        })
+        .from(m365Identities)
+        .where(eq(m365Identities.linkId, input.linkId))
+        .orderBy(m365Identities.name);
     }),
 
   policyDetails: authProcedure

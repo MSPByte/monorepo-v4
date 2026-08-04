@@ -78,7 +78,13 @@ export enum ActionLabels {
   M365IdentityForcePasswordChange = 'm365.identity.force_password_change',
   M365IdentityResetPassword = 'm365.identity.reset_password',
   M365IdentityRequireMfaReset = 'm365.identity.require_mfa_reset',
-  M365IdentityDeleteAuthMethod = 'm365.identity.delete_auth_method'
+  M365IdentityDeleteAuthMethod = 'm365.identity.delete_auth_method',
+  M365IdentityGroupAdd = 'm365.identity.group.add',
+  M365IdentityGroupRemove = 'm365.identity.group.remove',
+  M365IdentityLicenseAdd = 'm365.identity.license.add',
+  M365IdentityLicenseRemove = 'm365.identity.license.remove',
+  M365IdentityRoleAdd = 'm365.identity.role.add',
+  M365IdentityRoleRemove = 'm365.identity.role.remove'
 }
 
 export type ActionLabel = `${ActionLabels}`;
@@ -408,6 +414,30 @@ export const ActionResources = {
   [ActionLabels.M365IdentityDeleteAuthMethod]: {
     label: ActionLabels.M365IdentityDeleteAuthMethod,
     name: 'M365 identity delete auth method'
+  },
+  [ActionLabels.M365IdentityGroupAdd]: {
+    label: ActionLabels.M365IdentityGroupAdd,
+    name: 'M365 identity add to group'
+  },
+  [ActionLabels.M365IdentityGroupRemove]: {
+    label: ActionLabels.M365IdentityGroupRemove,
+    name: 'M365 identity remove from group'
+  },
+  [ActionLabels.M365IdentityLicenseAdd]: {
+    label: ActionLabels.M365IdentityLicenseAdd,
+    name: 'M365 identity assign license'
+  },
+  [ActionLabels.M365IdentityLicenseRemove]: {
+    label: ActionLabels.M365IdentityLicenseRemove,
+    name: 'M365 identity remove license'
+  },
+  [ActionLabels.M365IdentityRoleAdd]: {
+    label: ActionLabels.M365IdentityRoleAdd,
+    name: 'M365 identity assign role'
+  },
+  [ActionLabels.M365IdentityRoleRemove]: {
+    label: ActionLabels.M365IdentityRoleRemove,
+    name: 'M365 identity remove role'
   }
 } satisfies Record<ActionLabel, ActionResource>;
 

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Callsign from '$lib/components/panel/callsign.svelte';
   import { formatRelativeDate, prettyText } from '$lib/utils/format';
 
   type Props = {
@@ -17,7 +16,6 @@
     licenseCount: number;
   };
   let {
-    id,
     displayName,
     primaryEmail,
     status,
@@ -32,7 +30,9 @@
   }: Props = $props();
 
   const statusLabel = $derived(status ? status.replace('_', '-').toUpperCase() : 'UNKNOWN');
-  const statusAccent = $derived(status === 'inactive' || status === 'disabled' || status === 'error');
+  const statusAccent = $derived(
+    status === 'inactive' || status === 'disabled' || status === 'error'
+  );
   const findingsAccent = $derived(openFindingCount > 0);
 </script>
 
@@ -41,17 +41,20 @@
   <div class="flex flex-wrap items-end justify-between gap-3 px-6 pb-2 pt-4">
     <div class="flex items-baseline gap-3">
       <div class="min-w-0">
-        <div class="mb-1 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+        <div
+          class="mb-1 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground"
+        >
           <span class="font-semibold text-foreground/80">PERSON</span>
           <span class="text-foreground/40">·</span>
           <span class="truncate">IDENTITY</span>
         </div>
         <h1 class="truncate text-xl font-semibold leading-tight tracking-tight">{displayName}</h1>
         {#if primaryEmail}
-          <p class="mt-0.5 max-w-3xl truncate font-mono text-xs text-muted-foreground">{primaryEmail}</p>
+          <p class="mt-0.5 max-w-3xl truncate font-mono text-xs text-muted-foreground">
+            {primaryEmail}
+          </p>
         {/if}
       </div>
-      <Callsign prefix="USER" {id} title="Person callsign — first 4 chars of ID" />
     </div>
   </div>
 
@@ -67,7 +70,9 @@
       STATUS·{statusLabel}
     </span>
     {#if sourceConfidence}
-      <span class="inline-flex items-center gap-1.5 rounded-[3px] border border-foreground/15 bg-foreground/4 px-1.5 py-px tracking-[0.14em] text-foreground/90">
+      <span
+        class="inline-flex items-center gap-1.5 rounded-[3px] border border-foreground/15 bg-foreground/4 px-1.5 py-px tracking-[0.14em] text-foreground/90"
+      >
         CONF·{sourceConfidence.toUpperCase()}
       </span>
     {/if}

@@ -3,6 +3,7 @@
   import { useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
   import type { createTrpcClient } from '$lib/trpc';
+  import { showErrorToast, toUserMessage, logError } from '$lib/utils/errors';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
   import * as RadioGroup from '$lib/components/ui/radio-group/index.js';
   import Button from '$lib/components/ui/button/button.svelte';
@@ -76,7 +77,8 @@
       });
 
       if (result.result === 'failure') {
-        toast.error(result.results[0]?.error ?? 'Password reset failed');
+        logError(result.results[0]?.error, 'resetPassword');
+        toast.error(toUserMessage(result.results[0]?.error, 'Password reset failed.'));
         return;
       }
 
@@ -112,7 +114,7 @@
         onOpenChange(false);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Password reset failed');
+      showErrorToast(err, 'Password reset failed. Please try again.');
     } finally {
       busy = false;
     }
