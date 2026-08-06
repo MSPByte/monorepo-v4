@@ -84,7 +84,12 @@ export enum ActionLabels {
   M365IdentityLicenseAdd = 'm365.identity.license.add',
   M365IdentityLicenseRemove = 'm365.identity.license.remove',
   M365IdentityRoleAdd = 'm365.identity.role.add',
-  M365IdentityRoleRemove = 'm365.identity.role.remove'
+  M365IdentityRoleRemove = 'm365.identity.role.remove',
+  PackageCreate = 'package.create',
+  PackageUpdate = 'package.update',
+  PackageDelete = 'package.delete',
+  PackageRunStart = 'package.run.start',
+  PackageRunRevealOutput = 'package.run.reveal_output'
 }
 
 export type ActionLabel = `${ActionLabels}`;
@@ -438,6 +443,26 @@ export const ActionResources = {
   [ActionLabels.M365IdentityRoleRemove]: {
     label: ActionLabels.M365IdentityRoleRemove,
     name: 'M365 identity remove role'
+  },
+  [ActionLabels.PackageCreate]: {
+    label: ActionLabels.PackageCreate,
+    name: 'Package create'
+  },
+  [ActionLabels.PackageUpdate]: {
+    label: ActionLabels.PackageUpdate,
+    name: 'Package update'
+  },
+  [ActionLabels.PackageDelete]: {
+    label: ActionLabels.PackageDelete,
+    name: 'Package delete'
+  },
+  [ActionLabels.PackageRunStart]: {
+    label: ActionLabels.PackageRunStart,
+    name: 'Package run start'
+  },
+  [ActionLabels.PackageRunRevealOutput]: {
+    label: ActionLabels.PackageRunRevealOutput,
+    name: 'Package run reveal output'
   }
 } satisfies Record<ActionLabel, ActionResource>;
 

@@ -6,6 +6,7 @@ import {
 } from "@mspbyte/drizzle-catalog";
 import { env, requireEncryptionKey } from "../env.js";
 import { seedSystemRoles } from "./system-roles.js";
+import { seedPackagesCatalog } from "./packages-catalog.js";
 
 export type SeedReport = {
   seed: string;
@@ -24,7 +25,10 @@ export type Seed = {
   run: (ctx: SeedContext) => Promise<SeedReport>;
 };
 
-const ALL_SEEDS: Seed[] = [{ name: "system-roles", run: seedSystemRoles }];
+const ALL_SEEDS: Seed[] = [
+  { name: "system-roles", run: seedSystemRoles },
+  { name: "packages-catalog", run: seedPackagesCatalog },
+];
 
 export type RunTenantSeedOptions = {
   orgId?: string;

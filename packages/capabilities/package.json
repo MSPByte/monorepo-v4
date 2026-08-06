@@ -1,33 +1,25 @@
 {
-  "name": "@mspbyte/trpc",
+  "name": "@mspbyte/capabilities",
   "version": "0.0.0",
   "type": "module",
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./src/*/index.ts",
+      "import": "./dist/*/index.js",
+      "default": "./dist/*.js"
     }
   },
-  "types": "./src/index.ts",
   "scripts": {
-    "dev": "tsc --watch -p tsconfig.json",
     "build": "tsc -p tsconfig.json",
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
-    "@mspbyte/capabilities": "*",
     "@mspbyte/connectors": "*",
-    "@mspbyte/drizzle": "*",
-    "@mspbyte/drizzle-catalog": "*",
-    "@mspbyte/encryption": "*",
-    "@mspbyte/pipeline": "*",
     "@mspbyte/shared": "*",
-    "@better-auth/drizzle-adapter": "^1.4.0",
-    "@trpc/server": "^11.4.2",
-    "better-auth": "^1.4.0",
-    "bullmq": "^5.56.1",
-    "drizzle-orm": "^1.0.0-beta.22",
-    "ioredis": "^5.6.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {

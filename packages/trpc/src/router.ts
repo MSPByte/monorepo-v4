@@ -14,6 +14,8 @@ import { rolesRouter } from './routers/roles.js';
 import { integrationsRouter } from './routers/integrations.js';
 import { integrationLinksRouter } from './routers/integration-links.js';
 import { vendorRouter } from './routers/vendor.js';
+import { packagesRouter } from './routers/packages.js';
+import { packageRunsRouter } from './routers/package-runs.js';
 import { agentsRouter } from './routers/agents.js';
 import { pipelineRouter } from './routers/pipeline.js';
 import { wikiRouter } from './routers/wiki.js';
@@ -37,6 +39,8 @@ export const appRouter = t.router({
   integrations: integrationsRouter,
   integrationLinks: integrationLinksRouter,
   vendor: vendorRouter,
+  packages: packagesRouter,
+  packageRuns: packageRunsRouter,
   agents: agentsRouter,
   pipeline: pipelineRouter,
   wiki: wikiRouter,

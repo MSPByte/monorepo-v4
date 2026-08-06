@@ -1,6 +1,7 @@
 export const QUEUES = {
   INGEST: "ingest",
   NORMALIZE: "normalize",
+  PACKAGE: "package",
   POLICY: "policy",
 } as const;
 
@@ -32,4 +33,8 @@ export function ingestionRootJobId(linkId: string, ingestionRunId: string): stri
 // still one delayed job).
 export function nextIngestionJobId(linkId: string, facet: string): string {
   return assertBullMqName(`next_ingest_${linkId}_${facet}`, "BullMQ job id");
+}
+
+export function packageRunJobId(packageRunId: string): string {
+  return assertBullMqName(`package_run_${packageRunId}`, "BullMQ job id");
 }

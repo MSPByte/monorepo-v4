@@ -15,6 +15,11 @@ function tokenCacheKey(url: string, apiKey: string): string {
   return `${url}::${apiKey}::datto`;
 }
 
+async function parseJsonOrEmpty<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  return (text ? JSON.parse(text) : (undefined as T)) as T;
+}
+
 export class DattoHttpClient {
   constructor(
     readonly baseUrl: string,
@@ -108,7 +113,7 @@ export class DattoHttpClient {
     });
     if (!res.ok)
       throw new Error(`DattoRMM POST error ${res.status}: ${fullUrl}`);
-    return res.json() as Promise<T>;
+    return parseJsonOrEmpty<T>(res);
   }
 
   async put<T>(url: string, body: unknown): Promise<T> {
@@ -124,6 +129,6 @@ export class DattoHttpClient {
     });
     if (!res.ok)
       throw new Error(`DattoRMM PUT error ${res.status}: ${fullUrl}`);
-    return res.json() as Promise<T>;
+    return parseJsonOrEmpty<T>(res);
   }
 }

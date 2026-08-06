@@ -5,6 +5,7 @@ export * from "./db/audit/index.js";
 export * from "./db/billing/index.js";
 export * from "./db/canonical/index.js";
 export * from "./db/ingestor/index.js";
+export * from "./db/packages/index.js";
 export * from "./db/policy/index.js";
 export * from "./db/vendors/index.js";
 export * from "./db/vendors/registry.js";

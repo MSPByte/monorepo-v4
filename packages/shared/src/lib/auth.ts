@@ -24,6 +24,7 @@ export const PERMISSION_TREE = {
   People: {},
   Wiki: {},
   Vendors: {},
+  Packages: {},
   Policies: {},
   Frameworks: {},
   Billing: {},

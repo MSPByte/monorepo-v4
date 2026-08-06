@@ -4,6 +4,7 @@ export * from './audit/index.js';
 export * from './billing/index.js';
 export * from './canonical/index.js';
 export * from './ingestor/index.js';
+export * from './packages/index.js';
 export * from './policy/index.js';
 export * from './vendors/index.js';
 export * from './wiki/index.js';

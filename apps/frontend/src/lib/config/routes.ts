@@ -28,6 +28,15 @@ const ROUTES: Route[] = [
   // rather than buried under a group.
   { label: 'Findings', href: '/findings', permission: 'Findings.Read' },
   {
+    label: 'Automation',
+    href: '/automation/runs',
+    permission: 'Packages.Read',
+    children: [
+      { label: 'Runs', href: '/automation/runs', permission: 'Packages.Read' },
+      { label: 'Packages', href: '/automation/packages', permission: 'Packages.Read' },
+    ],
+  },
+  {
     label: 'Inventory',
     href: '/sites',
     permission: 'Sites.Read',

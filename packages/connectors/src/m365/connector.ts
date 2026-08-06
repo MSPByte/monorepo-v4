@@ -27,6 +27,14 @@ export class M365Connector {
     update: (userId: string, patch: Record<string, unknown>) => Promise<void>;
     revokeSignInSessions: (userId: string) => Promise<void>;
     deleteAuthMethod: (userId: string, methodType: string, methodId: string) => Promise<void>;
+    create: (payload: {
+      accountEnabled?: boolean;
+      displayName: string;
+      userPrincipalName: string;
+      mailNickname: string;
+      password: string;
+      forceChangePasswordNextSignInWithMfa?: boolean;
+    }) => Promise<{ id: string; userPrincipalName: string }>;
   };
 
   readonly groups: {
@@ -179,6 +187,24 @@ export class M365Connector {
         await this.client.delete(
           `https://graph.microsoft.com/v1.0/users/${userId}/authentication/${methodType}/${methodId}`
         );
+      },
+
+      create: async (payload) => {
+        const { data } = await this.client.post<{ id: string; userPrincipalName: string }>(
+          'https://graph.microsoft.com/v1.0/users',
+          {
+            accountEnabled: payload.accountEnabled ?? true,
+            displayName: payload.displayName,
+            userPrincipalName: payload.userPrincipalName,
+            mailNickname: payload.mailNickname,
+            passwordProfile: {
+              password: payload.password,
+              forceChangePasswordNextSignInWithMfa:
+                payload.forceChangePasswordNextSignInWithMfa ?? true
+            }
+          }
+        );
+        return { id: data.id, userPrincipalName: data.userPrincipalName };
       }
     };
 

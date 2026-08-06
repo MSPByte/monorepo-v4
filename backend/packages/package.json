@@ -1,17 +1,12 @@
 {
-  "name": "@mspbyte/trpc",
+  "name": "packages-worker",
   "version": "0.0.0",
+  "private": true,
   "type": "module",
-  "exports": {
-    ".": {
-      "types": "./src/index.ts",
-      "import": "./dist/index.js"
-    }
-  },
-  "types": "./src/index.ts",
   "scripts": {
-    "dev": "tsc --watch -p tsconfig.json",
+    "dev": "bun --watch src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
@@ -20,14 +15,13 @@
     "@mspbyte/drizzle": "*",
     "@mspbyte/drizzle-catalog": "*",
     "@mspbyte/encryption": "*",
+    "@mspbyte/logging": "*",
     "@mspbyte/pipeline": "*",
     "@mspbyte/shared": "*",
-    "@better-auth/drizzle-adapter": "^1.4.0",
-    "@trpc/server": "^11.4.2",
-    "better-auth": "^1.4.0",
-    "bullmq": "^5.56.1",
+    "bullmq": "^5.65.1",
+    "dotenv": "^17.4.2",
     "drizzle-orm": "^1.0.0-beta.22",
-    "ioredis": "^5.6.1",
+    "ioredis": "^5.8.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {

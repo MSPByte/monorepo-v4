@@ -17,6 +17,7 @@ export default defineConfig({
     "canonical",
     "ingestor",
     "compliance",
+    "packages",
     "policy",
     "vendors",
     "wiki",

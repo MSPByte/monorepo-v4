@@ -37,7 +37,7 @@ export const actions: Actions = {
     }
 
     const { primaryPsa, siteVariableName } = parsed.data;
-    const caller = createServerCaller({ auth: locals.auth, org: locals.org, connectionString: locals.connectionString });
+    const caller = createServerCaller(locals);
 
     try {
       await caller.integrations.upsert({
@@ -51,7 +51,7 @@ export const actions: Actions = {
   },
 
   deleteIntegration: async ({ locals }) => {
-    const caller = createServerCaller({ auth: locals.auth, org: locals.org, connectionString: locals.connectionString });
+    const caller = createServerCaller(locals);
     try {
       await caller.integrations.delete({ id: 'mspagent' });
     } catch (err) {
@@ -64,7 +64,7 @@ export const actions: Actions = {
     const raw = await request.formData();
     const siteId = raw.get('siteId')?.toString() || undefined;
 
-    const caller = createServerCaller({ auth: locals.auth, org: locals.org, connectionString: locals.connectionString });
+    const caller = createServerCaller(locals);
 
     const [mspagentIntegration, dattoIntegration, allDattoLinks] = await Promise.all([
       caller.integrations.get({ id: 'mspagent' }),
@@ -129,7 +129,7 @@ export const actions: Actions = {
     const raw = await request.formData();
     const siteId = raw.get('siteId')?.toString() || undefined;
 
-    const caller = createServerCaller({ auth: locals.auth, org: locals.org, connectionString: locals.connectionString });
+    const caller = createServerCaller(locals);
 
     const [mspagentIntegration, dattoIntegration, allDattoLinks] = await Promise.all([
       caller.integrations.get({ id: 'mspagent' }),
