@@ -47,14 +47,31 @@ const stepSchema = z.object({
   capabilityId: z.string().min(1),
   label: z.string().optional(),
   inputBindings: z.record(z.string(), bindingSchema),
+  onFailure: z.enum(['halt', 'continue']).default('halt'),
+  retryAttempts: z.number().int().min(0).max(5).default(0),
 });
 type ParsedStep = z.infer<typeof stepSchema>;
+
+const failureActionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('log') }),
+  z.object({
+    kind: z.literal('email'),
+    to: z.array(z.string().email()).min(1),
+    subject: z.string().max(200).optional(),
+  }),
+  z.object({
+    kind: z.literal('psa_ticket'),
+    boardId: z.string().optional(),
+    priority: z.enum(['low', 'normal', 'high']).optional(),
+  }),
+]);
 
 const packageInputSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(2000).optional().nullable(),
   status: z.enum(['draft', 'active', 'archived']).default('draft'),
   steps: z.array(stepSchema).min(1),
+  failureActions: z.array(failureActionSchema).default([]),
 });
 
 const entityTypeSchema = z.enum([
@@ -143,6 +160,7 @@ export const packagesRouter = t.router({
           status: input.status,
           version: 1,
           steps: input.steps,
+          failureActions: input.failureActions,
           authorUserId: ctx.user.id,
         })
         .returning({ id: packages.id });
@@ -174,6 +192,7 @@ export const packagesRouter = t.router({
         description: z.string().max(2000).nullable().optional(),
         status: z.enum(['draft', 'active', 'archived']).optional(),
         steps: z.array(stepSchema).min(1).optional(),
+        failureActions: z.array(failureActionSchema).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -203,6 +222,7 @@ export const packagesRouter = t.router({
           description: input.description === undefined ? current.description : input.description,
           status: input.status ?? current.status,
           steps: input.steps ?? current.steps,
+          failureActions: input.failureActions ?? current.failureActions,
           version: stepsChanged ? current.version + 1 : current.version,
           updatedAt: new Date().toISOString(),
         })

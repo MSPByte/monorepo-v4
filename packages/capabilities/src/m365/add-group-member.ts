@@ -4,28 +4,24 @@ import type { Capability } from '../types.js';
 
 const inputs = z.object({
   tenantLinkId: z.uuid(),
-  // Graph user id (externalId). Comes from m365.identity.create.userId via
-  // priorOutput wiring, or a picker that surfaces externalId in a later phase.
+  groupId: z.string().min(1),
   identityExternalId: z.string().min(1),
-  skuIds: z.array(z.string()).min(1),
-  removeSkuIds: z.array(z.string()).default([]),
 });
 
 const outputs = z.object({
-  assigned: z.array(z.string()),
-  removed: z.array(z.string()),
+  groupId: z.string(),
+  userId: z.string(),
 });
 
-export const m365LicenseAssign: Capability<
+export const m365GroupAddMember: Capability<
   z.infer<typeof inputs>,
   z.infer<typeof outputs>
 > = {
-  id: 'm365.license.assign',
+  id: 'm365.group.add-member',
   vendor: 'microsoft-365',
-  name: 'Assign M365 Licenses',
-  description:
-    "Assign (and optionally remove) M365 subscribed SKU licenses on a user by Graph user id.",
-  category: 'license',
+  name: 'Add M365 User to Group',
+  description: 'Add a Microsoft 365 user to a security or Microsoft 365 group.',
+  category: 'group',
   inputs,
   outputs,
   inputMeta: {
@@ -33,34 +29,42 @@ export const m365LicenseAssign: Capability<
       allowedBindings: ['entity', 'literal', 'runtime'],
       entityType: 'integration_link',
       typeHint: 'text',
+      label: 'Tenant',
+      required: true,
+    },
+    groupId: {
+      allowedBindings: ['entity', 'literal', 'runtime'],
+      entityType: 'm365_group',
+      typeHint: 'text',
+      label: 'Group',
+      description: 'The Microsoft 365 group to add the user to.',
+      required: true,
     },
     identityExternalId: {
       allowedBindings: ['literal', 'runtime', 'priorOutput'],
       priorOutputCompat: ['m365.identity.create'],
       typeHint: 'text',
+      label: 'User (Graph id)',
+      description:
+        'The user\'s Graph id. Wire from a create-identity step, or provide directly.',
+      required: true,
     },
-    skuIds: { allowedBindings: ['literal', 'runtime'], typeHint: 'stringArray' },
-    removeSkuIds: { allowedBindings: ['literal'], typeHint: 'stringArray' },
   },
   outputMeta: {
-    assigned: {},
-    removed: {},
+    groupId: { label: 'Graph group id' },
+    userId: { label: 'Graph user id' },
   },
-  actionLabel: ActionLabels.M365IdentityLicenseAdd,
+  actionLabel: ActionLabels.M365IdentityGroupAdd,
   auditAction: 'update',
   requiredPermission: 'Vendors.Write',
-  defaultUnitPrice: 0.05,
+  defaultUnitPrice: 0.02,
   async handler(ctx, input) {
     try {
       const connector = await ctx.getM365Connector(input.tenantLinkId);
-      await connector.users_licenses.modify(
-        input.identityExternalId,
-        input.skuIds,
-        input.removeSkuIds,
-      );
+      await connector.groups.addMember(input.groupId, input.identityExternalId);
       return {
         outcome: 'success',
-        outputs: { assigned: input.skuIds, removed: input.removeSkuIds },
+        outputs: { groupId: input.groupId, userId: input.identityExternalId },
       };
     } catch (err) {
       return {

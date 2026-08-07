@@ -31,6 +31,9 @@ export const packages = packagesSchema.table(
     // Steps live inline here as an ordered array during Phase 1. A dedicated
     // `package_steps` table lands in Phase 2 when the builder UI needs it.
     steps: jsonb('steps').notNull().default(sql`'[]'::jsonb`),
+    // Ordered list of package-level FailureAction records (see @mspbyte/capabilities).
+    // Worker executes them after any terminal failed/halted/partial state.
+    failureActions: jsonb('failure_actions').notNull().default(sql`'[]'::jsonb`),
     authorUserId: text('author_user_id'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .notNull()
@@ -77,7 +80,16 @@ export const packageRuns = packagesSchema.table(
     // `iv:tag:cipher` (see `packages/encryption`).
     runtimeInputs: jsonb('runtime_inputs').notNull().default(sql`'{}'::jsonb`),
     status: text('status', {
-      enum: ['pending', 'queued', 'running', 'completed', 'failed', 'halted', 'partial'],
+      enum: [
+        'pending',
+        'queued',
+        'running',
+        'completed',
+        'failed',
+        'halted',
+        'partial',
+        'canceled',
+      ],
     })
       .notNull()
       .default('pending'),

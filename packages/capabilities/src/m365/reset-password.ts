@@ -60,7 +60,7 @@ export const m365IdentityResetPassword: Capability<
     if (!identity) {
       return {
         outcome: 'fail',
-        errorClass: 'NOT_FOUND',
+        errorClass: 'not_found',
         message: 'M365 identity not found',
       };
     }
@@ -78,7 +78,7 @@ export const m365IdentityResetPassword: Capability<
     } catch (err) {
       return {
         outcome: 'fail',
-        errorClass: 'GRAPH_ERROR',
+        errorClass: 'vendor_error',
         message: err instanceof Error ? err.message : String(err),
         retryable: true,
       };

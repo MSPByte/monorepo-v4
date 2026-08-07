@@ -34,6 +34,15 @@ export class M365Connector {
       mailNickname: string;
       password: string;
       forceChangePasswordNextSignInWithMfa?: boolean;
+      givenName?: string;
+      surname?: string;
+      jobTitle?: string;
+      department?: string;
+      companyName?: string;
+      officeLocation?: string;
+      mobilePhone?: string;
+      usageLocation?: string;
+      preferredLanguage?: string;
     }) => Promise<{ id: string; userPrincipalName: string }>;
   };
 
@@ -190,19 +199,40 @@ export class M365Connector {
       },
 
       create: async (payload) => {
+        // Assemble the Graph body — omit any undefined optionals so Graph
+        // doesn't reject on unknown/null values for fields the caller didn't
+        // provide.
+        const body: Record<string, unknown> = {
+          accountEnabled: payload.accountEnabled ?? true,
+          displayName: payload.displayName,
+          userPrincipalName: payload.userPrincipalName,
+          mailNickname: payload.mailNickname,
+          passwordProfile: {
+            password: payload.password,
+            forceChangePasswordNextSignInWithMfa:
+              payload.forceChangePasswordNextSignInWithMfa ?? true
+          }
+        };
+        const optional: Array<keyof typeof payload> = [
+          'givenName',
+          'surname',
+          'jobTitle',
+          'department',
+          'companyName',
+          'officeLocation',
+          'mobilePhone',
+          'usageLocation',
+          'preferredLanguage'
+        ];
+        for (const key of optional) {
+          const value = payload[key];
+          if (value !== undefined && value !== null && value !== '') {
+            body[key] = value;
+          }
+        }
         const { data } = await this.client.post<{ id: string; userPrincipalName: string }>(
           'https://graph.microsoft.com/v1.0/users',
-          {
-            accountEnabled: payload.accountEnabled ?? true,
-            displayName: payload.displayName,
-            userPrincipalName: payload.userPrincipalName,
-            mailNickname: payload.mailNickname,
-            passwordProfile: {
-              password: payload.password,
-              forceChangePasswordNextSignInWithMfa:
-                payload.forceChangePasswordNextSignInWithMfa ?? true
-            }
-          }
+          body
         );
         return { id: data.id, userPrincipalName: data.userPrincipalName };
       }

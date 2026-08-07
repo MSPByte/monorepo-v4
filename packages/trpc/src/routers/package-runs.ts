@@ -168,6 +168,7 @@ export const packageRunsRouter = t.router({
         name: pkg.name,
         version: pkg.version,
         steps: pkg.steps,
+        failureActions: pkg.failureActions ?? [],
       };
 
       // The tRPC caller only creates the pending row — no Redis contact.
@@ -205,6 +206,54 @@ export const packageRunsRouter = t.router({
       });
 
       return result;
+    }),
+
+  cancel: authProcedure
+    .input(z.object({ runId: z.uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write required' });
+      }
+      const [current] = await ctx.db
+        .select({ id: packageRuns.id, status: packageRuns.status, siteId: packageRuns.siteId })
+        .from(packageRuns)
+        .where(eq(packageRuns.id, input.runId))
+        .limit(1);
+      if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Run not found' });
+
+      const cancelableStatuses = new Set(['pending', 'queued', 'running']);
+      if (!cancelableStatuses.has(current.status)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `Run is ${current.status} — cannot cancel`,
+        });
+      }
+
+      // Worker polls status between steps and bails cleanly. The queued
+      // BullMQ job is not removed — the worker sees the canceled status and
+      // exits without executing further steps.
+      await ctx.db
+        .update(packageRuns)
+        .set({ status: 'canceled', finishedAt: new Date().toISOString() })
+        .where(eq(packageRuns.id, input.runId));
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: current.siteId,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email || ctx.user.id,
+        action: 'update',
+        actionLabel: ActionLabels.PackageRunStart,
+        targetType: 'package_run',
+        targetId: input.runId,
+        targetLabel: 'cancel',
+        result: 'success',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: { previousStatus: current.status },
+      });
+
+      return { id: input.runId };
     }),
 
   retryFromStep: authProcedure

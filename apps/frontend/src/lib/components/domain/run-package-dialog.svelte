@@ -227,18 +227,18 @@
 </script>
 
 <Dialog.Root bind:open onOpenChange={onOpenChange}>
-  <Dialog.Content class="sm:max-w-[560px]">
+  <Dialog.Content class="sm:max-w-[560px] max-h-[85vh] overflow-hidden grid-rows-[auto_1fr_auto]">
     <Dialog.Header>
       <Dialog.Title>Run a package</Dialog.Title>
       <Dialog.Description>
-        Pick a package, fill in the runtime inputs, and confirm the cost.
+        Fill in the runtime inputs and confirm the cost before this executes.
       </Dialog.Description>
     </Dialog.Header>
 
-    <div class="space-y-4 py-2">
+    <div class="space-y-6 overflow-y-auto px-4 pb-2 pt-2">
       {#if !packageId}
-        <div class="space-y-2">
-          <Label>Package</Label>
+        <section class="space-y-2">
+          <Label class="text-xs uppercase tracking-wide text-muted-foreground">Package</Label>
           <Select.Root type="single" bind:value={selectedPackageId}>
             <Select.Trigger class="w-full">
               {selectedPackage?.name ?? 'Choose a package'}
@@ -249,13 +249,18 @@
               {/each}
             </Select.Content>
           </Select.Root>
-        </div>
+        </section>
       {/if}
 
       {#if selectedPackage}
         {#if packageSteps.length > 1}
-          <div class="space-y-2">
-            <Label for="rp-startstep">Start from step</Label>
+          <section class="space-y-2">
+            <Label
+              for="rp-startstep"
+              class="text-xs uppercase tracking-wide text-muted-foreground"
+            >
+              Start from
+            </Label>
             <Select.Root
               type="single"
               value={String(startStepIndex)}
@@ -276,84 +281,95 @@
             {#if startStepBlocker}
               <p class="text-xs text-rose-500">{startStepBlocker}</p>
             {/if}
-          </div>
+          </section>
         {/if}
 
         {#if runtimeFields.length > 0}
-          <div class="space-y-3">
-            <div class="text-xs uppercase text-muted-foreground">Runtime inputs</div>
-            {#each runtimeFields as field}
-              <div class="space-y-1">
-                <Label for={`rp-${field.promptKey}`}>
-                  {field.promptKey}
-                  {#if field.required}<span class="text-rose-500">*</span>{/if}
-                </Label>
-                {#if field.entityType}
-                  <EntityPicker
-                    entityType={field.entityType}
-                    integrationLinkId={field.entityType !== 'integration_link'
-                      ? cascadeLinkId
-                      : undefined}
-                    integrationId={field.entityType === 'integration_link'
-                      ? 'microsoft-365'
-                      : undefined}
-                    multiple={field.typeHint === 'stringArray'}
-                    value={values[field.promptKey] as string | string[] | null | undefined ??
-                      (field.typeHint === 'stringArray' ? [] : null)}
-                    onValueChange={(v) => (values[field.promptKey] = v as any)}
-                    placeholder="Choose…"
-                  />
-                {:else if field.typeHint === 'boolean'}
-                  <div class="flex items-center gap-2">
-                    <Checkbox
-                      id={`rp-${field.promptKey}`}
-                      checked={Boolean(values[field.promptKey])}
-                      onCheckedChange={(c) => (values[field.promptKey] = Boolean(c))}
+          <section class="space-y-3">
+            <Label class="text-xs uppercase tracking-wide text-muted-foreground">
+              Runtime inputs
+            </Label>
+            <div class="space-y-4">
+              {#each runtimeFields as field}
+                <div class="space-y-1.5">
+                  <Label for={`rp-${field.promptKey}`} class="text-sm">
+                    {field.promptKey}
+                    {#if field.required}<span class="text-rose-500">*</span>{/if}
+                  </Label>
+                  {#if field.entityType}
+                    <EntityPicker
+                      entityType={field.entityType}
+                      integrationLinkId={field.entityType !== 'integration_link'
+                        ? cascadeLinkId
+                        : undefined}
+                      integrationId={field.entityType === 'integration_link'
+                        ? 'microsoft-365'
+                        : undefined}
+                      multiple={field.typeHint === 'stringArray'}
+                      value={values[field.promptKey] as string | string[] | null | undefined ??
+                        (field.typeHint === 'stringArray' ? [] : null)}
+                      onValueChange={(v) => (values[field.promptKey] = v as any)}
+                      placeholder="Choose…"
                     />
-                  </div>
-                {:else if field.typeHint === 'stringArray'}
-                  <Input
-                    id={`rp-${field.promptKey}`}
-                    placeholder="value1, value2, value3"
-                    value={typeof values[field.promptKey] === 'string'
-                      ? (values[field.promptKey] as string)
-                      : ''}
-                    oninput={(e) =>
-                      (values[field.promptKey] = (e.target as HTMLInputElement).value)}
-                  />
-                {:else}
-                  <Input
-                    id={`rp-${field.promptKey}`}
-                    type={field.sensitive ? 'password' : 'text'}
-                    value={typeof values[field.promptKey] === 'string'
-                      ? (values[field.promptKey] as string)
-                      : ''}
-                    oninput={(e) =>
-                      (values[field.promptKey] = (e.target as HTMLInputElement).value)}
-                  />
-                {/if}
-              </div>
-            {/each}
-          </div>
+                  {:else if field.typeHint === 'boolean'}
+                    <label class="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        id={`rp-${field.promptKey}`}
+                        checked={Boolean(values[field.promptKey])}
+                        onCheckedChange={(c) => (values[field.promptKey] = Boolean(c))}
+                      />
+                      <span class="text-muted-foreground">
+                        {Boolean(values[field.promptKey]) ? 'true' : 'false'}
+                      </span>
+                    </label>
+                  {:else if field.typeHint === 'stringArray'}
+                    <Input
+                      id={`rp-${field.promptKey}`}
+                      placeholder="Comma-separated values"
+                      value={typeof values[field.promptKey] === 'string'
+                        ? (values[field.promptKey] as string)
+                        : ''}
+                      oninput={(e) =>
+                        (values[field.promptKey] = (e.target as HTMLInputElement).value)}
+                    />
+                  {:else}
+                    <Input
+                      id={`rp-${field.promptKey}`}
+                      type={field.sensitive ? 'password' : 'text'}
+                      value={typeof values[field.promptKey] === 'string'
+                        ? (values[field.promptKey] as string)
+                        : ''}
+                      oninput={(e) =>
+                        (values[field.promptKey] = (e.target as HTMLInputElement).value)}
+                    />
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          </section>
         {/if}
 
         {#if costPreview}
-          <div class="rounded-md border p-3 text-sm">
-            <div class="mb-2 text-xs uppercase text-muted-foreground">Cost preview</div>
-            {#each costPreview.lines as line}
-              <div
-                class={'flex justify-between ' +
-                  (line.skipped ? 'text-muted-foreground line-through' : '')}
-              >
-                <span>{line.label}</span>
-                <span class="tabular-nums">${line.price.toFixed(4)}</span>
+          <section class="space-y-2">
+            <Label class="text-xs uppercase tracking-wide text-muted-foreground">Cost</Label>
+            <div class="rounded-md border bg-muted/30 p-3 text-sm">
+              <dl class="space-y-1">
+                {#each costPreview.lines as line}
+                  <div
+                    class={'flex justify-between gap-3 ' +
+                      (line.skipped ? 'text-muted-foreground line-through' : '')}
+                  >
+                    <dt class="truncate">{line.label}</dt>
+                    <dd class="shrink-0 tabular-nums">${line.price.toFixed(4)}</dd>
+                  </div>
+                {/each}
+              </dl>
+              <div class="mt-2 flex justify-between border-t pt-2 font-medium">
+                <span>Total per run</span>
+                <span class="tabular-nums">${costPreview.total.toFixed(4)}</span>
               </div>
-            {/each}
-            <div class="mt-2 flex justify-between border-t pt-2 font-medium">
-              <span>Total (per run)</span>
-              <span class="tabular-nums">${costPreview.total.toFixed(4)}</span>
             </div>
-          </div>
+          </section>
         {/if}
       {/if}
     </div>

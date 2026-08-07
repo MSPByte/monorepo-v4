@@ -1,4 +1,7 @@
 export { m365IdentityResetPassword } from './reset-password.js';
 export { m365IdentityCreate } from './create-identity.js';
 export { m365LicenseAssign } from './assign-license.js';
+export { m365IdentityDisable } from './disable-identity.js';
+export { m365IdentityRevokeSessions } from './revoke-sessions.js';
+export { m365GroupAddMember } from './add-group-member.js';
 export { generateM365Password } from './password.js';

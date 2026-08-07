@@ -96,7 +96,7 @@
             </button>
           {/snippet}
         </Popover.Trigger>
-        <Popover.Content align="start" class="w-52 p-1">
+        <Popover.Content align="start" class="w-auto min-w-56 max-w-sm p-1">
           {#each route.children as child (child.href)}
             {@const childActive = isRouteActive(child, page.url.pathname)}
             <button

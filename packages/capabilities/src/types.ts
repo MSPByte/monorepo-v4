@@ -19,15 +19,44 @@ export type Binding =
 
 export type BindingKind = Binding['kind'];
 
+// Curated error taxonomy — capabilities and the worker map their failure modes
+// into this set so packages can decide onFailure behavior per class (e.g. treat
+// `already_exists` as continue-worthy while `permission_denied` should halt).
+export const ERROR_CLASSES = [
+  'not_found',
+  'already_exists',
+  'invalid_input',
+  'permission_denied',
+  'rate_limited',
+  'transient',
+  'vendor_error',
+  'binding_unresolved',
+  'expired_outputs',
+  'capability_missing',
+  'input_validation',
+  'handler_threw',
+  'canceled',
+] as const;
+
+export type ErrorClass = (typeof ERROR_CLASSES)[number];
+
+// Which classes are safe to retry on their own (worker-driven attempts) vs.
+// only useful to retry manually. Used by the retry-attempts logic.
+export const RETRYABLE_ERROR_CLASSES: readonly ErrorClass[] = [
+  'transient',
+  'rate_limited',
+  'vendor_error',
+];
+
 export type CapabilityResult<Outputs> =
   | { outcome: 'success'; outputs: Outputs }
   | { outcome: 'skip'; reason: string }
-  | { outcome: 'fail'; errorClass: string; message: string; retryable?: boolean };
+  | { outcome: 'fail'; errorClass: ErrorClass; message: string; retryable?: boolean };
 
 // Hint the runtime input form renderer. Sensitive fields auto-render as
 // password inputs regardless of typeHint. Server-side zod is still the
 // authority — this is UI-only.
-export type InputTypeHint = 'text' | 'boolean' | 'stringArray';
+export type InputTypeHint = 'text' | 'boolean' | 'stringArray' | 'number';
 
 export interface InputMetaEntry {
   allowedBindings: ReadonlyArray<BindingKind>;
@@ -35,10 +64,27 @@ export interface InputMetaEntry {
   sensitive?: boolean;
   priorOutputCompat?: readonly string[];
   typeHint?: InputTypeHint;
+  // Human-facing label. Defaults to the key name in the UI when omitted.
+  label?: string;
+  // One-line help text rendered under the field.
+  description?: string;
+  // If false, the input is optional — the form hides it under an "Advanced"
+  // toggle and the handler receives undefined when it's not supplied. Default
+  // true so existing capability meta stays backwards-compatible.
+  required?: boolean;
+  // When true, the field is optional AND collapsed by default in the form.
+  // Requires required === false; ignored otherwise.
+  advanced?: boolean;
+  // Baked-in default for literal bindings when no value is provided.
+  defaultValue?: unknown;
+  // For typeHint === 'text' with a closed set of choices.
+  choices?: ReadonlyArray<{ value: string; label: string }>;
 }
 
 export interface OutputMetaEntry {
   sensitive?: boolean;
+  label?: string;
+  description?: string;
 }
 
 // Row shape the worker resolves for identity-scoped capabilities. Mirrors the
@@ -86,6 +132,26 @@ export interface Capability<Inputs = unknown, Outputs = unknown> {
   requiredPermission: string;
   defaultUnitPrice: number;
   handler: (ctx: CapabilityCtx, inputs: Inputs) => Promise<CapabilityResult<Outputs>>;
+}
+
+// Package-level failure notification config. Executed by the worker when a run
+// reaches a terminal failed/halted/partial state. Email + PSA are stubbed for
+// now — the worker just logs the intent so the plumbing is in place.
+export type FailureAction =
+  | { kind: 'log' }
+  | { kind: 'email'; to: readonly string[]; subject?: string }
+  | { kind: 'psa_ticket'; boardId?: string; priority?: 'low' | 'normal' | 'high' };
+
+// Per-step overrides captured alongside inputBindings. The worker uses these
+// to decide whether a step failure halts the run and how aggressively to
+// retry a transient error before giving up.
+export type StepOnFailure = 'halt' | 'continue';
+
+export interface StepConfig {
+  onFailure?: StepOnFailure;
+  // Worker attempts count for retryable errors (RETRYABLE_ERROR_CLASSES).
+  // Non-retryable classes ignore this entirely. Clamped 0-5.
+  retryAttempts?: number;
 }
 
 export type AnyCapability = Capability<any, any>;

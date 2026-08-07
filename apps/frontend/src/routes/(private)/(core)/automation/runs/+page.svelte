@@ -5,11 +5,10 @@
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import { formatRelativeDate } from '$lib/utils/format';
-  import * as Card from '$lib/components/ui/card';
   import Button from '$lib/components/ui/button/button.svelte';
   import Loader from '$lib/components/transition/loader.svelte';
   import RunPackageDialog from '$lib/components/domain/run-package-dialog.svelte';
-  import { Play } from '@lucide/svelte';
+  import { Play, Workflow, ChevronRight } from '@lucide/svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
 
@@ -21,92 +20,96 @@
 
   let runDialogOpen = $state(false);
 
-  function statusClass(status: string): string {
-    switch (status) {
-      case 'completed':
-        return 'text-emerald-500';
-      case 'running':
-      case 'queued':
-      case 'pending':
-        return 'text-sky-500';
-      case 'halted':
-      case 'failed':
-      case 'partial':
-        return 'text-rose-500';
-      default:
-        return 'text-muted-foreground';
-    }
+  function statusPill(status: string): { dot: string; label: string; text: string } {
+    if (status === 'completed')
+      return { dot: 'bg-emerald-500', label: 'Completed', text: 'text-emerald-600 dark:text-emerald-400' };
+    if (status === 'running')
+      return { dot: 'bg-sky-500 animate-pulse', label: 'Running', text: 'text-sky-600 dark:text-sky-400' };
+    if (status === 'queued' || status === 'pending')
+      return { dot: 'bg-sky-500/50', label: status, text: 'text-sky-600 dark:text-sky-400' };
+    if (status === 'halted' || status === 'partial')
+      return { dot: 'bg-amber-500', label: status, text: 'text-amber-600 dark:text-amber-400' };
+    return { dot: 'bg-rose-500', label: status, text: 'text-rose-600 dark:text-rose-400' };
   }
 </script>
 
-<div class="flex size-full flex-col gap-4 overflow-auto p-6">
-  <div class="flex items-start justify-between gap-3">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-normal">Automation runs</h1>
+<div class="flex size-full flex-col gap-6 overflow-hidden p-6">
+  <header class="flex flex-wrap items-end justify-between gap-4">
+    <div class="space-y-1">
+      <h1 class="text-2xl font-semibold tracking-tight">Runs</h1>
       <p class="text-sm text-muted-foreground">
-        History of package executions — click a row to see per-step outcomes and outputs.
+        Every package execution. Click a run to trace what happened at each step.
       </p>
     </div>
     <Button class="gap-2" onclick={() => (runDialogOpen = true)}>
       <Play class="size-4" />
       Run a package
     </Button>
-  </div>
+  </header>
 
   <RunPackageDialog bind:open={runDialogOpen} onOpenChange={(o) => (runDialogOpen = o)} />
 
-  {#if runs.isLoading}
-    <Loader />
-  {:else if runs.error}
-    <Card.Root>
-      <Card.Content>
-        <p class="text-sm text-rose-500">Failed to load runs.</p>
-      </Card.Content>
-    </Card.Root>
-  {:else if (runs.data ?? []).length === 0}
-    <Card.Root>
-      <Card.Content>
-        <p class="text-sm text-muted-foreground">
-          No package runs yet. Trigger one from a vendor row action.
+  <div class="flex-1 overflow-auto">
+    {#if runs.isLoading}
+      <Loader />
+    {:else if runs.error}
+      <div
+        class="rounded-lg border border-rose-500/30 bg-rose-500/5 p-4 text-sm text-rose-600 dark:text-rose-400"
+      >
+        Failed to load runs.
+      </div>
+    {:else if (runs.data ?? []).length === 0}
+      <div class="rounded-lg border border-dashed p-16 text-center">
+        <div class="mx-auto flex size-12 items-center justify-center rounded-full bg-muted">
+          <Workflow class="size-5 text-muted-foreground" />
+        </div>
+        <h2 class="mt-4 text-base font-medium">No runs yet</h2>
+        <p class="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+          Trigger a package to see execution history here. Runs record every step,
+          every input, every output — with a 48-hour window for anything sensitive.
         </p>
-      </Card.Content>
-    </Card.Root>
-  {:else}
-    <div class="rounded-md border">
-      <table class="w-full text-sm">
-        <thead class="border-b bg-muted/40 text-xs uppercase text-muted-foreground">
-          <tr>
-            <th class="p-3 text-left">Package</th>
-            <th class="p-3 text-left">Status</th>
-            <th class="p-3 text-left">Trigger</th>
-            <th class="p-3 text-left">Started</th>
-            <th class="p-3 text-right">Billing</th>
-          </tr>
-        </thead>
-        <tbody>
+        <Button class="mt-6 gap-2" onclick={() => (runDialogOpen = true)}>
+          <Play class="size-4" />
+          Run a package
+        </Button>
+      </div>
+    {:else}
+      <div class="overflow-hidden rounded-lg border">
+        <div class="grid grid-cols-[130px_1fr_auto_auto] gap-4 border-b bg-muted/30 px-5 py-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <div>Status</div>
+          <div>Package</div>
+          <div class="hidden text-right sm:block">Cost</div>
+          <div class="w-4"></div>
+        </div>
+        <div class="divide-y">
           {#each runs.data ?? [] as run (run.id)}
-            <tr
-              class="cursor-pointer border-b transition-colors hover:bg-muted/40"
+            {@const pill = statusPill(run.status)}
+            <button
+              type="button"
+              class="group grid w-full grid-cols-[130px_1fr_auto_auto] items-center gap-4 px-5 py-4 text-left transition-colors hover:bg-muted/30"
               onclick={() => goto(`/automation/runs/${run.id}`)}
             >
-              <td class="p-3">
-                <div class="font-medium">{run.packageName ?? 'Unknown package'}</div>
-                <div class="text-xs text-muted-foreground">v{run.packageVersion}</div>
-              </td>
-              <td class="p-3">
-                <span class={statusClass(run.status)}>{run.status}</span>
-              </td>
-              <td class="p-3 capitalize">{run.triggerType}</td>
-              <td class="p-3 text-muted-foreground">
-                {run.startedAt ? formatRelativeDate(run.startedAt) : '—'}
-              </td>
-              <td class="p-3 text-right tabular-nums">
+              <div class="flex items-center gap-2">
+                <span class={`size-2 rounded-full ${pill.dot}`}></span>
+                <span class={`text-xs capitalize ${pill.text}`}>{pill.label}</span>
+              </div>
+              <div class="min-w-0">
+                <div class="truncate font-medium">{run.packageName ?? 'Unknown package'}</div>
+                <div class="text-xs text-muted-foreground">
+                  v{run.packageVersion} · <span class="capitalize">{run.triggerType}</span>
+                  {#if run.startedAt}· {formatRelativeDate(run.startedAt)}{/if}
+                </div>
+              </div>
+              <div class="hidden text-right text-sm tabular-nums text-muted-foreground sm:block">
                 ${Number(run.billingTotal ?? 0).toFixed(4)}
-              </td>
-            </tr>
+              </div>
+              <ChevronRight
+                class="size-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
+              />
+            </button>
           {/each}
-        </tbody>
-      </table>
-    </div>
-  {/if}
+        </div>
+      </div>
+    {/if}
+  </div>
 </div>

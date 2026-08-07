@@ -12,11 +12,15 @@ import {
 import type { PackageJobData } from "@mspbyte/pipeline";
 import {
   getCapability,
+  RETRYABLE_ERROR_CLASSES,
   type AnyCapability,
   type Binding,
   type CapabilityCtx,
   type CapabilityResult,
+  type ErrorClass,
+  type FailureAction,
   type M365IdentityRow,
+  type StepOnFailure,
 } from "@mspbyte/capabilities";
 import type { M365Connector } from "@mspbyte/connectors";
 import { Encryption } from "@mspbyte/encryption";
@@ -33,6 +37,8 @@ type StepDefinition = {
   capabilityId: string;
   label?: string;
   inputBindings: Record<string, Binding>;
+  onFailure?: StepOnFailure;
+  retryAttempts?: number;
 };
 
 type PackageSnapshot = {
@@ -40,6 +46,7 @@ type PackageSnapshot = {
   name: string;
   version: number;
   steps: StepDefinition[];
+  failureActions?: FailureAction[];
 };
 
 export function createPackageWorker(
@@ -148,18 +155,38 @@ export function createPackageWorker(
       };
 
       let halted = false;
+      let canceled = false;
+      let anyStepFailed = false;
 
       for (let position = run.startStepIndex; position < snapshot.steps.length; position++) {
+        // Cancellation window: re-read the run's status between steps so an
+        // in-flight cancel from tRPC takes effect at the next boundary. We
+        // deliberately don't interrupt an in-progress capability handler —
+        // that would leave vendor state half-committed.
+        const [current] = await db
+          .select({ status: packageRuns.status })
+          .from(packageRuns)
+          .where(eq(packageRuns.id, packageRunId))
+          .limit(1);
+        if (current?.status === "canceled") {
+          canceled = true;
+          break;
+        }
+
         const step = snapshot.steps[position]!;
         const capability = getCapability(step.capabilityId);
         if (!capability) {
           await recordStepFailure(db, packageRunId, position, step.capabilityId, {
-            errorClass: "CAPABILITY_MISSING",
+            errorClass: "capability_missing",
             message: `Unknown capability ${step.capabilityId}`,
           });
           halted = true;
+          anyStepFailed = true;
           break;
         }
+
+        const stepOnFailure: StepOnFailure = step.onFailure ?? "halt";
+        const maxAttempts = 1 + Math.min(Math.max(step.retryAttempts ?? 0, 0), 5);
 
         const inserted = await db
           .insert(packageRunSteps)
@@ -180,39 +207,64 @@ export function createPackageWorker(
         );
         if (!resolveResult.ok) {
           await failStep(db, stepRow.id, {
-            errorClass: "BINDING_UNRESOLVED",
+            errorClass: "binding_unresolved",
             message: resolveResult.error,
             resolvedInputs: {},
           });
-          halted = true;
-          break;
+          anyStepFailed = true;
+          if (stepOnFailure === "halt") {
+            halted = true;
+            break;
+          }
+          continue;
         }
 
-        const parsed = capability.inputs.safeParse(resolveResult.value);
+        // Optional/undefined inputs — drop them before zod so `.optional()`
+        // fields that were bound to runtime but not supplied pass validation.
+        const cleaned = stripUndefined(resolveResult.value);
+
+        const parsed = capability.inputs.safeParse(cleaned);
         if (!parsed.success) {
           await failStep(db, stepRow.id, {
-            errorClass: "INPUT_VALIDATION",
+            errorClass: "input_validation",
             message: parsed.error.message,
             resolvedInputs: encryptSensitiveInputs(
-              resolveResult.value,
+              cleaned,
               capability,
               encryptionKey,
             ),
           });
-          halted = true;
-          break;
+          anyStepFailed = true;
+          if (stepOnFailure === "halt") {
+            halted = true;
+            break;
+          }
+          continue;
         }
 
         const ctx: CapabilityCtx = { ...ctxBase, packageRunStepId: stepRow.id };
-        let result: CapabilityResult<unknown>;
-        try {
-          result = await capability.handler(ctx, parsed.data);
-        } catch (error) {
-          result = {
-            outcome: "fail",
-            errorClass: "HANDLER_THREW",
-            message: error instanceof Error ? error.message : String(error),
-          };
+        let result: CapabilityResult<unknown> = {
+          outcome: "fail",
+          errorClass: "handler_threw",
+          message: "not run",
+        };
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          try {
+            result = await capability.handler(ctx, parsed.data);
+          } catch (error) {
+            result = {
+              outcome: "fail",
+              errorClass: "handler_threw",
+              message: error instanceof Error ? error.message : String(error),
+            };
+          }
+          if (result.outcome !== "fail") break;
+          const cls = result.errorClass as ErrorClass;
+          const retryable =
+            result.retryable === true && RETRYABLE_ERROR_CLASSES.includes(cls);
+          if (!retryable || attempt === maxAttempts - 1) break;
+          // Simple exponential backoff between attempts: 250ms, 500ms, 1s, ...
+          await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
         }
 
         const auditRow = await writeAuditLog(db, {
@@ -276,11 +328,27 @@ export function createPackageWorker(
             auditLogIds: auditRow ? [auditRow] : [],
           })
           .where(eq(packageRunSteps.id, stepRow.id));
-        halted = true;
-        break;
+        anyStepFailed = true;
+        if (stepOnFailure === "halt") {
+          halted = true;
+          break;
+        }
+        // stepOnFailure === 'continue' — proceed to the next step. The run's
+        // final status will be 'partial' if we reach the end this way.
       }
 
-      const finalStatus = halted ? "halted" : "completed";
+      // Derive final status:
+      //   canceled: user asked us to stop
+      //   halted: a step failed with onFailure='halt' before the end
+      //   partial: ran to the end but at least one step failed on continue
+      //   completed: every step succeeded (or was benignly skipped)
+      const finalStatus: 'canceled' | 'halted' | 'partial' | 'completed' = canceled
+        ? "canceled"
+        : halted
+          ? "halted"
+          : anyStepFailed
+            ? "partial"
+            : "completed";
       const totalBillable = await sumBillable(db, packageRunId);
       await db
         .update(packageRuns)
@@ -290,6 +358,18 @@ export function createPackageWorker(
           finishedAt: new Date().toISOString(),
         })
         .where(eq(packageRuns.id, packageRunId));
+
+      // Package-level failure notifications fire on any terminal non-success
+      // state. Actions are described declaratively; the worker just logs the
+      // intent today — email + PSA senders land in a follow-up.
+      if (finalStatus === "halted" || finalStatus === "partial") {
+        await executeFailureActions({
+          actions: snapshot.failureActions ?? [],
+          orgId,
+          packageRunId,
+          finalStatus,
+        });
+      }
 
       logger.info("Package run completed", {
         orgId,
@@ -310,6 +390,35 @@ export function createPackageWorker(
       error: serializeError(error),
     });
   });
+}
+
+function stripUndefined(obj: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
+async function executeFailureActions(args: {
+  actions: FailureAction[];
+  orgId: string;
+  packageRunId: string;
+  finalStatus: "halted" | "partial";
+}): Promise<void> {
+  if (args.actions.length === 0) return;
+  for (const action of args.actions) {
+    // These are declared package-level responses. Real senders (email, PSA
+    // integrations) plug in here; for now we log the intent so the wiring is
+    // observable end-to-end and never silently no-ops.
+    logger.info("Failure action fired", {
+      orgId: args.orgId,
+      packageRunId: args.packageRunId,
+      finalStatus: args.finalStatus,
+      action: action.kind,
+      details: action,
+    });
+  }
 }
 
 function resolveBindings(
@@ -495,7 +604,7 @@ async function failStep(
   db: any,
   stepId: string,
   args: {
-    errorClass: string;
+    errorClass: ErrorClass;
     message: string;
     resolvedInputs: Record<string, unknown>;
   },
@@ -517,7 +626,7 @@ async function recordStepFailure(
   packageRunId: string,
   position: number,
   capabilityId: string,
-  args: { errorClass: string; message: string },
+  args: { errorClass: ErrorClass; message: string },
 ): Promise<void> {
   await db.insert(packageRunSteps).values({
     packageRunId,
