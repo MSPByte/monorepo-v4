@@ -1,13 +1,25 @@
 import { z } from 'zod';
 import { ActionLabels } from '@mspbyte/shared';
 import type { Capability } from '../types.js';
+import { generateM365Password } from './password.js';
+
+// Sentinel that means "worker generates a random password at run time". Kept
+// out of z.string() so the client can't accidentally submit it as a literal
+// password.
+const GENERATE_PASSWORD_SENTINEL = '__generate__';
 
 const inputs = z.object({
   tenantLinkId: z.uuid(),
   displayName: z.string().min(1).max(256),
   userPrincipalName: z.email(),
-  mailNickname: z.string().min(1).max(64),
-  initialPassword: z.string().min(8).max(256),
+  // Optional — handler derives from displayName when omitted (strip
+  // non-alphanumerics, lowercase, cap at 64 chars).
+  mailNickname: z.string().min(1).max(64).optional(),
+  // Either the sentinel (generate on the server) or a real password.
+  initialPassword: z.union([
+    z.literal(GENERATE_PASSWORD_SENTINEL),
+    z.string().min(8).max(256),
+  ]),
   forceChangeAtNextSignin: z.boolean(),
   // Advanced / optional Graph fields. Any that are undefined or empty aren't
   // sent to Graph.
@@ -25,6 +37,9 @@ const inputs = z.object({
 const outputs = z.object({
   userId: z.string(),
   userPrincipalName: z.string(),
+  // Only populated when the worker generated the password — the user needs a
+  // way to retrieve it. Sensitive → encrypted-at-rest + reveal-audited.
+  temporaryPassword: z.string().optional(),
 });
 
 export const m365IdentityCreate: Capability<
@@ -56,24 +71,26 @@ export const m365IdentityCreate: Capability<
     },
     userPrincipalName: {
       allowedBindings: ['literal', 'runtime'],
-      typeHint: 'text',
+      typeHint: 'upn',
       label: 'User principal name',
-      description: 'The full sign-in address (e.g. user@tenant.onmicrosoft.com).',
+      description: 'The full sign-in address. Domain is picked from the tenant\'s verified list.',
       required: true,
     },
     mailNickname: {
       allowedBindings: ['literal', 'runtime'],
       typeHint: 'text',
       label: 'Mail nickname',
-      description: 'The local-part of the mailbox alias.',
-      required: true,
+      description:
+        'Optional — derived from the display name if you don\'t set one. Override when you need a specific alias.',
+      required: false,
+      advanced: true,
     },
     initialPassword: {
       allowedBindings: ['literal', 'runtime'],
       sensitive: true,
-      typeHint: 'text',
+      typeHint: 'password',
       label: 'Initial password',
-      description: 'Auto-generate at run time or supply your own.',
+      description: 'Generate a strong random password at run time, or supply your own.',
       required: true,
     },
     forceChangeAtNextSignin: {
@@ -152,19 +169,38 @@ export const m365IdentityCreate: Capability<
   outputMeta: {
     userId: { label: 'Graph user id' },
     userPrincipalName: { label: 'User principal name' },
+    temporaryPassword: {
+      label: 'Temporary password',
+      sensitive: true,
+      description: 'Populated only when the worker generated the password.',
+    },
   },
   actionLabel: ActionLabels.M365IdentityResetPassword,
   auditAction: 'create',
   requiredPermission: 'Vendors.Write',
   defaultUnitPrice: 0.1,
   async handler(ctx, input) {
+    const generated = input.initialPassword === GENERATE_PASSWORD_SENTINEL;
+    const password = generated ? generateM365Password() : input.initialPassword;
+
+    // Derive mailNickname from displayName when the caller didn't set one:
+    // strip anything that isn't a-z0-9, lowercase, cap at 64 chars. Graph
+    // rejects specials so this keeps the create idempotent for the common
+    // case (display "Jane Doe" → nickname "janedoe").
+    const derived =
+      input.displayName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '')
+        .slice(0, 64) || 'user';
+    const mailNickname = input.mailNickname ?? derived;
+
     try {
       const connector = await ctx.getM365Connector(input.tenantLinkId);
       const result = await connector.users.create({
         displayName: input.displayName,
         userPrincipalName: input.userPrincipalName,
-        mailNickname: input.mailNickname,
-        password: input.initialPassword,
+        mailNickname,
+        password,
         forceChangePasswordNextSignInWithMfa: input.forceChangeAtNextSignin,
         accountEnabled: true,
         givenName: input.givenName,
@@ -179,7 +215,13 @@ export const m365IdentityCreate: Capability<
       });
       return {
         outcome: 'success',
-        outputs: { userId: result.id, userPrincipalName: result.userPrincipalName },
+        outputs: {
+          userId: result.id,
+          userPrincipalName: result.userPrincipalName,
+          // Only expose the password if we generated it — a user-supplied one
+          // isn't ours to echo.
+          temporaryPassword: generated ? password : undefined,
+        },
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

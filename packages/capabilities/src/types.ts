@@ -56,7 +56,7 @@ export type CapabilityResult<Outputs> =
 // Hint the runtime input form renderer. Sensitive fields auto-render as
 // password inputs regardless of typeHint. Server-side zod is still the
 // authority — this is UI-only.
-export type InputTypeHint = 'text' | 'boolean' | 'stringArray' | 'number';
+export type InputTypeHint = 'text' | 'boolean' | 'stringArray' | 'number' | 'password' | 'upn';
 
 export interface InputMetaEntry {
   allowedBindings: ReadonlyArray<BindingKind>;

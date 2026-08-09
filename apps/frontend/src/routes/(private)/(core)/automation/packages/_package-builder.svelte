@@ -11,6 +11,8 @@
   import { Checkbox } from '$lib/components/ui/checkbox';
   import EntityPicker from '$lib/components/domain/entity-picker.svelte';
   import StepNode from '$lib/components/domain/step-node.svelte';
+  import SingleSelect from '$lib/components/single-select.svelte';
+  import { fieldLabel } from '$lib/utils/label';
   import { ArrowDown, ArrowLeft, ArrowUp, Plus, Trash2 } from '@lucide/svelte';
 
   type EntityType = 'integration_link' | 'm365_identity' | 'm365_group' | 'm365_license';
@@ -67,6 +69,13 @@
 
   const capIndex = $derived(new Map((capabilitiesQuery.data ?? []).map((c) => [c.id, c])));
 
+  const capabilityOptions = $derived(
+    (capabilitiesQuery.data ?? []).map((c) => ({
+      value: c.id,
+      label: `${c.name}  ·  ${c.category}`,
+    })),
+  );
+
   const statusBadgeClass = $derived.by(() => {
     if (draft.status === 'active')
       return 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400';
@@ -98,12 +107,20 @@
     return { kind: 'priorOutput', stepPosition: 0, path: '' };
   }
 
+  // Required = the input is required by the capability. Anything with an
+  // explicit `required: false` is treated as optional and left off unless the
+  // author opts in via "Add optional field".
+  function isRequiredInput(meta: { required?: boolean }): boolean {
+    return meta.required !== false;
+  }
+
   function addStep() {
     if (!addingCapabilityId) return;
     const cap = capIndex.get(addingCapabilityId);
     if (!cap) return;
     const inputBindings: Record<string, Binding> = {};
     for (const [name, meta] of Object.entries(cap.inputMeta)) {
+      if (!isRequiredInput(meta)) continue;
       inputBindings[name] = defaultBindingForInput(name, meta);
     }
     draft.steps = [
@@ -111,6 +128,21 @@
       { capabilityId: cap.id, label: cap.name, inputBindings },
     ];
     addingCapabilityId = '';
+  }
+
+  function addOptionalInput(stepIndex: number, inputName: string) {
+    const step = draft.steps[stepIndex]!;
+    const cap = capIndex.get(step.capabilityId);
+    const meta = cap?.inputMeta[inputName];
+    if (!meta) return;
+    step.inputBindings[inputName] = defaultBindingForInput(inputName, meta);
+    draft.steps = [...draft.steps];
+  }
+
+  function removeOptionalInput(stepIndex: number, inputName: string) {
+    const step = draft.steps[stepIndex]!;
+    delete step.inputBindings[inputName];
+    draft.steps = [...draft.steps];
   }
 
   function removeStep(index: number) {
@@ -307,23 +339,55 @@
                 </div>
 
                 {#if cap}
+                  {@const boundInputNames = Object.keys(step.inputBindings)}
+                  {@const availableOptional = Object.entries(cap.inputMeta)
+                    .filter(
+                      ([name, meta]) =>
+                        !isRequiredInput(meta) && !(name in step.inputBindings),
+                    )
+                    .map(([name, meta]) => ({
+                      value: name,
+                      label: fieldLabel(name, (meta as { label?: string }).label),
+                    }))}
                   <div class="divide-y">
-                    {#each Object.entries(cap.inputMeta) as [inputName, meta]}
-                      {@const binding = step.inputBindings[inputName]}
-                      <div class="grid grid-cols-1 gap-3 p-4 sm:grid-cols-[180px_1fr]">
-                        <div class="space-y-0.5">
-                          <div class="font-mono text-sm">{inputName}</div>
-                          {#if meta.sensitive}
-                            <div class="text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-500">
-                              Sensitive
+                    {#each boundInputNames as inputName (inputName)}
+                      {@const meta = cap.inputMeta[inputName]}
+                      {#if meta}
+                        {@const binding = step.inputBindings[inputName]}
+                        {@const label = fieldLabel(inputName, meta.label)}
+                        {@const optional = !isRequiredInput(meta)}
+                        <div class="grid grid-cols-1 gap-3 p-4 sm:grid-cols-[200px_1fr]">
+                          <div class="space-y-0.5">
+                            <div class="flex items-start justify-between gap-2">
+                              <div class="text-sm font-medium">{label}</div>
+                              {#if optional}
+                                <button
+                                  type="button"
+                                  class="text-muted-foreground transition-colors hover:text-rose-500"
+                                  aria-label={`Remove ${label}`}
+                                  onclick={() => removeOptionalInput(stepIndex, inputName)}
+                                >
+                                  <Trash2 class="size-3.5" />
+                                </button>
+                              {/if}
                             </div>
-                          {/if}
-                          {#if meta.entityType}
-                            <div class="text-[10px] uppercase tracking-wide text-muted-foreground">
-                              {meta.entityType.replace('_', ' ')}
+                            {#if meta.description}
+                              <div class="text-xs text-muted-foreground">{meta.description}</div>
+                            {/if}
+                            <div class="flex flex-wrap items-center gap-1.5 pt-1 text-[10px] uppercase tracking-wide">
+                              {#if optional}
+                                <span class="text-muted-foreground">Optional</span>
+                              {/if}
+                              {#if meta.sensitive}
+                                <span class="text-amber-600 dark:text-amber-500">Sensitive</span>
+                              {/if}
+                              {#if meta.entityType}
+                                <span class="text-muted-foreground">
+                                  {meta.entityType.replace('_', ' ')}
+                                </span>
+                              {/if}
                             </div>
-                          {/if}
-                        </div>
+                          </div>
                         <div class="space-y-2">
                           <div class="flex flex-wrap items-center gap-2">
                             <Select.Root
@@ -453,49 +517,58 @@
                               {@const upstreamCap = capIndex.get(
                                 upstreamSteps[binding.stepPosition]?.capabilityId ?? '',
                               )}
-                              <div class="flex flex-wrap items-center gap-2">
-                                <Select.Root
-                                  type="single"
-                                  value={String(binding.stepPosition)}
-                                  onValueChange={(v) =>
+                              {@const stepOpts = upstreamSteps.map((s, i) => ({
+                                value: String(i),
+                                label: `Step ${i + 1}: ${s.label ?? s.capabilityId}`,
+                              }))}
+                              {@const outputOpts = upstreamCap
+                                ? Object.entries(upstreamCap.outputMeta).map(([k, m]) => ({
+                                    value: k,
+                                    label: fieldLabel(k, (m as { label?: string }).label),
+                                  }))
+                                : []}
+                              <div class="grid gap-2 sm:grid-cols-2">
+                                <SingleSelect
+                                  options={stepOpts}
+                                  selected={String(binding.stepPosition)}
+                                  placeholder="Prior step…"
+                                  disableSort
+                                  onchange={(v) =>
                                     setBinding(stepIndex, inputName, {
                                       ...binding,
                                       stepPosition: Number(v),
                                       path: '',
                                     })}
-                                >
-                                  <Select.Trigger class="h-9 w-32 text-sm">
-                                    Step {binding.stepPosition + 1}
-                                  </Select.Trigger>
-                                  <Select.Content>
-                                    {#each upstreamSteps as _s, i}
-                                      <Select.Item value={String(i)}>Step {i + 1}</Select.Item>
-                                    {/each}
-                                  </Select.Content>
-                                </Select.Root>
-                                <Select.Root
-                                  type="single"
-                                  value={binding.path}
-                                  onValueChange={(v) =>
+                                />
+                                <SingleSelect
+                                  options={outputOpts}
+                                  selected={binding.path}
+                                  placeholder="Output field…"
+                                  onchange={(v) =>
                                     setBinding(stepIndex, inputName, { ...binding, path: v })}
-                                >
-                                  <Select.Trigger class="h-9 w-48 text-sm">
-                                    {binding.path || 'Output field…'}
-                                  </Select.Trigger>
-                                  <Select.Content>
-                                    {#if upstreamCap}
-                                      {#each Object.keys(upstreamCap.outputMeta) as field}
-                                        <Select.Item value={field}>{field}</Select.Item>
-                                      {/each}
-                                    {/if}
-                                  </Select.Content>
-                                </Select.Root>
+                                />
                               </div>
                             {/if}
                           </div>
                         </div>
                       </div>
+                      {/if}
                     {/each}
+                    {#if availableOptional.length > 0}
+                      <div class="flex flex-wrap items-center gap-2 p-4">
+                        <div class="min-w-64 sm:max-w-72">
+                          <SingleSelect
+                            options={availableOptional}
+                            selected=""
+                            placeholder="Add an optional field…"
+                            onchange={(v) => v && addOptionalInput(stepIndex, v)}
+                          />
+                        </div>
+                        <span class="text-xs text-muted-foreground">
+                          {availableOptional.length} available
+                        </span>
+                      </div>
+                    {/if}
                   </div>
                 {:else}
                   <div class="p-4 text-sm text-rose-500">
@@ -515,23 +588,14 @@
           </div>
           <div class="pb-2">
             <div class="flex flex-wrap items-center gap-2 rounded-lg border border-dashed p-4">
-              <Select.Root type="single" bind:value={addingCapabilityId}>
-                <Select.Trigger class="h-9 w-72">
-                  {addingCapabilityId
-                    ? capIndex.get(addingCapabilityId)?.name
-                    : 'Add a capability…'}
-                </Select.Trigger>
-                <Select.Content>
-                  {#each capabilitiesQuery.data ?? [] as cap}
-                    <Select.Item value={cap.id}>
-                      <div class="flex flex-col">
-                        <span>{cap.name}</span>
-                        <span class="text-xs text-muted-foreground">{cap.category}</span>
-                      </div>
-                    </Select.Item>
-                  {/each}
-                </Select.Content>
-              </Select.Root>
+              <div class="flex-1 min-w-64 sm:max-w-96">
+                <SingleSelect
+                  options={capabilityOptions}
+                  selected={addingCapabilityId}
+                  placeholder="Add a capability…"
+                  onchange={(v) => (addingCapabilityId = v)}
+                />
+              </div>
               <Button class="gap-1.5" disabled={!addingCapabilityId} onclick={addStep}>
                 <Plus class="size-4" />
                 Add step

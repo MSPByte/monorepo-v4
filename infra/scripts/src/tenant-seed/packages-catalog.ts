@@ -72,9 +72,8 @@ const CREATE_ADMIN_PACKAGE: SeededPackage = {
       label: "Assign licenses",
       inputBindings: {
         tenantLinkId: { kind: "runtime", promptKey: "tenantLinkId", required: true },
-        identityExternalId: { kind: "priorOutput", stepPosition: 0, path: "userId" },
+        identityId: { kind: "priorOutput", stepPosition: 0, path: "userId" },
         skuIds: { kind: "runtime", promptKey: "skuIds", required: true },
-        removeSkuIds: { kind: "literal", value: [] },
       },
     },
   ],

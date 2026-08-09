@@ -2134,6 +2134,48 @@ export const vendorRouter = t.router({
         .orderBy(m365Licenses.friendlyName);
     }),
 
+  // Live fetch of verified domains for a tenant. Skips the DB entirely so the
+  // caller sees exactly what Graph knows right now — new domains verified in
+  // the M365 admin portal show up on the next dialog open.
+  m365DomainOptions: authProcedure
+    .input(z.object({ linkId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const [link] = await ctx.db
+        .select({
+          externalId: integrationLinks.externalId,
+          integrationConfig: integrations.config
+        })
+        .from(integrationLinks)
+        .innerJoin(integrations, eq(integrationLinks.integrationId, integrations.id))
+        .where(
+          and(
+            eq(integrationLinks.id, input.linkId),
+            eq(integrationLinks.integrationId, 'microsoft-365')
+          )
+        )
+        .limit(1);
+      if (!link?.externalId) {
+        return [] as Array<{ domain: string; isDefault: boolean; isVerified: boolean }>;
+      }
+      try {
+        const connector = m365IdentityConnector(ctx, link.integrationConfig, link.externalId);
+        const domains = await connector.domains.listAll();
+        return domains
+          .filter((d) => d.isVerified)
+          .map((d) => ({
+            domain: d.id,
+            isDefault: d.isDefault,
+            isVerified: d.isVerified
+          }))
+          .sort((a, b) => {
+            if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+            return a.domain.localeCompare(b.domain);
+          });
+      } catch {
+        return [] as Array<{ domain: string; isDefault: boolean; isVerified: boolean }>;
+      }
+    }),
+
   m365RoleOptions: authProcedure
     .input(z.object({}).optional())
     .query(async ({ ctx }) => {

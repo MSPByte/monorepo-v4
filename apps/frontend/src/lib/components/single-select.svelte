@@ -2,12 +2,16 @@
   import { Check, ChevronDown } from '@lucide/svelte';
   import { cn } from '$lib/utils';
   import Button from '$lib/components/ui/button/button.svelte';
+  import { Spinner } from '$lib/components/ui/spinner/index.js';
   import * as Popover from '$lib/components/ui/popover/index.js';
   import * as Command from '$lib/components/ui/command/index.js';
 
   type Option = {
     value: string;
     label: string;
+    // Optional muted line rendered under the label — e.g. availability count
+    // for a license SKU, integration id for a tenant.
+    subLabel?: string;
     disabled?: boolean;
   };
 
@@ -109,35 +113,50 @@
       </Button>
     {/snippet}
   </Popover.Trigger>
-  <Popover.Content class="w-full p-0" align="start">
+  <Popover.Content class="w-[var(--bits-popover-anchor-width)] p-0" align="start">
     <Command.Root shouldFilter={false}>
       <Command.Input placeholder={searchPlaceholder} bind:value={search} />
-      <Command.Empty>{loading ? 'Loading...' : 'No results found.'}</Command.Empty>
-      <Command.Group class="max-h-64 overflow-auto">
-        {#if loading}
-          <Command.Item disabled class="opacity-50 cursor-default">Loading...</Command.Item>
-        {/if}
-        {#each filteredOptions as option}
-          <Command.Item
-            value={option.value}
-            onSelect={() => !option.disabled && selectOption(option.value)}
-            disabled={option.disabled}
-            class={cn(option.disabled && 'opacity-50 cursor-not-allowed')}
-          >
-            <div
-              class={cn(
-                'mr-2 flex h-4 w-4 items-center justify-center rounded-full border border-primary',
-                selected === option.value
-                  ? 'bg-primary text-primary-foreground'
-                  : 'opacity-50 [&_svg]:invisible'
-              )}
+      {#if loading && filteredOptions.length === 0}
+        <div class="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+          <Spinner class="size-3.5" />
+          <span>Loading…</span>
+        </div>
+      {:else}
+        <Command.Empty>No results found.</Command.Empty>
+        <Command.Group class="max-h-64 overflow-auto">
+          {#each filteredOptions as option}
+            <Command.Item
+              value={option.value}
+              onSelect={() => !option.disabled && selectOption(option.value)}
+              disabled={option.disabled}
+              class={cn(option.disabled && 'opacity-50 cursor-not-allowed')}
             >
-              <Check class="h-4 w-4" />
+              <div
+                class={cn(
+                  'mr-2 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-primary',
+                  selected === option.value
+                    ? 'bg-primary text-primary-foreground'
+                    : 'opacity-50 [&_svg]:invisible'
+                )}
+              >
+                <Check class="h-4 w-4" />
+              </div>
+              <div class="flex min-w-0 flex-col">
+                <span class="truncate">{option.label}</span>
+                {#if option.subLabel}
+                  <span class="truncate text-xs text-muted-foreground">{option.subLabel}</span>
+                {/if}
+              </div>
+            </Command.Item>
+          {/each}
+          {#if loading && filteredOptions.length > 0}
+            <div class="flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground">
+              <Spinner class="size-3" />
+              <span>Refreshing…</span>
             </div>
-            <span>{option.label}</span>
-          </Command.Item>
-        {/each}
-      </Command.Group>
+          {/if}
+        </Command.Group>
+      {/if}
     </Command.Root>
   </Popover.Content>
 </Popover.Root>

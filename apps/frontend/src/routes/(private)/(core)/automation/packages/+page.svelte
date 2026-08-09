@@ -7,9 +7,10 @@
   import type { TRPCClient } from '@trpc/client';
   import Button from '$lib/components/ui/button/button.svelte';
   import { Badge } from '$lib/components/ui/badge';
+  import { Input } from '$lib/components/ui/input';
   import Loader from '$lib/components/transition/loader.svelte';
   import RunPackageDialog from '$lib/components/domain/run-package-dialog.svelte';
-  import { Play, Pencil, Archive, Plus, Boxes } from '@lucide/svelte';
+  import { Play, Pencil, Archive, Plus, Boxes, Search } from '@lucide/svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
@@ -27,6 +28,18 @@
 
   let runDialogOpen = $state(false);
   let runDialogPackageId = $state<string | undefined>(undefined);
+  let search = $state('');
+
+  const filtered = $derived.by(() => {
+    const rows = list.data ?? [];
+    const q = search.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((p) => {
+      if (p.name.toLowerCase().includes(q)) return true;
+      if (p.description?.toLowerCase().includes(q)) return true;
+      return false;
+    });
+  });
 
   const archive = createMutation(() => ({
     mutationFn: (id: string) => trpc.packages.archive.mutate({ id }),
@@ -71,6 +84,19 @@
     packageId={runDialogPackageId}
   />
 
+  {#if list.data && list.data.length > 0}
+    <div class="relative max-w-sm">
+      <Search
+        class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+      />
+      <Input
+        placeholder="Search packages"
+        bind:value={search}
+        class="pl-9"
+      />
+    </div>
+  {/if}
+
   <div class="flex-1 overflow-auto">
     {#if list.isLoading}
       <Loader />
@@ -95,9 +121,13 @@
           New package
         </Button>
       </div>
+    {:else if filtered.length === 0}
+      <div class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+        No packages match "{search}".
+      </div>
     {:else}
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {#each list.data ?? [] as pkg (pkg.id)}
+        {#each filtered as pkg (pkg.id)}
           {@const labels = stepLabels(pkg)}
           <article
             class="group flex flex-col rounded-lg border bg-card p-5 transition-shadow hover:shadow-sm"

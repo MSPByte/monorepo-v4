@@ -80,7 +80,14 @@ const entityTypeSchema = z.enum([
   'm365_group',
   'm365_license',
 ]);
-type EntityOption = { id: string; label: string; subLabel?: string };
+type EntityOption = {
+  id: string;
+  label: string;
+  subLabel?: string;
+  // When true, the picker renders the row muted and refuses selection — used
+  // for licenses that are fully consumed, disabled sites, etc.
+  disabled?: boolean;
+};
 
 // Rejects obviously broken bindings: unknown capabilityId, priorOutput
 // pointing forward, entity bindings whose entityType the capability doesn't
@@ -297,7 +304,10 @@ export const packagesRouter = t.router({
     )
     .query(async ({ ctx, input }): Promise<EntityOption[]> => {
       if (input.entityType === 'integration_link') {
-        const filters = [];
+        // Only offer links that are actually usable — status='active' means
+        // the tenant is connected and healthy. Error/disabled/dispositioned
+        // links can't be run against.
+        const filters = [eq(integrationLinks.status, 'active')];
         if (input.integrationId) {
           filters.push(eq(integrationLinks.integrationId, input.integrationId));
         }
@@ -308,7 +318,7 @@ export const packagesRouter = t.router({
             integrationId: integrationLinks.integrationId,
           })
           .from(integrationLinks)
-          .where(filters.length ? and(...filters) : undefined)
+          .where(and(...filters))
           .orderBy(asc(integrationLinks.name))
           .limit(input.limit);
         return rows.map((r) => ({
@@ -359,21 +369,33 @@ export const packagesRouter = t.router({
         if (input.integrationLinkId) {
           filters.push(eq(m365Licenses.linkId, input.integrationLinkId));
         }
+        // Return the friendly name (e.g. "Microsoft 365 Business Standard") as
+        // the label + a live availability count as subLabel — matches the UX
+        // of the "Manage licenses" dialog rather than surfacing raw SKU strings.
         const rows = await ctx.db
           .select({
-            id: m365Licenses.externalId,
+            skuId: m365Licenses.skuId,
             skuPartNumber: m365Licenses.skuPartNumber,
+            friendlyName: m365Licenses.friendlyName,
+            totalUnits: m365Licenses.totalUnits,
+            consumedUnits: m365Licenses.consumedUnits,
+            enabled: m365Licenses.enabled,
           })
           .from(m365Licenses)
           .where(filters.length ? and(...filters) : undefined)
-          .orderBy(asc(m365Licenses.skuPartNumber))
+          .orderBy(asc(m365Licenses.friendlyName))
           .limit(input.limit);
-        // For m365_license the id we return is the skuId (externalId) — that's
-        // the value the license.assign capability actually needs.
-        return rows.map((r) => ({
-          id: r.id,
-          label: r.skuPartNumber,
-        }));
+        return rows
+          .filter((r) => r.enabled !== false)
+          .map((r) => {
+            const available = Math.max(0, r.totalUnits - r.consumedUnits);
+            return {
+              id: r.skuId,
+              label: r.friendlyName || r.skuPartNumber,
+              subLabel: `${available} of ${r.totalUnits} available`,
+              disabled: available === 0,
+            };
+          });
       }
 
       return [];
