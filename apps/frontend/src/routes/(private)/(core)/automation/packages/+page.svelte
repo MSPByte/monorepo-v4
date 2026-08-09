@@ -1,16 +1,25 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
-  import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+  import { useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
+  import { DataTable } from '$lib/components/data-table';
+  import type {
+    DataTableColumn,
+    PaginationInput,
+    RowAction,
+  } from '$lib/components/data-table/types';
+  import {
+    numberColumn,
+    relativeDateColumn,
+    stateColumn,
+    textColumn,
+  } from '$lib/components/data-table/column-defs';
   import Button from '$lib/components/ui/button/button.svelte';
-  import { Input } from '$lib/components/ui/input';
-  import { Label } from '$lib/components/ui/label';
-  import Loader from '$lib/components/transition/loader.svelte';
   import RunPackageDialog from '$lib/components/domain/run-package-dialog.svelte';
   import { toUserMessage } from '$lib/utils/errors';
   import {
@@ -18,167 +27,298 @@
     Pencil,
     Archive,
     Plus,
-    Boxes,
-    Search,
-    MoreHorizontal,
     Copy,
     Trash2,
-    ArrowUpDown,
+    MoreHorizontal,
   } from '@lucide/svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
 
-  type Status = 'draft' | 'active' | 'archived';
-  type Row = {
+  type PackageRow = {
     id: string;
     name: string;
-    description: string | null;
-    status: string;
+    description: string;
+    status: 'draft' | 'active' | 'archived';
+    stepCount: number;
     version: number;
-    steps: unknown;
     updatedAt: string | null;
-    createdAt: string | null;
+    stepPreview: string;
+    [key: string]: unknown;
   };
 
-  const list = createQuery(() => ({
-    queryKey: ['packages.list'],
-    queryFn: () => trpc.packages.list.query(),
-  }));
-
-  const capabilities = createQuery(() => ({
-    queryKey: ['packages.metadata.capabilities'],
-    queryFn: () => trpc.packages.capabilities.query(),
-    staleTime: 5 * 60_000,
-  }));
-
+  let refreshKey = $state(0);
   let runDialogOpen = $state(false);
   let runDialogPackageId = $state<string | undefined>(undefined);
-  let search = $state('');
-  let statusFilter = $state<'all' | Status>('all');
-  let sortKey = $state<'updated' | 'name' | 'steps'>('updated');
-  let deleteTarget = $state<Row | null>(null);
-  let deleteConfirmName = $state('');
+  let deleteTarget = $state<PackageRow | null>(null);
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['packages.list'] });
+  const invalidate = () => {
+    refreshKey++;
+    void queryClient.invalidateQueries({ queryKey: ['packages.list'] });
+  };
 
-  const archive = createMutation(() => ({
-    mutationFn: (id: string) => trpc.packages.archive.mutate({ id }),
-    onSuccess: () => {
+  async function archiveOne(id: string) {
+    try {
+      await trpc.packages.archive.mutate({ id });
       toast.success('Package archived');
-      void invalidate();
-    },
-    onError: (err) => toast.error(toUserMessage(err, 'Failed to archive')),
-  }));
+      invalidate();
+    } catch (err) {
+      toast.error(toUserMessage(err, 'Failed to archive'));
+    }
+  }
 
-  const duplicate = createMutation(() => ({
-    mutationFn: (id: string) => trpc.packages.duplicate.mutate({ id }),
-    onSuccess: () => {
+  async function duplicateOne(id: string) {
+    try {
+      await trpc.packages.duplicate.mutate({ id });
       toast.success('Duplicated');
-      void invalidate();
-    },
-    onError: (err) => toast.error(toUserMessage(err, 'Failed to duplicate')),
-  }));
+      invalidate();
+    } catch (err) {
+      toast.error(toUserMessage(err, 'Failed to duplicate'));
+    }
+  }
 
-  const remove = createMutation(() => ({
-    mutationFn: (id: string) => trpc.packages.delete.mutate({ id }),
-    onSuccess: () => {
+  async function deleteConfirmed() {
+    if (!deleteTarget) return;
+    try {
+      await trpc.packages.delete.mutate({ id: deleteTarget.id });
       toast.success('Package deleted');
       deleteTarget = null;
-      deleteConfirmName = '';
-      void invalidate();
+      invalidate();
+    } catch (err) {
+      toast.error(toUserMessage(err, 'Failed to delete'));
+    }
+  }
+
+  const columns: DataTableColumn<PackageRow>[] = [
+    textColumn<PackageRow>('name', 'Name', 'Search name', undefined, {
+      width: '240px',
+    }),
+    textColumn<PackageRow>('description', 'Description', 'Search description'),
+    stateColumn<PackageRow>(
+      'status',
+      'Status',
+      {
+        transform: (v) => String(v ?? ''),
+        evaluate: (v) => {
+          if (v === 'active') return 'success';
+          if (v === 'archived') return 'info';
+          return 'warn';
+        },
+      },
+      {
+        sortable: true,
+        filter: {
+          type: 'select',
+          operators: ['eq'],
+          options: [
+            { label: 'Active', value: 'active' },
+            { label: 'Draft', value: 'draft' },
+            { label: 'Archived', value: 'archived' },
+          ],
+        },
+      },
+    ),
+    numberColumn<PackageRow>('stepCount', 'Steps'),
+    numberColumn<PackageRow>('version', 'Version'),
+    relativeDateColumn<PackageRow>('updatedAt', 'Updated'),
+    {
+      key: 'actions',
+      title: '',
+      sortable: false,
+      hideable: false,
+      width: '48px',
+      cell: rowActionsCell,
     },
-    onError: (err) => toast.error(toUserMessage(err, 'Failed to delete')),
-  }));
+  ];
 
-  const counts = $derived.by(() => {
-    const rows = (list.data ?? []) as Row[];
+  const rowActions: RowAction<PackageRow>[] = [
+    {
+      label: 'Run',
+      icon: Play,
+      disabled: (rows) => rows.length !== 1 || rows[0]!.status !== 'active',
+      onclick: (rows) => {
+        const r = rows[0];
+        if (!r) return;
+        runDialogPackageId = r.id;
+        runDialogOpen = true;
+      },
+    },
+    {
+      label: 'Duplicate',
+      icon: Copy,
+      onclick: async (rows) => {
+        for (const r of rows) await duplicateOne(r.id);
+      },
+    },
+    {
+      label: 'Archive',
+      icon: Archive,
+      disabled: (rows) => rows.every((r) => r.status === 'archived'),
+      onclick: async (rows) => {
+        for (const r of rows) {
+          if (r.status !== 'archived') await archiveOne(r.id);
+        }
+      },
+    },
+    {
+      label: 'Delete',
+      icon: Trash2,
+      variant: 'destructive',
+      disabled: (rows) => rows.length !== 1,
+      onclick: (rows) => {
+        const r = rows[0];
+        if (!r) return;
+        deleteTarget = r;
+      },
+    },
+  ];
+
+  async function fetchData(
+    opts: PaginationInput,
+  ): Promise<{ rows: PackageRow[]; total: number }> {
+    const [raw, capabilities] = await Promise.all([
+      queryClient.fetchQuery({
+        queryKey: ['packages.list', refreshKey],
+        queryFn: () => trpc.packages.list.query(),
+      }),
+      queryClient.fetchQuery({
+        queryKey: ['packages.metadata.capabilities'],
+        queryFn: () => trpc.packages.capabilities.query(),
+        staleTime: 5 * 60_000,
+      }),
+    ]);
+
+    const capMap = new Map(capabilities.map((c) => [c.id, c]));
+    const rows: PackageRow[] = raw.map((p) => {
+      const steps = Array.isArray(p.steps)
+        ? (p.steps as Array<{ capabilityId: string; label?: string }>)
+        : [];
+      const names = steps.map(
+        (s) => s.label ?? capMap.get(s.capabilityId)?.name ?? s.capabilityId,
+      );
+      const preview =
+        names.length === 0
+          ? ''
+          : names.length <= 3
+            ? names.join(' → ')
+            : `${names.slice(0, 3).join(' → ')} +${names.length - 3}`;
+      return {
+        id: p.id,
+        name: p.name,
+        description: p.description ?? '',
+        status: p.status as PackageRow['status'],
+        stepCount: steps.length,
+        version: p.version,
+        updatedAt: p.updatedAt,
+        stepPreview: preview,
+      };
+    });
+
+    // Client-side filter / search / sort — package counts are always in the
+    // tens or low hundreds, so a server endpoint isn't worth building yet.
+    const q = opts.globalSearch.trim().toLowerCase();
+    let filtered = q
+      ? rows.filter(
+          (r) =>
+            r.name.toLowerCase().includes(q) ||
+            r.description.toLowerCase().includes(q) ||
+            r.stepPreview.toLowerCase().includes(q),
+        )
+      : rows;
+
+    for (const f of opts.filters) {
+      filtered = filtered.filter((r) => {
+        const v = (r as Record<string, unknown>)[f.field];
+        if (f.operator === 'eq') return v === f.value;
+        if (f.operator === 'neq') return v !== f.value;
+        if (f.operator === 'contains')
+          return String(v ?? '').toLowerCase().includes(String(f.value ?? '').toLowerCase());
+        if (f.operator === 'gt') return Number(v) > Number(f.value);
+        if (f.operator === 'lt') return Number(v) < Number(f.value);
+        if (f.operator === 'gte') return Number(v) >= Number(f.value);
+        if (f.operator === 'lte') return Number(v) <= Number(f.value);
+        if (f.operator === 'is_null') return v === null || v === undefined || v === '';
+        if (f.operator === 'is_not_null') return !(v === null || v === undefined || v === '');
+        return true;
+      });
+    }
+
+    const sorted = opts.sortField
+      ? [...filtered].sort((a, b) => {
+          const av = (a as Record<string, unknown>)[opts.sortField!] ?? '';
+          const bv = (b as Record<string, unknown>)[opts.sortField!] ?? '';
+          if (typeof av === 'number' && typeof bv === 'number') {
+            return opts.sortDir === 'desc' ? bv - av : av - bv;
+          }
+          const cmp = String(av).localeCompare(String(bv));
+          return opts.sortDir === 'desc' ? -cmp : cmp;
+        })
+      : filtered;
+
+    const start = opts.page * opts.pageSize;
     return {
-      all: rows.length,
-      active: rows.filter((r) => r.status === 'active').length,
-      draft: rows.filter((r) => r.status === 'draft').length,
-      archived: rows.filter((r) => r.status === 'archived').length,
+      rows: sorted.slice(start, start + opts.pageSize),
+      total: sorted.length,
     };
-  });
-
-  function stepCount(r: Row): number {
-    return Array.isArray(r.steps) ? r.steps.length : 0;
   }
-
-  const filtered = $derived.by(() => {
-    const rows = ((list.data ?? []) as Row[]).slice();
-    const q = search.trim().toLowerCase();
-    const scoped = rows.filter((r) => {
-      if (statusFilter !== 'all' && r.status !== statusFilter) return false;
-      if (!q) return true;
-      if (r.name.toLowerCase().includes(q)) return true;
-      if ((r.description ?? '').toLowerCase().includes(q)) return true;
-      return false;
-    });
-    scoped.sort((a, b) => {
-      if (sortKey === 'name') return a.name.localeCompare(b.name);
-      if (sortKey === 'steps') return stepCount(b) - stepCount(a);
-      const ta = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
-      const tb = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
-      return tb - ta;
-    });
-    return scoped;
-  });
-
-  const capMap = $derived(new Map((capabilities.data ?? []).map((c) => [c.id, c])));
-
-  function stepPreview(r: Row): string {
-    const steps = Array.isArray(r.steps)
-      ? (r.steps as Array<{ capabilityId: string; label?: string }>)
-      : [];
-    const names = steps.map((s) => s.label ?? capMap.get(s.capabilityId)?.name ?? s.capabilityId);
-    if (names.length === 0) return '';
-    if (names.length <= 3) return names.join(' → ');
-    return `${names.slice(0, 3).join(' → ')} +${names.length - 3}`;
-  }
-
-  function statusDotClass(status: string): string {
-    if (status === 'active') return 'bg-emerald-500';
-    if (status === 'archived') return 'bg-muted-foreground/40';
-    return 'bg-amber-500';
-  }
-
-  function statusLabelClass(status: string): string {
-    if (status === 'active') return 'text-emerald-700 dark:text-emerald-400';
-    if (status === 'archived') return 'text-muted-foreground';
-    return 'text-amber-700 dark:text-amber-500';
-  }
-
-  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
-  function relTime(iso: string | null): string {
-    if (!iso) return '—';
-    const then = new Date(iso).getTime();
-    const diff = Date.now() - then;
-    const m = Math.round(diff / 60_000);
-    if (m < 1) return 'just now';
-    if (m < 60) return rtf.format(-m, 'minute');
-    const h = Math.round(m / 60);
-    if (h < 24) return rtf.format(-h, 'hour');
-    const d = Math.round(h / 24);
-    if (d < 30) return rtf.format(-d, 'day');
-    const mo = Math.round(d / 30);
-    if (mo < 12) return rtf.format(-mo, 'month');
-    return rtf.format(-Math.round(mo / 12), 'year');
-  }
-
-  function toggleSort(key: 'updated' | 'name' | 'steps') {
-    sortKey = key;
-  }
-
-  const canConfirmDelete = $derived(
-    deleteTarget !== null && deleteConfirmName.trim() === deleteTarget.name,
-  );
 </script>
 
-<div class="flex size-full flex-col gap-5 overflow-hidden p-6">
-  <header class="flex flex-wrap items-end justify-between gap-4">
-    <div class="space-y-1">
-      <h1 class="text-2xl font-semibold tracking-tight">Packages</h1>
+{#snippet rowActionsCell({ row }: { row: PackageRow })}
+  <div class="flex justify-end" onclick={(e) => e.stopPropagation()} role="none">
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger>
+        {#snippet child({ props })}
+          <button
+            {...props}
+            aria-label="Row actions"
+            class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <MoreHorizontal class="size-4" />
+          </button>
+        {/snippet}
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Content align="end" class="w-44">
+        {#if row.status === 'active'}
+          <DropdownMenu.Item
+            class="gap-2"
+            onclick={() => {
+              runDialogPackageId = row.id;
+              runDialogOpen = true;
+            }}
+          >
+            <Play class="size-3.5" /> Run
+          </DropdownMenu.Item>
+        {/if}
+        <DropdownMenu.Item
+          class="gap-2"
+          onclick={() => goto(`/automation/packages/${row.id}`)}
+        >
+          <Pencil class="size-3.5" /> Edit
+        </DropdownMenu.Item>
+        <DropdownMenu.Item class="gap-2" onclick={() => duplicateOne(row.id)}>
+          <Copy class="size-3.5" /> Duplicate
+        </DropdownMenu.Item>
+        <DropdownMenu.Separator />
+        {#if row.status !== 'archived'}
+          <DropdownMenu.Item class="gap-2" onclick={() => archiveOne(row.id)}>
+            <Archive class="size-3.5" /> Archive
+          </DropdownMenu.Item>
+        {/if}
+        <DropdownMenu.Item
+          class="gap-2 text-destructive focus:text-destructive"
+          onclick={() => (deleteTarget = row)}
+        >
+          <Trash2 class="size-3.5" /> Delete
+        </DropdownMenu.Item>
+      </DropdownMenu.Content>
+    </DropdownMenu.Root>
+  </div>
+{/snippet}
+
+<div class="flex size-full flex-col gap-4 overflow-hidden p-4">
+  <div class="flex items-start justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-normal">Packages</h1>
       <p class="text-sm text-muted-foreground">
         Compose managed capabilities into runs you can execute against any tenant.
       </p>
@@ -187,7 +327,7 @@
       <Plus class="size-4" />
       New package
     </Button>
-  </header>
+  </div>
 
   <RunPackageDialog
     bind:open={runDialogOpen}
@@ -195,268 +335,46 @@
     packageId={runDialogPackageId}
   />
 
-  {#if list.data && list.data.length > 0}
-    <div class="flex flex-wrap items-center gap-3">
-      <div
-        role="tablist"
-        aria-label="Filter by status"
-        class="inline-flex items-center rounded-md border bg-muted/40 p-0.5 text-sm"
-      >
-        {#each [
-          { key: 'all', label: 'All', count: counts.all },
-          { key: 'active', label: 'Active', count: counts.active },
-          { key: 'draft', label: 'Draft', count: counts.draft },
-          { key: 'archived', label: 'Archived', count: counts.archived },
-        ] as tab (tab.key)}
-          <button
-            type="button"
-            role="tab"
-            aria-selected={statusFilter === tab.key}
-            onclick={() => (statusFilter = tab.key as typeof statusFilter)}
-            class="rounded-[5px] px-3 py-1 font-medium transition-colors {statusFilter === tab.key
-              ? 'bg-background text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground'}"
-          >
-            {tab.label}
-            <span class="ml-1.5 text-xs tabular-nums opacity-70">{tab.count}</span>
-          </button>
-        {/each}
-      </div>
-
-      <div class="relative min-w-[220px] flex-1 sm:max-w-sm">
-        <Search
-          class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-        />
-        <Input placeholder="Search packages" bind:value={search} class="pl-9" />
-      </div>
-
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger>
-          {#snippet child({ props })}
-            <button
-              {...props}
-              class="inline-flex h-9 items-center gap-1.5 rounded-md border bg-background px-3 text-sm text-muted-foreground hover:text-foreground"
-            >
-              <ArrowUpDown class="size-3.5" />
-              Sort:
-              <span class="text-foreground">
-                {sortKey === 'updated'
-                  ? 'Recently updated'
-                  : sortKey === 'name'
-                    ? 'Name'
-                    : 'Step count'}
-              </span>
-            </button>
-          {/snippet}
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Content align="end" class="w-52">
-          <DropdownMenu.Item onclick={() => toggleSort('updated')}>
-            Recently updated
-          </DropdownMenu.Item>
-          <DropdownMenu.Item onclick={() => toggleSort('name')}>Name</DropdownMenu.Item>
-          <DropdownMenu.Item onclick={() => toggleSort('steps')}>Step count</DropdownMenu.Item>
-        </DropdownMenu.Content>
-      </DropdownMenu.Root>
-    </div>
-  {/if}
-
-  <div class="flex-1 overflow-auto">
-    {#if list.isLoading}
-      <Loader />
-    {:else if list.error}
-      <div
-        class="rounded-lg border border-rose-500/30 bg-rose-500/5 p-4 text-sm text-rose-600 dark:text-rose-400"
-      >
-        Failed to load packages.
-      </div>
-    {:else if (list.data ?? []).length === 0}
-      <div class="rounded-lg border border-dashed p-16 text-center">
-        <div class="mx-auto flex size-12 items-center justify-center rounded-full bg-muted">
-          <Boxes class="size-5 text-muted-foreground" />
-        </div>
-        <h2 class="mt-4 text-base font-medium">Build your first package</h2>
-        <p class="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
-          A package is a linear sequence of managed capabilities — create user, assign license,
-          store creds — that you can run against any tenant.
-        </p>
-        <Button class="mt-6 gap-2" onclick={() => goto('/automation/packages/new')}>
-          <Plus class="size-4" />
-          New package
-        </Button>
-      </div>
-    {:else if filtered.length === 0}
-      <div class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-        No packages match your filters.
-      </div>
-    {:else}
-      <div class="overflow-hidden rounded-lg border">
-        <table class="w-full text-sm">
-          <thead
-            class="border-b bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground"
-          >
-            <tr>
-              <th class="w-[36%] px-4 py-2.5 text-left font-medium">Package</th>
-              <th class="px-4 py-2.5 text-left font-medium">Status</th>
-              <th class="px-4 py-2.5 text-left font-medium">Steps</th>
-              <th class="px-4 py-2.5 text-left font-medium">Version</th>
-              <th class="px-4 py-2.5 text-left font-medium">Updated</th>
-              <th class="w-16 px-4 py-2.5"></th>
-            </tr>
-          </thead>
-          <tbody class="divide-y">
-            {#each filtered as pkg (pkg.id)}
-              {@const preview = stepPreview(pkg)}
-              <tr
-                class="group cursor-pointer transition-colors hover:bg-muted/40"
-                onclick={() => goto(`/automation/packages/${pkg.id}`)}
-              >
-                <td class="px-4 py-3">
-                  <div class="flex flex-col gap-0.5">
-                    <span class="font-medium text-foreground">{pkg.name}</span>
-                    {#if pkg.description}
-                      <span class="line-clamp-1 text-xs text-muted-foreground">
-                        {pkg.description}
-                      </span>
-                    {/if}
-                    {#if preview}
-                      <span
-                        class="mt-1 line-clamp-1 font-mono text-[11px] text-muted-foreground/80"
-                      >
-                        {preview}
-                      </span>
-                    {/if}
-                  </div>
-                </td>
-                <td class="px-4 py-3">
-                  <span class="inline-flex items-center gap-1.5 text-xs {statusLabelClass(pkg.status)}">
-                    <span class="size-1.5 rounded-full {statusDotClass(pkg.status)}"></span>
-                    <span class="capitalize">{pkg.status}</span>
-                  </span>
-                </td>
-                <td class="px-4 py-3 tabular-nums text-muted-foreground">
-                  {stepCount(pkg)}
-                </td>
-                <td class="px-4 py-3 tabular-nums text-muted-foreground">
-                  v{pkg.version}
-                </td>
-                <td class="px-4 py-3 text-muted-foreground">
-                  {relTime(pkg.updatedAt)}
-                </td>
-                <td class="px-2 py-2 text-right" onclick={(e) => e.stopPropagation()}>
-                  <div class="flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                    {#if pkg.status === 'active'}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        class="h-8 gap-1.5"
-                        onclick={() => {
-                          runDialogPackageId = pkg.id;
-                          runDialogOpen = true;
-                        }}
-                      >
-                        <Play class="size-3.5" />
-                        Run
-                      </Button>
-                    {/if}
-                    <DropdownMenu.Root>
-                      <DropdownMenu.Trigger>
-                        {#snippet child({ props })}
-                          <button
-                            {...props}
-                            aria-label="More actions"
-                            class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                          >
-                            <MoreHorizontal class="size-4" />
-                          </button>
-                        {/snippet}
-                      </DropdownMenu.Trigger>
-                      <DropdownMenu.Content align="end" class="w-44">
-                        <DropdownMenu.Item
-                          class="gap-2"
-                          onclick={() => goto(`/automation/packages/${pkg.id}`)}
-                        >
-                          <Pencil class="size-3.5" /> Edit
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          class="gap-2"
-                          onclick={() => duplicate.mutate(pkg.id)}
-                          disabled={duplicate.isPending}
-                        >
-                          <Copy class="size-3.5" /> Duplicate
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Separator />
-                        {#if pkg.status !== 'archived'}
-                          <DropdownMenu.Item
-                            class="gap-2"
-                            onclick={() => archive.mutate(pkg.id)}
-                            disabled={archive.isPending}
-                          >
-                            <Archive class="size-3.5" /> Archive
-                          </DropdownMenu.Item>
-                        {/if}
-                        <DropdownMenu.Item
-                          class="gap-2 text-destructive focus:text-destructive"
-                          onclick={() => {
-                            deleteTarget = pkg;
-                            deleteConfirmName = '';
-                          }}
-                        >
-                          <Trash2 class="size-3.5" /> Delete…
-                        </DropdownMenu.Item>
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Root>
-                  </div>
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
-    {/if}
-  </div>
+  <DataTable
+    {columns}
+    {fetchData}
+    {refreshKey}
+    {rowActions}
+    actionMode="dropdown"
+    enableRowSelection
+    enableGlobalSearch
+    enableFilters
+    enableExport={false}
+    enableURLState={false}
+    defaultPageSize={25}
+    defaultSort={{ field: 'updatedAt', dir: 'desc' }}
+    onrowclick={(row) => goto(`/automation/packages/${row.id}`)}
+  />
 </div>
 
 <AlertDialog.Root
   open={deleteTarget !== null}
   onOpenChange={(o) => {
-    if (!o) {
-      deleteTarget = null;
-      deleteConfirmName = '';
-    }
+    if (!o) deleteTarget = null;
   }}
 >
   <AlertDialog.Content>
     <AlertDialog.Header>
-      <AlertDialog.Title>Delete this package?</AlertDialog.Title>
+      <AlertDialog.Title>Delete “{deleteTarget?.name ?? ''}”?</AlertDialog.Title>
       <AlertDialog.Description>
-        Removes the package permanently. Runs that reference it will block the delete — archive
-        the package instead if you need to keep history.
+        This can't be undone. Runs that reference this package will block the delete —
+        archive it instead if you need to keep history.
       </AlertDialog.Description>
     </AlertDialog.Header>
-
-    {#if deleteTarget}
-      <div class="grid gap-2 py-2">
-        <Label for="package-delete-confirm">
-          Type <span class="font-mono text-foreground">{deleteTarget.name}</span> to confirm
-        </Label>
-        <Input
-          id="package-delete-confirm"
-          bind:value={deleteConfirmName}
-          placeholder={deleteTarget.name}
-          autocomplete="off"
-        />
-      </div>
-    {/if}
-
     <AlertDialog.Footer>
-      <AlertDialog.Cancel disabled={remove.isPending}>Cancel</AlertDialog.Cancel>
-      <Button
-        variant="destructive"
-        disabled={!canConfirmDelete || remove.isPending}
-        onclick={() => deleteTarget && remove.mutate(deleteTarget.id)}
+      <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+      <AlertDialog.Action
+        class="bg-destructive text-destructive-foreground hover:bg-destructive/80"
+        onclick={deleteConfirmed}
       >
-        {remove.isPending ? 'Deleting…' : 'Delete package'}
-      </Button>
+        Delete
+      </AlertDialog.Action>
     </AlertDialog.Footer>
   </AlertDialog.Content>
 </AlertDialog.Root>
+
