@@ -6,8 +6,10 @@ import {
   m365Groups,
   m365Identities,
   m365Licenses,
+  packageRuns,
   packages,
 } from '@mspbyte/drizzle';
+import { sql } from 'drizzle-orm';
 import { getCapability, listCapabilities } from '@mspbyte/capabilities';
 import { ActionLabels } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
@@ -288,6 +290,100 @@ export const packagesRouter = t.router({
       });
 
       return { id: input.id };
+    }),
+
+  delete: authProcedure
+    .input(z.object({ id: z.uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Packages.Delete')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Delete required' });
+      }
+      const [current] = await ctx.db
+        .select({ id: packages.id, name: packages.name })
+        .from(packages)
+        .where(eq(packages.id, input.id))
+        .limit(1);
+      if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Package not found' });
+
+      // Runs are FK-restricted onto packages — blocking here gives a clearer
+      // error than a raw pg constraint violation.
+      const [row] = await ctx.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(packageRuns)
+        .where(eq(packageRuns.packageId, input.id));
+      const count = row?.count ?? 0;
+      if (count > 0) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: `Cannot delete — this package has ${count} run${count === 1 ? '' : 's'} in history. Archive it instead.`,
+        });
+      }
+
+      await ctx.db.delete(packages).where(eq(packages.id, input.id));
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: null,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email || ctx.user.id,
+        action: 'delete',
+        actionLabel: ActionLabels.PackageDelete,
+        targetType: 'package',
+        targetId: input.id,
+        targetLabel: current.name,
+        result: 'success',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: { hard: true },
+      });
+
+      return { id: input.id };
+    }),
+
+  duplicate: authProcedure
+    .input(z.object({ id: z.uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Packages.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Write required' });
+      }
+      const [source] = await ctx.db
+        .select()
+        .from(packages)
+        .where(eq(packages.id, input.id))
+        .limit(1);
+      if (!source) throw new TRPCError({ code: 'NOT_FOUND', message: 'Package not found' });
+
+      const inserted = await ctx.db
+        .insert(packages)
+        .values({
+          name: `${source.name} (copy)`,
+          description: source.description,
+          status: 'draft',
+          version: 1,
+          steps: source.steps,
+          failureActions: source.failureActions,
+          authorUserId: ctx.user.id,
+        })
+        .returning({ id: packages.id });
+      const row = inserted[0]!;
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: null,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email || ctx.user.id,
+        action: 'create',
+        actionLabel: ActionLabels.PackageCreate,
+        targetType: 'package',
+        targetId: row.id,
+        targetLabel: `${source.name} (copy)`,
+        result: 'success',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: { duplicatedFrom: source.id },
+      });
+
+      return { id: row.id };
     }),
 
   // Options for a Select control keyed to an entityType. Used by the runtime

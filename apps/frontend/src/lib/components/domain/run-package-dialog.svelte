@@ -150,11 +150,16 @@
   // Sort so tenant picker comes first, then any other integration_link, then
   // non-cascading fields, then dependent m365_* pickers. This is the order a
   // user actually needs to fill things in.
+  type FieldGroup = 'tenant' | 'in-tenant' | 'input';
+  function groupOf(f: RuntimeField): FieldGroup {
+    if (f.entityType === 'integration_link') return 'tenant';
+    if (f.entityType || f.typeHint === 'upn') return 'in-tenant';
+    return 'input';
+  }
   function sortFields(fields: RuntimeField[]): RuntimeField[] {
     const rank = (f: RuntimeField): number => {
-      if (f.entityType === 'integration_link') return 0;
-      if (!f.entityType) return 1;
-      return 2; // m365_* pickers depend on tenant
+      const g = groupOf(f);
+      return g === 'tenant' ? 0 : g === 'input' ? 1 : 2;
     };
     return [...fields].sort((a, b) => {
       const dr = rank(a) - rank(b);
@@ -162,6 +167,43 @@
       return a.promptKey.localeCompare(b.promptKey);
     });
   }
+
+  type Section = { key: FieldGroup; title: string; hint: string; fields: RuntimeField[] };
+  const sections = $derived.by<Section[]>(() => {
+    const groups = new Map<FieldGroup, RuntimeField[]>();
+    for (const f of runtimeFields) {
+      const g = groupOf(f);
+      const arr = groups.get(g) ?? [];
+      arr.push(f);
+      groups.set(g, arr);
+    }
+    const out: Section[] = [];
+    if (groups.has('tenant')) {
+      out.push({
+        key: 'tenant',
+        title: 'Choose tenant',
+        hint: 'Which environment this runs against.',
+        fields: groups.get('tenant')!,
+      });
+    }
+    if (groups.has('input')) {
+      out.push({
+        key: 'input',
+        title: 'Details',
+        hint: 'Fill in the values for this run.',
+        fields: groups.get('input')!,
+      });
+    }
+    if (groups.has('in-tenant')) {
+      out.push({
+        key: 'in-tenant',
+        title: 'Pick in tenant',
+        hint: 'Live lookups against the tenant you chose above.',
+        fields: groups.get('in-tenant')!,
+      });
+    }
+    return out;
+  });
 
   // Downstream m365_* pickers cascade from whichever runtime input holds an
   // integration_link. If more than one tenant field exists, use the first
@@ -368,11 +410,18 @@
         {/if}
 
         {#if runtimeFields.length > 0}
-          <section class="space-y-4">
-            <Label class="text-xs uppercase tracking-wide text-muted-foreground">
-              Runtime inputs
-            </Label>
-            {#each runtimeFields as field (field.promptKey)}
+          {#each sections as section, sIdx (section.key)}
+            <section class="space-y-3">
+              <div class="flex items-baseline gap-2 border-b pb-1.5">
+                <span class="font-mono text-[10px] tabular-nums text-muted-foreground/70">
+                  {String(sIdx + 1).padStart(2, '0')}
+                </span>
+                <h3 class="text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+                  {section.title}
+                </h3>
+                <span class="ml-auto text-[11px] text-muted-foreground">{section.hint}</span>
+              </div>
+              {#each section.fields as field (field.promptKey)}
               {@const label = fieldLabel(field.promptKey, field.label)}
               {@const blocked = isBlockedByTenant(field)}
               <div class="space-y-1.5">
@@ -503,8 +552,9 @@
                   />
                 {/if}
               </div>
-            {/each}
-          </section>
+              {/each}
+            </section>
+          {/each}
         {/if}
 
         {#if costPreview}
