@@ -5,15 +5,22 @@ import {
   packageRuns,
   packageRunSteps,
   packages as packagesTable,
+  siteGroupMembers,
 } from '@mspbyte/drizzle';
 import { TRPCError } from '@trpc/server';
-import { getCapability } from '@mspbyte/capabilities';
+import { generatePassword, getCapability } from '@mspbyte/capabilities';
 import { createPendingPackageRun } from '@mspbyte/pipeline';
 import { Encryption } from '@mspbyte/encryption';
 import { ActionLabels } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 
 const runtimeInputsSchema = z.record(z.string(), z.unknown()).default({});
+
+// Client sends this from the run dialog when the operator picks "generate a
+// password" mode on a runtime-bound password field. Server swaps it for a
+// real generated password before persistence so downstream (worker, Graph,
+// audit) never see the sentinel.
+const GENERATE_PASSWORD_SENTINEL = '__generate__';
 
 export const packageRunsRouter = t.router({
   list: authProcedure
@@ -105,6 +112,36 @@ export const packageRunsRouter = t.router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Package is not active' });
       }
 
+      // Scope enforcement: if the package restricts sites/groups, the run's
+      // siteId must satisfy one of them. Global packages (both empty) skip
+      // this check entirely.
+      const allowedSites = (pkg.allowedSites ?? []) as string[];
+      const allowedGroups = (pkg.allowedSiteGroups ?? []) as string[];
+      const isScoped = allowedSites.length > 0 || allowedGroups.length > 0;
+      if (isScoped) {
+        if (!input.siteId) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'This package is scoped to specific sites — pick a site to run against.',
+          });
+        }
+        let allowed = allowedSites.includes(input.siteId);
+        if (!allowed && allowedGroups.length > 0) {
+          const groupRows = await ctx.db
+            .select({ groupId: siteGroupMembers.siteGroupId })
+            .from(siteGroupMembers)
+            .where(eq(siteGroupMembers.siteId, input.siteId));
+          const memberOf = new Set(groupRows.map((r) => r.groupId));
+          allowed = allowedGroups.some((g) => memberOf.has(g));
+        }
+        if (!allowed) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'This package is not permitted to run against the selected site.',
+          });
+        }
+      }
+
       type Binding =
         | { kind: 'literal'; value: unknown }
         | { kind: 'runtime'; promptKey: string; required: boolean }
@@ -140,10 +177,15 @@ export const packageRunsRouter = t.router({
         }
       }
 
+      const materializedInputs = materializeGeneratedRuntimeInputs(
+        input.runtimeInputs,
+        steps,
+      );
+
       // Encrypt sensitive runtime inputs before persisting, using each
       // referenced capability's inputMeta to know which fields are sensitive.
       const runtimeInputs = encryptRuntimeInputs(
-        input.runtimeInputs,
+        materializedInputs,
         steps,
         ctx.encryptionKey ?? '',
       );
@@ -292,16 +334,22 @@ export const packageRunsRouter = t.router({
         });
       }
 
-      const snapshot = original.packageSnapshot as { steps: Array<{ capabilityId: string }> };
+      const snapshot = original.packageSnapshot as {
+        steps: Array<{ capabilityId: string; inputBindings?: Record<string, { kind: string; promptKey?: string }> }>;
+      };
       if (input.stepPosition >= snapshot.steps.length) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Step position out of range' });
       }
 
       const originalRuntimeInputs = (original.runtimeInputs ?? {}) as Record<string, unknown>;
+      const materializedOverrides = materializeGeneratedRuntimeInputs(
+        input.overrideRuntimeInputs,
+        snapshot.steps as Array<{ capabilityId: string; inputBindings?: Record<string, unknown> }>,
+      );
       // Runtime inputs are already encrypted-at-rest for sensitive fields;
       // encrypt any newly overridden sensitive ones the same way.
       const encryptedOverrides = encryptRuntimeInputs(
-        input.overrideRuntimeInputs,
+        materializedOverrides,
         snapshot.steps,
         ctx.encryptionKey ?? '',
       );
@@ -390,6 +438,39 @@ export const packageRunsRouter = t.router({
       return { value: JSON.parse(decrypted) as unknown };
     }),
 });
+
+// Walks the referenced steps to find password-typeHint inputs that were left
+// as runtime bindings. If the operator sent the "__generate__" sentinel for
+// such a promptKey, replace it with a real generated password using the
+// same defaults as the builder's generator widget.
+function materializeGeneratedRuntimeInputs(
+  inputs: Record<string, unknown>,
+  steps: Array<{ capabilityId: string; inputBindings?: Record<string, unknown> }>,
+): Record<string, unknown> {
+  const passwordPromptKeys = new Set<string>();
+  for (const step of steps) {
+    const capability = getCapability(step.capabilityId);
+    if (!capability) continue;
+    const bindings = (step.inputBindings ?? {}) as Record<
+      string,
+      { kind?: string; promptKey?: string }
+    >;
+    for (const [inputName, binding] of Object.entries(bindings)) {
+      if (binding.kind !== 'runtime') continue;
+      const meta = capability.inputMeta[inputName];
+      if (meta?.typeHint !== 'password') continue;
+      passwordPromptKeys.add(binding.promptKey ?? inputName);
+    }
+  }
+  if (passwordPromptKeys.size === 0) return inputs;
+  const out: Record<string, unknown> = { ...inputs };
+  for (const key of passwordPromptKeys) {
+    if (out[key] === GENERATE_PASSWORD_SENTINEL) {
+      out[key] = generatePassword({ length: 20, symbols: true, excludeAmbiguous: false });
+    }
+  }
+  return out;
+}
 
 function encryptRuntimeInputs(
   inputs: Record<string, unknown>,

@@ -15,7 +15,10 @@ export type Binding =
       pickerConfig?: { multi?: boolean; filter?: Record<string, unknown> };
       contextKey?: string;
     }
-  | { kind: 'priorOutput'; stepPosition: number; path: string };
+  | { kind: 'priorOutput'; stepPosition: number; path: string }
+  // `generator` names a registered entry in the generators registry
+  // (see ./generators). Params are validated per-generator at resolve time.
+  | { kind: 'generated'; generator: string; params: Record<string, unknown> };
 
 export type BindingKind = Binding['kind'];
 
@@ -112,6 +115,11 @@ export interface CapabilityCtx {
   userAgent?: string | null;
   packageRunId: string;
   packageRunStepId: string;
+  // Names of inputs whose values were produced by a `generated` binding.
+  // Handlers use this to decide whether to echo the value back (e.g. return
+  // a generated password so the operator can retrieve it) vs. keep silent
+  // for user-supplied values.
+  generatedInputs: ReadonlySet<string>;
   loadM365Identity: (identityId: string) => Promise<M365IdentityRow | null>;
   getM365Connector: (linkId: string) => Promise<M365Connector>;
 }

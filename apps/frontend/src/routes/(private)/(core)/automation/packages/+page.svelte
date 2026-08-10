@@ -44,6 +44,9 @@
     version: number;
     updatedAt: string | null;
     stepPreview: string;
+    // "Global" for unscoped packages; otherwise a compact summary like
+    // "2 sites" or "1 site · 1 group". Filterable + sortable.
+    scope: string;
     [key: string]: unknown;
   };
 
@@ -120,6 +123,7 @@
     ),
     numberColumn<PackageRow>('stepCount', 'Steps'),
     numberColumn<PackageRow>('version', 'Version'),
+    textColumn<PackageRow>('scope', 'Scope', 'Search scope'),
     relativeDateColumn<PackageRow>('updatedAt', 'Updated'),
     {
       key: 'actions',
@@ -202,6 +206,13 @@
           : names.length <= 3
             ? names.join(' → ')
             : `${names.slice(0, 3).join(' → ')} +${names.length - 3}`;
+      const sites = ((p.allowedSites as string[] | null) ?? []).length;
+      const groups = ((p.allowedSiteGroups as string[] | null) ?? []).length;
+      let scope: string;
+      if (sites === 0 && groups === 0) scope = 'Global';
+      else if (groups === 0) scope = `${sites} site${sites === 1 ? '' : 's'}`;
+      else if (sites === 0) scope = `${groups} group${groups === 1 ? '' : 's'}`;
+      else scope = `${sites} site${sites === 1 ? '' : 's'} · ${groups} group${groups === 1 ? '' : 's'}`;
       return {
         id: p.id,
         name: p.name,
@@ -211,6 +222,7 @@
         version: p.version,
         updatedAt: p.updatedAt,
         stepPreview: preview,
+        scope,
       };
     });
 

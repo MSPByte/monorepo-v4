@@ -8,7 +8,8 @@
         entityType: string;
         contextKey?: string;
       }
-    | { kind: 'priorOutput'; stepPosition: number; path: string };
+    | { kind: 'priorOutput'; stepPosition: number; path: string }
+    | { kind: 'generated'; generator: string; params: Record<string, unknown> };
 
   export type Step = {
     capabilityId: string;
@@ -21,6 +22,10 @@
     description: string;
     status: 'draft' | 'active' | 'archived';
     steps: Step[];
+    // Empty arrays => global. Non-empty restricts which sites this package
+    // can run against (site direct-match OR any of the site's groups).
+    allowedSites: string[];
+    allowedSiteGroups: string[];
   };
 </script>
 
@@ -38,6 +43,7 @@
   import { Checkbox } from '$lib/components/ui/checkbox';
   import EntityPicker from '$lib/components/domain/entity-picker.svelte';
   import SingleSelect from '$lib/components/single-select.svelte';
+  import MultiSelect from '$lib/components/multi-select.svelte';
   import { fieldLabel } from '$lib/utils/label';
   import {
     ArrowLeft,
@@ -58,7 +64,7 @@
   } from '@lucide/svelte';
 
   type EntityType = 'integration_link' | 'm365_identity' | 'm365_group' | 'm365_license';
-  type Source = 'fixed' | 'runtime' | 'row' | 'wire';
+  type Source = 'fixed' | 'runtime' | 'row' | 'wire' | 'generated';
 
   type Props = {
     initial: PackageDraft;
@@ -76,12 +82,54 @@
     staleTime: 5 * 60_000,
   }));
 
+  const generatorsQuery = createQuery(() => ({
+    queryKey: ['packages.metadata.generators'],
+    queryFn: () => trpc.packages.generators.query(),
+    staleTime: 5 * 60_000,
+  }));
+
+  // Sites + site groups feed the scope pickers in the package details panel.
+  const sitesQuery = createQuery(() => ({
+    queryKey: ['sites.list.scopePicker'],
+    queryFn: () => trpc.sites.list.query(),
+    staleTime: 60_000,
+  }));
+
+  const siteGroupsQuery = createQuery(() => ({
+    queryKey: ['siteGroups.list.scopePicker'],
+    queryFn: () => trpc.siteGroups.list.query(),
+    staleTime: 60_000,
+  }));
+
+  const siteOptions = $derived(
+    (sitesQuery.data ?? []).map((s) => ({ value: s.id, label: s.name })),
+  );
+  const siteGroupOptions = $derived(
+    (siteGroupsQuery.data ?? []).map((g) => ({ value: g.id, label: g.name })),
+  );
+
+  // Pick the first generator that supports a given input's typeHint. Today
+  // that's password ↔ 'password'; more generators plug in the same way.
+  function generatorFor(typeHint: string | undefined): { id: string; defaults: Record<string, unknown> } | undefined {
+    if (!typeHint) return undefined;
+    const g = (generatorsQuery.data ?? []).find((gen) =>
+      gen.appliesToTypeHints.includes(typeHint),
+    );
+    return g ? { id: g.id, defaults: g.defaults as Record<string, unknown> } : undefined;
+  }
+
   let draft = $state<PackageDraft>({
     name: initial.name,
     description: initial.description,
     status: initial.status,
     steps: structuredClone(initial.steps),
+    allowedSites: [...(initial.allowedSites ?? [])],
+    allowedSiteGroups: [...(initial.allowedSiteGroups ?? [])],
   });
+
+  const isGlobalScope = $derived(
+    draft.allowedSites.length === 0 && draft.allowedSiteGroups.length === 0,
+  );
 
   // Selection defaults to the first step when the package loads; -1 = meta (details).
   let selectedIndex = $state<number>(initial.steps.length > 0 ? 0 : -1);
@@ -105,12 +153,14 @@
     if (binding.kind === 'literal') return 'fixed';
     if (binding.kind === 'runtime') return 'runtime';
     if (binding.kind === 'priorOutput') return 'wire';
+    if (binding.kind === 'generated') return 'generated';
     // entity kind:
     return binding.source === 'row-context' ? 'row' : 'runtime';
   }
 
   function allowedSourcesFor(meta: {
     allowedBindings: readonly string[];
+    typeHint?: string;
   }): Source[] {
     const set = new Set(meta.allowedBindings);
     const out: Source[] = [];
@@ -118,6 +168,9 @@
     if (set.has('runtime') || set.has('entity')) out.push('runtime');
     if (set.has('entity')) out.push('row');
     if (set.has('priorOutput')) out.push('wire');
+    // Only show `generated` if a registered generator applies to this typeHint,
+    // otherwise it's dead UI.
+    if (set.has('generated') && generatorFor(meta.typeHint)) out.push('generated');
     return out;
   }
 
@@ -152,6 +205,18 @@
     }
     if (source === 'row') {
       return { kind: 'entity', source: 'row-context', entityType: meta.entityType ?? '' };
+    }
+    if (source === 'generated') {
+      const gen = generatorFor(meta.typeHint);
+      // Fall back to a fixed literal if no generator applies — shouldn't
+      // happen since allowedSourcesFor filters this out, but keeps the type
+      // exhaustive.
+      if (!gen) return { kind: 'literal', value: '' };
+      return {
+        kind: 'generated',
+        generator: gen.id,
+        params: { ...gen.defaults },
+      };
     }
     return { kind: 'priorOutput', stepPosition: 0, path: '' };
   }
@@ -260,9 +325,10 @@
     wires: Array<{ from: number; path: string }>;
     row: number;
     literals: number;
+    generated: number;
   };
   function summarize(step: Step): StepSummary {
-    const s: StepSummary = { prompts: 0, wires: [], row: 0, literals: 0 };
+    const s: StepSummary = { prompts: 0, wires: [], row: 0, literals: 0, generated: 0 };
     for (const binding of Object.values(step.inputBindings)) {
       if (binding.kind === 'runtime') s.prompts += 1;
       else if (binding.kind === 'priorOutput')
@@ -270,7 +336,8 @@
       else if (binding.kind === 'entity') {
         if (binding.source === 'row-context') s.row += 1;
         else s.prompts += 1;
-      } else s.literals += 1;
+      } else if (binding.kind === 'generated') s.generated += 1;
+      else s.literals += 1;
     }
     return s;
   }
@@ -298,6 +365,7 @@
     if (source === 'fixed') return 'Fixed value';
     if (source === 'runtime') return 'Ask when run';
     if (source === 'row') return 'From triggering row';
+    if (source === 'generated') return 'Generate';
     return 'Wire from step';
   }
 
@@ -312,6 +380,7 @@
         : 'The operator enters this when they start the run.';
     if (source === 'row')
       return 'Auto-filled from the row that triggered this package (from a table row-action).';
+    if (source === 'generated') return 'Produced by a generator at run time.';
     return 'Reads a specific output from an earlier step in this package.';
   }
 
@@ -319,6 +388,7 @@
     if (source === 'fixed') return 'text-stone-500 dark:text-stone-400';
     if (source === 'runtime') return 'text-amber-600 dark:text-amber-400';
     if (source === 'row') return 'text-violet-600 dark:text-violet-400';
+    if (source === 'generated') return 'text-emerald-600 dark:text-emerald-400';
     return 'text-cyan-600 dark:text-cyan-400';
   }
 
@@ -326,6 +396,7 @@
     if (source === 'fixed') return 'border-l-stone-400/60 dark:border-l-stone-500/60';
     if (source === 'runtime') return 'border-l-amber-500/70';
     if (source === 'row') return 'border-l-violet-500/70';
+    if (source === 'generated') return 'border-l-emerald-500/70';
     return 'border-l-cyan-500/70';
   }
 
@@ -341,6 +412,9 @@
         if (binding.kind === 'literal') {
           const meta = cap.inputMeta[name];
           if (!meta) return false;
+        }
+        if (binding.kind === 'generated') {
+          if (!binding.generator.trim()) return false;
         }
       }
     }
@@ -508,6 +582,15 @@
                           {summary.row}
                         </span>
                       {/if}
+                      {#if summary.generated > 0}
+                        <span
+                          class="inline-flex items-center gap-1 rounded-sm bg-emerald-500/10 px-1.5 py-0.5 font-mono text-emerald-700 dark:text-emerald-400"
+                          title="Generated at run time"
+                        >
+                          <Sparkles class="size-2.5" />
+                          {summary.generated}
+                        </span>
+                      {/if}
                       {#if summary.literals > 0}
                         <span
                           class="inline-flex items-center gap-1 rounded-sm bg-stone-500/10 px-1.5 py-0.5 font-mono text-stone-600 dark:text-stone-400"
@@ -563,6 +646,9 @@
             <Pin class="size-2.5 text-violet-600 dark:text-violet-400" /> row
           </span>
           <span class="inline-flex items-center gap-1">
+            <Sparkles class="size-2.5 text-emerald-600 dark:text-emerald-400" /> generated
+          </span>
+          <span class="inline-flex items-center gap-1">
             <span class="size-2 rounded-sm bg-stone-500/60"></span> fixed
           </span>
         </div>
@@ -599,6 +685,44 @@
               oninput={(e) => (draft.description = (e.target as HTMLTextAreaElement).value)}
               rows={4}
             />
+          </div>
+
+          <div class="space-y-3 rounded-lg border p-4">
+            <div class="flex items-baseline justify-between gap-3">
+              <div>
+                <h3 class="text-sm font-medium">Scope</h3>
+                <p class="mt-0.5 text-xs text-muted-foreground">
+                  Restrict where this package can run. Leave both empty to make it global.
+                </p>
+              </div>
+              <span
+                class="rounded-sm px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider {isGlobalScope
+                  ? 'bg-sky-500/10 text-sky-700 dark:text-sky-400'
+                  : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'}"
+              >
+                {isGlobalScope
+                  ? 'Global'
+                  : `${draft.allowedSites.length} sites · ${draft.allowedSiteGroups.length} groups`}
+              </span>
+            </div>
+            <div class="space-y-2">
+              <div class="text-xs text-muted-foreground">Allowed sites</div>
+              <MultiSelect
+                options={siteOptions}
+                selected={draft.allowedSites}
+                placeholder="Any site (global)"
+                onchange={(v) => (draft.allowedSites = v)}
+              />
+            </div>
+            <div class="space-y-2">
+              <div class="text-xs text-muted-foreground">Allowed site groups</div>
+              <MultiSelect
+                options={siteGroupOptions}
+                selected={draft.allowedSiteGroups}
+                placeholder="No group restriction"
+                onchange={(v) => (draft.allowedSiteGroups = v)}
+              />
+            </div>
           </div>
 
           {#if draft.steps.length === 0}
@@ -754,8 +878,8 @@
                   </div>
 
                   <!-- Source picker -->
-                  <div class="grid grid-cols-2 gap-1 border-b bg-muted/30 p-1 sm:grid-cols-4">
-                    {#each ['fixed', 'runtime', 'row', 'wire'] as src (src)}
+                  <div class="grid grid-cols-2 gap-1 border-b bg-muted/30 p-1 sm:grid-cols-5">
+                    {#each ['fixed', 'runtime', 'generated', 'row', 'wire'] as src (src)}
                       {@const isAllowed = allowed.includes(src as Source)}
                       {@const isActive = currentSource === src}
                       <button
@@ -776,6 +900,10 @@
                         {:else if src === 'runtime'}
                           <Keyboard
                             class="size-3 {isActive ? sourceIconColor('runtime') : ''}"
+                          />
+                        {:else if src === 'generated'}
+                          <Sparkles
+                            class="size-3 {isActive ? sourceIconColor('generated') : ''}"
                           />
                         {:else if src === 'row'}
                           <Pin class="size-3 {isActive ? sourceIconColor('row') : ''}" />
@@ -923,6 +1051,86 @@
                       <p class="text-[11px] text-muted-foreground">
                         Leave empty to use the input name — usually what you want.
                       </p>
+                    {:else if binding?.kind === 'generated'}
+                      {@const gen = (generatorsQuery.data ?? []).find(
+                        (g) => g.id === binding.generator,
+                      )}
+                      {#if !gen}
+                        <div class="rounded-md border border-dashed border-rose-500/40 bg-rose-500/5 px-3 py-2 text-xs text-rose-700 dark:text-rose-500">
+                          Generator "{binding.generator}" not found. Pick another source.
+                        </div>
+                      {:else if binding.generator === 'password'}
+                        {@const pwParams = binding.params as {
+                          length?: number;
+                          symbols?: boolean;
+                          excludeAmbiguous?: boolean;
+                        }}
+                        <div class="space-y-3">
+                          <div class="grid gap-2 sm:grid-cols-[auto_1fr_auto] sm:items-center">
+                            <span class="text-xs text-muted-foreground">Length</span>
+                            <Input
+                              type="number"
+                              min={8}
+                              max={128}
+                              value={pwParams.length ?? 20}
+                              oninput={(e) => {
+                                const n = Number((e.target as HTMLInputElement).value);
+                                setBinding(selectedIndex, inputName, {
+                                  ...binding,
+                                  params: {
+                                    ...binding.params,
+                                    length: Number.isFinite(n) ? n : 20,
+                                  },
+                                });
+                              }}
+                              class="max-w-32"
+                            />
+                            <span class="font-mono text-[11px] text-muted-foreground">
+                              chars
+                            </span>
+                          </div>
+                          <label class="flex items-center gap-2 text-xs">
+                            <Checkbox
+                              checked={pwParams.symbols ?? true}
+                              onCheckedChange={(c) =>
+                                setBinding(selectedIndex, inputName, {
+                                  ...binding,
+                                  params: { ...binding.params, symbols: Boolean(c) },
+                                })}
+                            />
+                            <span class="text-muted-foreground">
+                              Include symbols
+                              <span class="ml-1 font-mono opacity-60">(!@#$%…)</span>
+                            </span>
+                          </label>
+                          <label class="flex items-center gap-2 text-xs">
+                            <Checkbox
+                              checked={pwParams.excludeAmbiguous ?? false}
+                              onCheckedChange={(c) =>
+                                setBinding(selectedIndex, inputName, {
+                                  ...binding,
+                                  params: {
+                                    ...binding.params,
+                                    excludeAmbiguous: Boolean(c),
+                                  },
+                                })}
+                            />
+                            <span class="text-muted-foreground">
+                              Exclude ambiguous characters
+                              <span class="ml-1 font-mono opacity-60">(0/O, 1/l/I…)</span>
+                            </span>
+                          </label>
+                          <p class="text-[11px] text-muted-foreground">
+                            A fresh password is generated for every run. If it needs to be
+                            captured, wire the step's <span class="font-mono">temporaryPassword</span>
+                            output downstream.
+                          </p>
+                        </div>
+                      {:else}
+                        <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                          {gen.description}
+                        </div>
+                      {/if}
                     {:else if binding?.kind === 'priorOutput'}
                       {@const upstreamSteps = draft.steps.slice(0, selectedIndex)}
                       {@const upstreamCap = capIndex.get(

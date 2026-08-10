@@ -8,9 +8,15 @@ import {
   m365Licenses,
   packageRuns,
   packages,
+  siteGroupMembers,
 } from '@mspbyte/drizzle';
 import { sql } from 'drizzle-orm';
-import { getCapability, listCapabilities } from '@mspbyte/capabilities';
+import {
+  getCapability,
+  getGenerator,
+  listCapabilities,
+  listGenerators,
+} from '@mspbyte/capabilities';
 import { ActionLabels } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
@@ -43,6 +49,11 @@ const bindingSchema = z.discriminatedUnion('kind', [
     stepPosition: z.number().int().min(0),
     path: z.string().min(1),
   }),
+  z.object({
+    kind: z.literal('generated'),
+    generator: z.string().min(1),
+    params: z.record(z.string(), z.unknown()),
+  }),
 ]);
 
 const stepSchema = z.object({
@@ -74,6 +85,10 @@ const packageInputSchema = z.object({
   status: z.enum(['draft', 'active', 'archived']).default('draft'),
   steps: z.array(stepSchema).min(1),
   failureActions: z.array(failureActionSchema).default([]),
+  // Scope: empty arrays => global. Non-empty restricts which sites can run
+  // this package (site direct-match OR any of the site's groups matches).
+  allowedSites: z.array(z.uuid()).default([]),
+  allowedSiteGroups: z.array(z.uuid()).default([]),
 });
 
 const entityTypeSchema = z.enum([
@@ -112,30 +127,75 @@ function validateStepsAgainstRegistry(steps: ParsedStep[]): string | null {
       if (binding.kind === 'priorOutput' && binding.stepPosition >= pos) {
         return `Step ${pos + 1} priorOutput can only reference earlier steps`;
       }
+      if (binding.kind === 'generated') {
+        const generator = getGenerator(binding.generator);
+        if (!generator) {
+          return `Step ${pos + 1} input "${inputName}" references unknown generator "${binding.generator}"`;
+        }
+        if (meta.typeHint && !generator.appliesToTypeHints.includes(meta.typeHint)) {
+          return `Step ${pos + 1} input "${inputName}" (${meta.typeHint}) is not compatible with generator "${binding.generator}"`;
+        }
+        const parsed = generator.paramsSchema.safeParse(binding.params);
+        if (!parsed.success) {
+          return `Step ${pos + 1} input "${inputName}" generator params invalid: ${parsed.error.message}`;
+        }
+      }
     }
   }
   return null;
 }
 
 export const packagesRouter = t.router({
-  list: authProcedure.query(async ({ ctx }) => {
-    if (!ctx.can('Packages.Read')) {
-      throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Read required' });
-    }
-    return ctx.db
-      .select({
-        id: packages.id,
-        name: packages.name,
-        description: packages.description,
-        status: packages.status,
-        version: packages.version,
-        steps: packages.steps,
-        createdAt: packages.createdAt,
-        updatedAt: packages.updatedAt,
-      })
-      .from(packages)
-      .orderBy(desc(packages.updatedAt));
-  }),
+  list: authProcedure
+    .input(
+      z
+        .object({
+          // When provided, filters to packages runnable at this site: global
+          // packages (empty allow-lists) or scoped packages that include this
+          // site directly or via one of its groups.
+          siteId: z.uuid().optional(),
+        })
+        .default({}),
+    )
+    .query(async ({ ctx, input }) => {
+      if (!ctx.can('Packages.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Read required' });
+      }
+      const rows = await ctx.db
+        .select({
+          id: packages.id,
+          name: packages.name,
+          description: packages.description,
+          status: packages.status,
+          version: packages.version,
+          steps: packages.steps,
+          allowedSites: packages.allowedSites,
+          allowedSiteGroups: packages.allowedSiteGroups,
+          createdAt: packages.createdAt,
+          updatedAt: packages.updatedAt,
+        })
+        .from(packages)
+        .orderBy(desc(packages.updatedAt));
+
+      if (!input.siteId) return rows;
+
+      // Filter in-app rather than in SQL — jsonb array containment across
+      // two columns + a group-membership subquery is awkward, and the
+      // package list is small (hundreds at most, not millions).
+      const groupRows = await ctx.db
+        .select({ groupId: siteGroupMembers.siteGroupId })
+        .from(siteGroupMembers)
+        .where(eq(siteGroupMembers.siteId, input.siteId));
+      const siteGroupIds = new Set(groupRows.map((r) => r.groupId));
+
+      return rows.filter((row) => {
+        const sites = (row.allowedSites ?? []) as string[];
+        const groups = (row.allowedSiteGroups ?? []) as string[];
+        if (sites.length === 0 && groups.length === 0) return true;
+        if (sites.includes(input.siteId!)) return true;
+        return groups.some((g) => siteGroupIds.has(g));
+      });
+    }),
 
   get: authProcedure
     .input(z.object({ id: z.uuid() }))
@@ -170,6 +230,8 @@ export const packagesRouter = t.router({
           version: 1,
           steps: input.steps,
           failureActions: input.failureActions,
+          allowedSites: input.allowedSites,
+          allowedSiteGroups: input.allowedSiteGroups,
           authorUserId: ctx.user.id,
         })
         .returning({ id: packages.id });
@@ -202,6 +264,8 @@ export const packagesRouter = t.router({
         status: z.enum(['draft', 'active', 'archived']).optional(),
         steps: z.array(stepSchema).min(1).optional(),
         failureActions: z.array(failureActionSchema).optional(),
+        allowedSites: z.array(z.uuid()).optional(),
+        allowedSiteGroups: z.array(z.uuid()).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -232,6 +296,8 @@ export const packagesRouter = t.router({
           status: input.status ?? current.status,
           steps: input.steps ?? current.steps,
           failureActions: input.failureActions ?? current.failureActions,
+          allowedSites: input.allowedSites ?? current.allowedSites,
+          allowedSiteGroups: input.allowedSiteGroups ?? current.allowedSiteGroups,
           version: stepsChanged ? current.version + 1 : current.version,
           updatedAt: new Date().toISOString(),
         })
@@ -510,6 +576,18 @@ export const packagesRouter = t.router({
       inputMeta: capability.inputMeta,
       outputMeta: capability.outputMeta,
       defaultUnitPrice: capability.defaultUnitPrice,
+    }));
+  }),
+
+  // Generator registry surfaced to the builder UI so it can render the
+  // per-generator params widget (length, symbols, …) without hardcoding it.
+  generators: authProcedure.query(() => {
+    return listGenerators().map((g) => ({
+      id: g.id,
+      label: g.label,
+      description: g.description,
+      appliesToTypeHints: g.appliesToTypeHints,
+      defaults: g.defaults,
     }));
   }),
 });

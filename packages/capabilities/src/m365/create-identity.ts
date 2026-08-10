@@ -1,12 +1,6 @@
 import { z } from 'zod';
 import { ActionLabels } from '@mspbyte/shared';
 import type { Capability } from '../types.js';
-import { generateM365Password } from './password.js';
-
-// Sentinel that means "worker generates a random password at run time". Kept
-// out of z.string() so the client can't accidentally submit it as a literal
-// password.
-const GENERATE_PASSWORD_SENTINEL = '__generate__';
 
 const inputs = z.object({
   tenantLinkId: z.uuid(),
@@ -15,11 +9,7 @@ const inputs = z.object({
   // Optional — handler derives from displayName when omitted (strip
   // non-alphanumerics, lowercase, cap at 64 chars).
   mailNickname: z.string().min(1).max(64).optional(),
-  // Either the sentinel (generate on the server) or a real password.
-  initialPassword: z.union([
-    z.literal(GENERATE_PASSWORD_SENTINEL),
-    z.string().min(8).max(256),
-  ]),
+  initialPassword: z.string().min(8).max(256),
   forceChangeAtNextSignin: z.boolean(),
   // Advanced / optional Graph fields. Any that are undefined or empty aren't
   // sent to Graph.
@@ -86,7 +76,7 @@ export const m365IdentityCreate: Capability<
       advanced: true,
     },
     initialPassword: {
-      allowedBindings: ['literal', 'runtime'],
+      allowedBindings: ['literal', 'runtime', 'generated'],
       sensitive: true,
       typeHint: 'password',
       label: 'Initial password',
@@ -180,8 +170,11 @@ export const m365IdentityCreate: Capability<
   requiredPermission: 'Vendors.Write',
   defaultUnitPrice: 0.1,
   async handler(ctx, input) {
-    const generated = input.initialPassword === GENERATE_PASSWORD_SENTINEL;
-    const password = generated ? generateM365Password() : input.initialPassword;
+    // Password resolution happens in the worker's binding resolver; we only
+    // need to know whether it was generated so we know whether it's safe to
+    // echo back in outputs.
+    const generated = ctx.generatedInputs.has('initialPassword');
+    const password = input.initialPassword;
 
     // Derive mailNickname from displayName when the caller didn't set one:
     // strip anything that isn't a-z0-9, lowercase, cap at 64 chars. Graph

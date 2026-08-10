@@ -113,7 +113,7 @@
       </Button>
     {/snippet}
   </Popover.Trigger>
-  <Popover.Content class="w-[var(--bits-popover-anchor-width)] p-0" align="start">
+  <Popover.Content class="w-(--bits-popover-anchor-width) p-0" align="start">
     <Command.Root shouldFilter={false}>
       <Command.Input placeholder={searchPlaceholder} bind:value={search} />
       {#if loading && filteredOptions.length === 0}

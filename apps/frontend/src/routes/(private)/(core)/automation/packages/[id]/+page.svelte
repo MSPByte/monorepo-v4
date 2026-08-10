@@ -26,6 +26,8 @@
         description: draft.description || null,
         status: draft.status,
         steps: draft.steps,
+        allowedSites: draft.allowedSites,
+        allowedSiteGroups: draft.allowedSiteGroups,
       }),
     onSuccess: () => {
       toast.success('Package saved');
@@ -43,18 +45,16 @@
       description: pkg.description ?? '',
       status: pkg.status as PackageDraft['status'],
       steps: (pkg.steps as Step[]) ?? [],
+      allowedSites: (pkg.allowedSites as string[] | null) ?? [],
+      allowedSiteGroups: (pkg.allowedSiteGroups as string[] | null) ?? [],
     };
   });
 </script>
 
 {#if query.isLoading || !initial}
-  <div class="p-6"><Loader /></div>
+  <Loader />
 {:else if query.error}
   <div class="p-6 text-sm text-rose-500">Failed to load package.</div>
 {:else}
-  <PackageBuilder
-    {initial}
-    saving={update.isPending}
-    onSave={(draft) => update.mutate(draft)}
-  />
+  <PackageBuilder {initial} saving={update.isPending} onSave={(draft) => update.mutate(draft)} />
 {/if}

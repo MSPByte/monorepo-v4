@@ -12,6 +12,7 @@ import {
 import type { PackageJobData } from "@mspbyte/pipeline";
 import {
   getCapability,
+  getGenerator,
   RETRYABLE_ERROR_CLASSES,
   type AnyCapability,
   type Binding,
@@ -141,7 +142,7 @@ export function createPackageWorker(
         }
       }
 
-      const ctxBase: Omit<CapabilityCtx, "packageRunStepId"> = {
+      const ctxBase: Omit<CapabilityCtx, "packageRunStepId" | "generatedInputs"> = {
         encryptionKey,
         user: {
           id: run.triggeredByUserId ?? "system",
@@ -242,7 +243,11 @@ export function createPackageWorker(
           continue;
         }
 
-        const ctx: CapabilityCtx = { ...ctxBase, packageRunStepId: stepRow.id };
+        const ctx: CapabilityCtx = {
+          ...ctxBase,
+          packageRunStepId: stepRow.id,
+          generatedInputs: resolveResult.generatedInputs,
+        };
         let result: CapabilityResult<unknown> = {
           outcome: "fail",
           errorClass: "handler_threw",
@@ -425,8 +430,11 @@ function resolveBindings(
   bindings: Record<string, Binding>,
   runtimeInputs: Record<string, unknown>,
   stepOutputs: Map<number, Record<string, unknown>>,
-): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
+):
+  | { ok: true; value: Record<string, unknown>; generatedInputs: Set<string> }
+  | { ok: false; error: string } {
   const value: Record<string, unknown> = {};
+  const generatedInputs = new Set<string>();
   for (const [name, binding] of Object.entries(bindings)) {
     switch (binding.kind) {
       case "literal":
@@ -461,9 +469,28 @@ function resolveBindings(
         value[name] = getByPath(prior, binding.path);
         break;
       }
+      case "generated": {
+        const generator = getGenerator(binding.generator);
+        if (!generator) {
+          return {
+            ok: false,
+            error: `Unknown generator '${binding.generator}'`,
+          };
+        }
+        const parsed = generator.paramsSchema.safeParse(binding.params);
+        if (!parsed.success) {
+          return {
+            ok: false,
+            error: `Invalid params for generator '${binding.generator}': ${parsed.error.message}`,
+          };
+        }
+        value[name] = generator.generate(parsed.data);
+        generatedInputs.add(name);
+        break;
+      }
     }
   }
-  return { ok: true, value };
+  return { ok: true, value, generatedInputs };
 }
 
 function getByPath(source: Record<string, unknown>, path: string): unknown {
