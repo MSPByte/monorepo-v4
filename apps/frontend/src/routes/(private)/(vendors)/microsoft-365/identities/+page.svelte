@@ -96,6 +96,7 @@
   ]);
 
   const canWrite = $derived(authStore.isAllowed('Vendors.Write'));
+  const canRunPackages = $derived(authStore.isAllowed('Packages.Run'));
 
   // Phase 1 A/B: same reset-password action exposed via the new Package path.
   // Discovers the seeded "Reset M365 Password" package by name and disables
@@ -107,8 +108,8 @@
   }));
   const resetPasswordPackage = $derived(
     (packagesQuery.data ?? []).find(
-      (p) => p.name === 'Reset M365 Password' && p.status === 'active',
-    ),
+      (p) => p.name === 'Reset M365 Password' && p.status === 'active'
+    )
   );
 
   // Reset password dialog wiring — the shared dialog handles the mutation.
@@ -266,10 +267,10 @@
             variant: 'outline',
             group: 'Password',
             preserveSelection: true,
-            disabled: (rows) => rows.length !== 1 || !resetPasswordPackage,
+            disabled: (rows) => rows.length !== 1 || !resetPasswordPackage || !canRunPackages,
             onclick: async (rows) => {
               const pkg = resetPasswordPackage;
-              if (!pkg || rows.length !== 1) return;
+              if (!pkg || rows.length !== 1 || !canRunPackages) return;
               try {
                 const result = await trpc.packageRuns.start.mutate({
                   packageId: pkg.id,

@@ -4,6 +4,7 @@ import {
   hasAnyPermission,
   hasAnyPermissionUnder,
   canActOnLevel,
+  normalizePermissions,
   SYSTEM_ROLES,
   type PermissionGrant
 } from './auth.js';
@@ -40,6 +41,14 @@ describe('hasPermission — grant list', () => {
 
   test('Write does NOT imply Delete', () => {
     expect(hasPermission(grantsOf('Sites.Write'), 'Sites.Delete')).toBe(false);
+  });
+
+  test('Packages.Write implies Packages.Run', () => {
+    expect(hasPermission(grantsOf('Packages.Write'), 'Packages.Run')).toBe(true);
+  });
+
+  test('Packages.Run does NOT imply Packages.Read', () => {
+    expect(hasPermission(grantsOf('Packages.Run'), 'Packages.Read')).toBe(false);
   });
 
   test('implication does not cross resources', () => {
@@ -110,6 +119,20 @@ describe('hasAnyPermission', () => {
   });
 });
 
+describe('normalizePermissions', () => {
+  test('removes permissions implied by a stronger grant', () => {
+    expect(normalizePermissions(['Sites.Read', 'Sites.Write'])).toEqual(['Sites.Write']);
+  });
+
+  test('drops Packages.Run when Packages.Write is granted', () => {
+    expect(normalizePermissions(['Packages.Run', 'Packages.Write'])).toEqual(['Packages.Write']);
+  });
+
+  test('preserves Packages.Run when it stands alone', () => {
+    expect(normalizePermissions(['Packages.Run'])).toEqual(['Packages.Run']);
+  });
+});
+
 describe('hasAnyPermissionUnder — prefix probing for nav', () => {
   test('exact prefix under grant', () => {
     expect(hasAnyPermissionUnder(grantsOf('Vendors.Read'), 'Vendors')).toBe(true);
@@ -117,7 +140,9 @@ describe('hasAnyPermissionUnder — prefix probing for nav', () => {
 
   test('deep grant under prefix', () => {
     expect(hasAnyPermissionUnder(grantsOf('Vendors.M365.Identities.Read'), 'Vendors')).toBe(true);
-    expect(hasAnyPermissionUnder(grantsOf('Vendors.M365.Identities.Read'), 'Vendors.M365')).toBe(true);
+    expect(hasAnyPermissionUnder(grantsOf('Vendors.M365.Identities.Read'), 'Vendors.M365')).toBe(
+      true
+    );
   });
 
   test('grant outside prefix', () => {

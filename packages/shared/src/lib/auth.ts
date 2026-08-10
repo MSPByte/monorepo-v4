@@ -7,14 +7,15 @@
  * catalog all follow.
  *
  * Grants store dotted paths (`Vendors.M365.Identities.Write`). The evaluator
- * walks prefixes and honors Delete > Write > Read implication at each level,
- * so a grant of `Vendors.M365.Write` satisfies checks for
- * `Vendors.M365.Identities.Read` without the admin having to grant it twice.
+ * walks prefixes and honors action implication at each level, so a grant of
+ * `Vendors.M365.Write` satisfies checks for `Vendors.M365.Identities.Read`
+ * without the admin having to grant it twice.
  */
 
 // ---------------------------------------------------------------------------
-// Tree — source of truth. Leaves are `{}`. Nesting is supported; sub-trees
-// (e.g. Vendors.M365.Identities) land in Phase 2.
+// Tree — source of truth. Leaves are `{}` unless a resource needs custom
+// actions, in which case the node can declare `$actions`. Nesting is
+// supported; sub-trees (e.g. Vendors.M365.Identities) land in Phase 2.
 // ---------------------------------------------------------------------------
 
 export const PERMISSION_TREE = {
@@ -24,7 +25,7 @@ export const PERMISSION_TREE = {
   People: {},
   Wiki: {},
   Vendors: {},
-  Packages: {},
+  Packages: { $actions: ['Read', 'Write', 'Run', 'Delete'] as const },
   Policies: {},
   Frameworks: {},
   Billing: {},
@@ -36,18 +37,23 @@ export const PERMISSION_TREE = {
   Audit: {}
 } as const;
 
-export const ACTIONS = ['Read', 'Write', 'Delete'] as const;
+const DEFAULT_ACTIONS = ['Read', 'Write', 'Delete'] as const;
+export const ACTIONS = ['Read', 'Write', 'Run', 'Delete'] as const;
 export type Action = (typeof ACTIONS)[number];
 
 // ---------------------------------------------------------------------------
 // Type derivation — dotted paths from the tree.
 // ---------------------------------------------------------------------------
 
+type ChildKeys<T> = Exclude<keyof T & string, '$actions'>;
+type NodeAction<T> = T extends { $actions: readonly (infer A extends Action)[] }
+  ? A
+  : (typeof DEFAULT_ACTIONS)[number];
 type NodePaths<T, Prefix extends string> = {
-  [K in keyof T & string]:
-    | `${Prefix}${K}.${Action}`
-    | (keyof T[K] extends never ? never : NodePaths<T[K], `${Prefix}${K}.`>);
-}[keyof T & string];
+  [K in ChildKeys<T>]:
+    | `${Prefix}${K}.${NodeAction<T[K]>}`
+    | (ChildKeys<T[K]> extends never ? never : NodePaths<T[K], `${Prefix}${K}.`>);
+}[ChildKeys<T>];
 
 export type ResourcePermission = NodePaths<typeof PERMISSION_TREE, ''>;
 export type GlobalPermission = 'Global.Admin';
@@ -68,6 +74,13 @@ export type PermissionGrant = {
 };
 
 export type PermissionInput = readonly PermissionGrant[] | null;
+
+export type PermissionResource = {
+  key: string;
+  label: string;
+  depth: number;
+  actions: readonly Action[];
+};
 
 // ---------------------------------------------------------------------------
 // Levels.
@@ -93,11 +106,11 @@ export function canActOnLevel(
 // Evaluator.
 // ---------------------------------------------------------------------------
 
-// Delete > Write > Read. If required=Read, having Write or Delete on the same
-// node satisfies. If required=Write, Delete satisfies. If required=Delete, only
-// Delete satisfies.
+// Delete > Write > Read for standard CRUD resources. Packages also expose Run
+// as a child permission of Write, so Write/Delete satisfy Run checks.
 const IMPLIES: Record<Action, readonly Action[]> = {
   Read: ['Read', 'Write', 'Delete'],
+  Run: ['Run', 'Write', 'Delete'],
   Write: ['Write', 'Delete'],
   Delete: ['Delete']
 };
@@ -105,11 +118,38 @@ const IMPLIES: Record<Action, readonly Action[]> = {
 function splitPermission(permission: string): { path: string[]; action: Action | null } {
   const parts = permission.split('.');
   const tail = parts[parts.length - 1];
-  if (tail === 'Read' || tail === 'Write' || tail === 'Delete') {
+  if (tail === 'Read' || tail === 'Write' || tail === 'Run' || tail === 'Delete') {
     return { path: parts.slice(0, -1), action: tail };
   }
   return { path: parts, action: null };
 }
+
+function actionsForNode(node: Record<string, unknown>): readonly Action[] {
+  return Array.isArray(node.$actions) ? (node.$actions as readonly Action[]) : DEFAULT_ACTIONS;
+}
+
+function listPermissionResources(
+  node: Record<string, unknown>,
+  prefix: string[] = []
+): PermissionResource[] {
+  const out: PermissionResource[] = [];
+  for (const [key, value] of Object.entries(node)) {
+    if (key === '$actions' || !value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const path = [...prefix, key];
+    out.push({
+      key: path.join('.'),
+      label: key,
+      depth: prefix.length,
+      actions: actionsForNode(value as Record<string, unknown>)
+    });
+    out.push(...listPermissionResources(value as Record<string, unknown>, path));
+  }
+  return out;
+}
+
+export const PERMISSION_RESOURCES: readonly PermissionResource[] = listPermissionResources(
+  PERMISSION_TREE as Record<string, unknown>
+);
 
 // Returns true if a single grant string (e.g. `Vendors.M365.Write` or
 // `Vendors.*` or `*`) satisfies the required permission.
@@ -146,6 +186,27 @@ function grantStringSatisfies(granted: string, required: string): boolean {
   return false;
 }
 
+function comparePermissions(a: string, b: string): number {
+  if (a === '*') return -1;
+  if (b === '*') return 1;
+  if (a === 'Global.Admin') return -1;
+  if (b === 'Global.Admin') return 1;
+
+  const aParts = splitPermission(a);
+  const bParts = splitPermission(b);
+  const pathCmp = aParts.path.join('.').localeCompare(bParts.path.join('.'));
+  if (pathCmp !== 0) return pathCmp;
+
+  const rank = (action: Action | null): number => {
+    if (action === 'Read') return 0;
+    if (action === 'Run') return 1;
+    if (action === 'Write') return 2;
+    if (action === 'Delete') return 3;
+    return 4;
+  };
+  return rank(aParts.action) - rank(bParts.action);
+}
+
 export function hasPermission(input: PermissionInput, required: Permission): boolean {
   if (!input) return false;
 
@@ -165,6 +226,18 @@ export function hasPermission(input: PermissionInput, required: Permission): boo
 
 export function hasAnyPermission(input: PermissionInput, permissions: Permission[]): boolean {
   return permissions.some((p) => hasPermission(input, p));
+}
+
+export function normalizePermissions(permissions: readonly string[]): string[] {
+  const unique = [...new Set(permissions.filter(Boolean))];
+  if (unique.includes('*')) return ['*'];
+  if (unique.includes('Global.Admin')) return ['Global.Admin'];
+
+  return unique
+    .filter((permission, _, all) => {
+      return !all.some((other) => other !== permission && grantStringSatisfies(other, permission));
+    })
+    .sort(comparePermissions);
 }
 
 // For route/nav gating: "does the caller have ANY permission under this
@@ -237,8 +310,7 @@ export const SYSTEM_ROLES: readonly SystemRole[] = [
   {
     name: 'Helpdesk',
     level: 2,
-    description:
-      'Read across operational data; write access limited to Sites and Wiki.',
+    description: 'Read across operational data; write access limited to Sites and Wiki.',
     permissions: [
       'Sites.Write',
       'Wiki.Write',
@@ -270,4 +342,3 @@ export const SYSTEM_ROLES: readonly SystemRole[] = [
     isSystem: true
   }
 ];
-

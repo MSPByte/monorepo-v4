@@ -2,7 +2,7 @@ import { customerLogs, roles, userRoleGrants } from '@mspbyte/drizzle';
 import { count, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { ActionLabels } from '@mspbyte/shared';
+import { ActionLabels, normalizePermissions } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 import type { Context } from '../context.js';
 
@@ -81,6 +81,7 @@ export const rolesRouter = t.router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Roles.Write permission required' });
       }
       assertLevelWithinCaller(ctx, input.level);
+      const permissions = normalizePermissions(input.permissions);
 
       const [existing] = await ctx.db
         .select({ id: roles.id })
@@ -97,7 +98,7 @@ export const rolesRouter = t.router({
           name: input.name,
           description: input.description ?? null,
           level: input.level,
-          permissions: input.permissions,
+          permissions,
           isSystem: false
         })
         .returning();
@@ -128,11 +129,7 @@ export const rolesRouter = t.router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Roles.Write permission required' });
       }
 
-      const [existing] = await ctx.db
-        .select()
-        .from(roles)
-        .where(eq(roles.id, input.id))
-        .limit(1);
+      const [existing] = await ctx.db.select().from(roles).where(eq(roles.id, input.id)).limit(1);
       if (!existing) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Role not found' });
       }
@@ -141,6 +138,7 @@ export const rolesRouter = t.router({
       }
       assertLevelWithinCaller(ctx, existing.level);
       assertLevelWithinCaller(ctx, input.level);
+      const permissions = normalizePermissions(input.permissions);
 
       const [row] = await ctx.db
         .update(roles)
@@ -148,7 +146,7 @@ export const rolesRouter = t.router({
           name: input.name,
           description: input.description ?? null,
           level: input.level,
-          permissions: input.permissions,
+          permissions,
           updatedAt: new Date().toISOString()
         })
         .where(eq(roles.id, input.id))
@@ -174,48 +172,42 @@ export const rolesRouter = t.router({
       return row;
     }),
 
-  delete: authProcedure
-    .input(z.object({ id: z.uuid() }))
-    .mutation(async ({ ctx, input }) => {
-      if (!ctx.can('Roles.Write')) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Roles.Write permission required' });
-      }
+  delete: authProcedure.input(z.object({ id: z.uuid() })).mutation(async ({ ctx, input }) => {
+    if (!ctx.can('Roles.Write')) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Roles.Write permission required' });
+    }
 
-      const [existing] = await ctx.db
-        .select()
-        .from(roles)
-        .where(eq(roles.id, input.id))
-        .limit(1);
-      if (!existing) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Role not found' });
-      }
-      if (existing.isSystem) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'System roles cannot be deleted' });
-      }
-      assertLevelWithinCaller(ctx, existing.level);
+    const [existing] = await ctx.db.select().from(roles).where(eq(roles.id, input.id)).limit(1);
+    if (!existing) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Role not found' });
+    }
+    if (existing.isSystem) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'System roles cannot be deleted' });
+    }
+    assertLevelWithinCaller(ctx, existing.level);
 
-      const [grantCountRow] = await ctx.db
-        .select({ n: count() })
-        .from(userRoleGrants)
-        .where(eq(userRoleGrants.roleId, input.id));
-      const grantCount = Number(grantCountRow?.n ?? 0);
-      if (grantCount > 0) {
-        throw new TRPCError({
-          code: 'CONFLICT',
-          message: `Cannot delete a role with ${grantCount} active grant${grantCount === 1 ? '' : 's'}. Remove the grants first.`
-        });
-      }
-
-      await ctx.db.delete(roles).where(eq(roles.id, input.id));
-
-      await auditRoleChange(ctx, {
-        roleId: existing.id,
-        action: 'delete',
-        actionLabel: ActionLabels.RoleDelete,
-        targetLabel: existing.name,
-        metadata: { level: existing.level, permissions: existing.permissions }
+    const [grantCountRow] = await ctx.db
+      .select({ n: count() })
+      .from(userRoleGrants)
+      .where(eq(userRoleGrants.roleId, input.id));
+    const grantCount = Number(grantCountRow?.n ?? 0);
+    if (grantCount > 0) {
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message: `Cannot delete a role with ${grantCount} active grant${grantCount === 1 ? '' : 's'}. Remove the grants first.`
       });
+    }
 
-      return { success: true };
-    })
+    await ctx.db.delete(roles).where(eq(roles.id, input.id));
+
+    await auditRoleChange(ctx, {
+      roleId: existing.id,
+      action: 'delete',
+      actionLabel: ActionLabels.RoleDelete,
+      targetLabel: existing.name,
+      metadata: { level: existing.level, permissions: existing.permissions }
+    });
+
+    return { success: true };
+  })
 });

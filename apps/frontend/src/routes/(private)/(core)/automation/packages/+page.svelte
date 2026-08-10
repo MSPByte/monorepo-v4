@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
+  import { authStore } from '$lib/stores/auth.store.svelte';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
@@ -22,18 +23,13 @@
   import Button from '$lib/components/ui/button/button.svelte';
   import RunPackageDialog from '$lib/components/domain/run-package-dialog.svelte';
   import { toUserMessage } from '$lib/utils/errors';
-  import {
-    Play,
-    Pencil,
-    Archive,
-    Plus,
-    Copy,
-    Trash2,
-    MoreHorizontal,
-  } from '@lucide/svelte';
+  import { Play, Pencil, Archive, Plus, Copy, Trash2, MoreHorizontal } from '@lucide/svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
+  const canRun = $derived(authStore.isAllowed('Packages.Run'));
+  const canWrite = $derived(authStore.isAllowed('Packages.Write'));
+  const canDelete = $derived(authStore.isAllowed('Packages.Delete'));
 
   type PackageRow = {
     id: string;
@@ -119,7 +115,7 @@
             { label: 'Archived', value: 'archived' },
           ],
         },
-      },
+      }
     ),
     numberColumn<PackageRow>('stepCount', 'Steps'),
     numberColumn<PackageRow>('version', 'Version'),
@@ -135,51 +131,57 @@
     },
   ];
 
-  const rowActions: RowAction<PackageRow>[] = [
-    {
-      label: 'Run',
-      icon: Play,
-      disabled: (rows) => rows.length !== 1 || rows[0]!.status !== 'active',
-      onclick: (rows) => {
-        const r = rows[0];
-        if (!r) return;
-        runDialogPackageId = r.id;
-        runDialogOpen = true;
-      },
-    },
-    {
-      label: 'Duplicate',
-      icon: Copy,
-      onclick: async (rows) => {
-        for (const r of rows) await duplicateOne(r.id);
-      },
-    },
-    {
-      label: 'Archive',
-      icon: Archive,
-      disabled: (rows) => rows.every((r) => r.status === 'archived'),
-      onclick: async (rows) => {
-        for (const r of rows) {
-          if (r.status !== 'archived') await archiveOne(r.id);
-        }
-      },
-    },
-    {
-      label: 'Delete',
-      icon: Trash2,
-      variant: 'destructive',
-      disabled: (rows) => rows.length !== 1,
-      onclick: (rows) => {
-        const r = rows[0];
-        if (!r) return;
-        deleteTarget = r;
-      },
-    },
-  ];
+  const rowActions: RowAction<PackageRow>[] = $derived.by(() => {
+    const actions: RowAction<PackageRow>[] = [];
+    if (canRun) {
+      actions.push({
+        label: 'Run',
+        icon: Play,
+        disabled: (rows) => rows.length !== 1 || rows[0]!.status !== 'active',
+        onclick: (rows) => {
+          const r = rows[0];
+          if (!r) return;
+          runDialogPackageId = r.id;
+          runDialogOpen = true;
+        },
+      });
+    }
+    if (canWrite) {
+      actions.push({
+        label: 'Duplicate',
+        icon: Copy,
+        onclick: async (rows) => {
+          for (const r of rows) await duplicateOne(r.id);
+        },
+      });
+    }
+    if (canDelete) {
+      actions.push({
+        label: 'Archive',
+        icon: Archive,
+        disabled: (rows) => rows.every((r) => r.status === 'archived'),
+        onclick: async (rows) => {
+          for (const r of rows) {
+            if (r.status !== 'archived') await archiveOne(r.id);
+          }
+        },
+      });
+      actions.push({
+        label: 'Delete',
+        icon: Trash2,
+        variant: 'destructive',
+        disabled: (rows) => rows.length !== 1,
+        onclick: (rows) => {
+          const r = rows[0];
+          if (!r) return;
+          deleteTarget = r;
+        },
+      });
+    }
+    return actions;
+  });
 
-  async function fetchData(
-    opts: PaginationInput,
-  ): Promise<{ rows: PackageRow[]; total: number }> {
+  async function fetchData(opts: PaginationInput): Promise<{ rows: PackageRow[]; total: number }> {
     const [raw, capabilities] = await Promise.all([
       queryClient.fetchQuery({
         queryKey: ['packages.list', refreshKey],
@@ -197,9 +199,7 @@
       const steps = Array.isArray(p.steps)
         ? (p.steps as Array<{ capabilityId: string; label?: string }>)
         : [];
-      const names = steps.map(
-        (s) => s.label ?? capMap.get(s.capabilityId)?.name ?? s.capabilityId,
-      );
+      const names = steps.map((s) => s.label ?? capMap.get(s.capabilityId)?.name ?? s.capabilityId);
       const preview =
         names.length === 0
           ? ''
@@ -212,7 +212,8 @@
       if (sites === 0 && groups === 0) scope = 'Global';
       else if (groups === 0) scope = `${sites} site${sites === 1 ? '' : 's'}`;
       else if (sites === 0) scope = `${groups} group${groups === 1 ? '' : 's'}`;
-      else scope = `${sites} site${sites === 1 ? '' : 's'} · ${groups} group${groups === 1 ? '' : 's'}`;
+      else
+        scope = `${sites} site${sites === 1 ? '' : 's'} · ${groups} group${groups === 1 ? '' : 's'}`;
       return {
         id: p.id,
         name: p.name,
@@ -234,7 +235,7 @@
           (r) =>
             r.name.toLowerCase().includes(q) ||
             r.description.toLowerCase().includes(q) ||
-            r.stepPreview.toLowerCase().includes(q),
+            r.stepPreview.toLowerCase().includes(q)
         )
       : rows;
 
@@ -244,7 +245,9 @@
         if (f.operator === 'eq') return v === f.value;
         if (f.operator === 'neq') return v !== f.value;
         if (f.operator === 'contains')
-          return String(v ?? '').toLowerCase().includes(String(f.value ?? '').toLowerCase());
+          return String(v ?? '')
+            .toLowerCase()
+            .includes(String(f.value ?? '').toLowerCase());
         if (f.operator === 'gt') return Number(v) > Number(f.value);
         if (f.operator === 'lt') return Number(v) < Number(f.value);
         if (f.operator === 'gte') return Number(v) >= Number(f.value);
@@ -290,7 +293,7 @@
         {/snippet}
       </DropdownMenu.Trigger>
       <DropdownMenu.Content align="end" class="w-44">
-        {#if row.status === 'active'}
+        {#if canRun && row.status === 'active'}
           <DropdownMenu.Item
             class="gap-2"
             onclick={() => {
@@ -301,27 +304,28 @@
             <Play class="size-3.5" /> Run
           </DropdownMenu.Item>
         {/if}
-        <DropdownMenu.Item
-          class="gap-2"
-          onclick={() => goto(`/automation/packages/${row.id}`)}
-        >
-          <Pencil class="size-3.5" /> Edit
-        </DropdownMenu.Item>
-        <DropdownMenu.Item class="gap-2" onclick={() => duplicateOne(row.id)}>
-          <Copy class="size-3.5" /> Duplicate
-        </DropdownMenu.Item>
-        <DropdownMenu.Separator />
-        {#if row.status !== 'archived'}
-          <DropdownMenu.Item class="gap-2" onclick={() => archiveOne(row.id)}>
-            <Archive class="size-3.5" /> Archive
+        {#if canWrite}
+          <DropdownMenu.Item class="gap-2" onclick={() => goto(`/automation/packages/${row.id}`)}>
+            <Pencil class="size-3.5" /> Edit
+          </DropdownMenu.Item>
+          <DropdownMenu.Item class="gap-2" onclick={() => duplicateOne(row.id)}>
+            <Copy class="size-3.5" /> Duplicate
           </DropdownMenu.Item>
         {/if}
-        <DropdownMenu.Item
-          class="gap-2 text-destructive focus:text-destructive"
-          onclick={() => (deleteTarget = row)}
-        >
-          <Trash2 class="size-3.5" /> Delete
-        </DropdownMenu.Item>
+        {#if canDelete}
+          <DropdownMenu.Separator />
+          {#if row.status !== 'archived'}
+            <DropdownMenu.Item class="gap-2" onclick={() => archiveOne(row.id)}>
+              <Archive class="size-3.5" /> Archive
+            </DropdownMenu.Item>
+          {/if}
+          <DropdownMenu.Item
+            class="gap-2 text-destructive focus:text-destructive"
+            onclick={() => (deleteTarget = row)}
+          >
+            <Trash2 class="size-3.5" /> Delete
+          </DropdownMenu.Item>
+        {/if}
       </DropdownMenu.Content>
     </DropdownMenu.Root>
   </div>
@@ -335,10 +339,12 @@
         Compose managed capabilities into runs you can execute against any tenant.
       </p>
     </div>
-    <Button class="gap-2" onclick={() => goto('/automation/packages/new')}>
-      <Plus class="size-4" />
-      New package
-    </Button>
+    {#if canWrite}
+      <Button class="gap-2" onclick={() => goto('/automation/packages/new')}>
+        <Plus class="size-4" />
+        New package
+      </Button>
+    {/if}
   </div>
 
   <RunPackageDialog
@@ -353,7 +359,7 @@
     {refreshKey}
     {rowActions}
     actionMode="dropdown"
-    enableRowSelection
+    enableRowSelection={rowActions.length > 0}
     enableGlobalSearch
     enableFilters
     enableExport={false}
@@ -374,8 +380,8 @@
     <AlertDialog.Header>
       <AlertDialog.Title>Delete “{deleteTarget?.name ?? ''}”?</AlertDialog.Title>
       <AlertDialog.Description>
-        This can't be undone. Runs that reference this package will block the delete —
-        archive it instead if you need to keep history.
+        This can't be undone. Runs that reference this package will block the delete — archive it
+        instead if you need to keep history.
       </AlertDialog.Description>
     </AlertDialog.Header>
     <AlertDialog.Footer>
@@ -389,4 +395,3 @@
     </AlertDialog.Footer>
   </AlertDialog.Content>
 </AlertDialog.Root>
-

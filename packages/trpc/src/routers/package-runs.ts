@@ -5,7 +5,7 @@ import {
   packageRuns,
   packageRunSteps,
   packages as packagesTable,
-  siteGroupMembers,
+  siteGroupMembers
 } from '@mspbyte/drizzle';
 import { TRPCError } from '@trpc/server';
 import { generatePassword, getCapability } from '@mspbyte/capabilities';
@@ -30,11 +30,14 @@ export const packageRunsRouter = t.router({
           packageId: z.uuid().optional(),
           siteId: z.uuid().optional(),
           status: z.string().optional(),
-          limit: z.number().int().min(1).max(200).default(50),
+          limit: z.number().int().min(1).max(200).default(50)
         })
-        .default({ limit: 50 }),
+        .default({ limit: 50 })
     )
     .query(async ({ ctx, input }) => {
+      if (!ctx.can('Packages.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Read required' });
+      }
       const filters = [];
       if (input.packageId) filters.push(eq(packageRuns.packageId, input.packageId));
       if (input.siteId) filters.push(eq(packageRuns.siteId, input.siteId));
@@ -54,7 +57,7 @@ export const packageRunsRouter = t.router({
           startedAt: packageRuns.startedAt,
           finishedAt: packageRuns.finishedAt,
           createdAt: packageRuns.createdAt,
-          billingTotal: packageRuns.billingTotal,
+          billingTotal: packageRuns.billingTotal
         })
         .from(packageRuns)
         .leftJoin(packagesTable, eq(packageRuns.packageId, packagesTable.id))
@@ -63,25 +66,26 @@ export const packageRunsRouter = t.router({
         .limit(input.limit);
     }),
 
-  get: authProcedure
-    .input(z.object({ id: z.uuid() }))
-    .query(async ({ ctx, input }) => {
-      const [run] = await ctx.db
-        .select()
-        .from(packageRuns)
-        .where(eq(packageRuns.id, input.id))
-        .limit(1);
-      if (!run) throw new TRPCError({ code: 'NOT_FOUND', message: 'Run not found' });
+  get: authProcedure.input(z.object({ id: z.uuid() })).query(async ({ ctx, input }) => {
+    if (!ctx.can('Packages.Read')) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Read required' });
+    }
+    const [run] = await ctx.db
+      .select()
+      .from(packageRuns)
+      .where(eq(packageRuns.id, input.id))
+      .limit(1);
+    if (!run) throw new TRPCError({ code: 'NOT_FOUND', message: 'Run not found' });
 
-      const steps = await ctx.db
-        .select()
-        .from(packageRunSteps)
-        .where(eq(packageRunSteps.packageRunId, input.id));
+    const steps = await ctx.db
+      .select()
+      .from(packageRunSteps)
+      .where(eq(packageRunSteps.packageRunId, input.id));
 
-      steps.sort((a: typeof steps[number], b: typeof steps[number]) => a.position - b.position);
+    steps.sort((a: (typeof steps)[number], b: (typeof steps)[number]) => a.position - b.position);
 
-      return { run, steps };
-    }),
+    return { run, steps };
+  }),
 
   start: authProcedure
     .input(
@@ -92,14 +96,12 @@ export const packageRunsRouter = t.router({
         runtimeInputs: runtimeInputsSchema,
         // Optional partial-execution entry point. Refused if any step >= N has
         // a priorOutput binding referencing step < N (nothing to seed from).
-        startStepIndex: z.number().int().min(0).default(0),
-      }),
+        startStepIndex: z.number().int().min(0).default(0)
+      })
     )
     .mutation(async ({ ctx, input }) => {
-      // Execution reuses Vendors.Write since capabilities wrap direct vendor
-      // actions that already require it — Packages don't lower the security bar.
-      if (!ctx.can('Vendors.Write')) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write required' });
+      if (!ctx.can('Packages.Run')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Run required' });
       }
 
       const [pkg] = await ctx.db
@@ -122,7 +124,7 @@ export const packageRunsRouter = t.router({
         if (!input.siteId) {
           throw new TRPCError({
             code: 'BAD_REQUEST',
-            message: 'This package is scoped to specific sites — pick a site to run against.',
+            message: 'This package is scoped to specific sites — pick a site to run against.'
           });
         }
         let allowed = allowedSites.includes(input.siteId);
@@ -137,7 +139,7 @@ export const packageRunsRouter = t.router({
         if (!allowed) {
           throw new TRPCError({
             code: 'FORBIDDEN',
-            message: 'This package is not permitted to run against the selected site.',
+            message: 'This package is not permitted to run against the selected site.'
           });
         }
       }
@@ -170,24 +172,21 @@ export const packageRunsRouter = t.router({
                 code: 'BAD_REQUEST',
                 message: `Step ${pos + 1} input "${name}" needs step ${
                   binding.stepPosition + 1
-                }'s output — start from step ${binding.stepPosition + 1} or earlier, or retry from an existing run.`,
+                }'s output — start from step ${binding.stepPosition + 1} or earlier, or retry from an existing run.`
               });
             }
           }
         }
       }
 
-      const materializedInputs = materializeGeneratedRuntimeInputs(
-        input.runtimeInputs,
-        steps,
-      );
+      const materializedInputs = materializeGeneratedRuntimeInputs(input.runtimeInputs, steps);
 
       // Encrypt sensitive runtime inputs before persisting, using each
       // referenced capability's inputMeta to know which fields are sensitive.
       const runtimeInputs = encryptRuntimeInputs(
         materializedInputs,
         steps,
-        ctx.encryptionKey ?? '',
+        ctx.encryptionKey ?? ''
       );
 
       const billingSnapshot = {
@@ -199,10 +198,10 @@ export const packageRunsRouter = t.router({
             capabilityId: step.capabilityId,
             unitPrice: capability?.defaultUnitPrice ?? 0,
             billable: true,
-            priceSource: 'default',
+            priceSource: 'default'
           };
         }),
-        capturedAt: new Date().toISOString(),
+        capturedAt: new Date().toISOString()
       };
 
       const packageSnapshot = {
@@ -210,7 +209,7 @@ export const packageRunsRouter = t.router({
         name: pkg.name,
         version: pkg.version,
         steps: pkg.steps,
-        failureActions: pkg.failureActions ?? [],
+        failureActions: pkg.failureActions ?? []
       };
 
       // The tRPC caller only creates the pending row — no Redis contact.
@@ -225,7 +224,7 @@ export const packageRunsRouter = t.router({
         triggeredByUserId: ctx.user.id,
         runtimeInputs,
         billingSnapshot,
-        startStepIndex: input.startStepIndex,
+        startStepIndex: input.startStepIndex
       });
 
       await ctx.db.insert(customerLogs).values({
@@ -243,72 +242,70 @@ export const packageRunsRouter = t.router({
         userAgent: ctx.userAgent,
         metadata: {
           packageId: pkg.id,
-          packageVersion: pkg.version,
-        },
+          packageVersion: pkg.version
+        }
       });
 
       return result;
     }),
 
-  cancel: authProcedure
-    .input(z.object({ runId: z.uuid() }))
-    .mutation(async ({ ctx, input }) => {
-      if (!ctx.can('Vendors.Write')) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write required' });
-      }
-      const [current] = await ctx.db
-        .select({ id: packageRuns.id, status: packageRuns.status, siteId: packageRuns.siteId })
-        .from(packageRuns)
-        .where(eq(packageRuns.id, input.runId))
-        .limit(1);
-      if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Run not found' });
+  cancel: authProcedure.input(z.object({ runId: z.uuid() })).mutation(async ({ ctx, input }) => {
+    if (!ctx.can('Packages.Run')) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Run required' });
+    }
+    const [current] = await ctx.db
+      .select({ id: packageRuns.id, status: packageRuns.status, siteId: packageRuns.siteId })
+      .from(packageRuns)
+      .where(eq(packageRuns.id, input.runId))
+      .limit(1);
+    if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Run not found' });
 
-      const cancelableStatuses = new Set(['pending', 'queued', 'running']);
-      if (!cancelableStatuses.has(current.status)) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `Run is ${current.status} — cannot cancel`,
-        });
-      }
-
-      // Worker polls status between steps and bails cleanly. The queued
-      // BullMQ job is not removed — the worker sees the canceled status and
-      // exits without executing further steps.
-      await ctx.db
-        .update(packageRuns)
-        .set({ status: 'canceled', finishedAt: new Date().toISOString() })
-        .where(eq(packageRuns.id, input.runId));
-
-      await ctx.db.insert(customerLogs).values({
-        siteId: current.siteId,
-        actorType: 'user',
-        actorId: ctx.user.id,
-        actorLabel: ctx.user.name || ctx.user.email || ctx.user.id,
-        action: 'update',
-        actionLabel: ActionLabels.PackageRunStart,
-        targetType: 'package_run',
-        targetId: input.runId,
-        targetLabel: 'cancel',
-        result: 'success',
-        ipAddress: ctx.ipAddress,
-        userAgent: ctx.userAgent,
-        metadata: { previousStatus: current.status },
+    const cancelableStatuses = new Set(['pending', 'queued', 'running']);
+    if (!cancelableStatuses.has(current.status)) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: `Run is ${current.status} — cannot cancel`
       });
+    }
 
-      return { id: input.runId };
-    }),
+    // Worker polls status between steps and bails cleanly. The queued
+    // BullMQ job is not removed — the worker sees the canceled status and
+    // exits without executing further steps.
+    await ctx.db
+      .update(packageRuns)
+      .set({ status: 'canceled', finishedAt: new Date().toISOString() })
+      .where(eq(packageRuns.id, input.runId));
+
+    await ctx.db.insert(customerLogs).values({
+      siteId: current.siteId,
+      actorType: 'user',
+      actorId: ctx.user.id,
+      actorLabel: ctx.user.name || ctx.user.email || ctx.user.id,
+      action: 'update',
+      actionLabel: ActionLabels.PackageRunStart,
+      targetType: 'package_run',
+      targetId: input.runId,
+      targetLabel: 'cancel',
+      result: 'success',
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+      metadata: { previousStatus: current.status }
+    });
+
+    return { id: input.runId };
+  }),
 
   retryFromStep: authProcedure
     .input(
       z.object({
         runId: z.uuid(),
         stepPosition: z.number().int().min(0),
-        overrideRuntimeInputs: z.record(z.string(), z.unknown()).default({}),
-      }),
+        overrideRuntimeInputs: z.record(z.string(), z.unknown()).default({})
+      })
     )
     .mutation(async ({ ctx, input }) => {
-      if (!ctx.can('Vendors.Write')) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write required' });
+      if (!ctx.can('Packages.Run')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Run required' });
       }
 
       const [original] = await ctx.db
@@ -322,7 +319,7 @@ export const packageRunsRouter = t.router({
       if (!terminalStatuses.has(original.status)) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: `Cannot retry a run in status ${original.status}`,
+          message: `Cannot retry a run in status ${original.status}`
         });
       }
       // Retry-from-step-N > 0 needs sensitive fields on prior steps to still be
@@ -330,12 +327,15 @@ export const packageRunsRouter = t.router({
       if (input.stepPosition > 0 && original.sensitiveOutputsPurgedAt) {
         throw new TRPCError({
           code: 'FORBIDDEN',
-          message: 'Original run outputs have been purged and cannot be replayed',
+          message: 'Original run outputs have been purged and cannot be replayed'
         });
       }
 
       const snapshot = original.packageSnapshot as {
-        steps: Array<{ capabilityId: string; inputBindings?: Record<string, { kind: string; promptKey?: string }> }>;
+        steps: Array<{
+          capabilityId: string;
+          inputBindings?: Record<string, { kind: string; promptKey?: string }>;
+        }>;
       };
       if (input.stepPosition >= snapshot.steps.length) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Step position out of range' });
@@ -344,14 +344,14 @@ export const packageRunsRouter = t.router({
       const originalRuntimeInputs = (original.runtimeInputs ?? {}) as Record<string, unknown>;
       const materializedOverrides = materializeGeneratedRuntimeInputs(
         input.overrideRuntimeInputs,
-        snapshot.steps as Array<{ capabilityId: string; inputBindings?: Record<string, unknown> }>,
+        snapshot.steps as Array<{ capabilityId: string; inputBindings?: Record<string, unknown> }>
       );
       // Runtime inputs are already encrypted-at-rest for sensitive fields;
       // encrypt any newly overridden sensitive ones the same way.
       const encryptedOverrides = encryptRuntimeInputs(
         materializedOverrides,
         snapshot.steps,
-        ctx.encryptionKey ?? '',
+        ctx.encryptionKey ?? ''
       );
       const mergedRuntimeInputs = { ...originalRuntimeInputs, ...encryptedOverrides };
 
@@ -369,7 +369,7 @@ export const packageRunsRouter = t.router({
         runtimeInputs: mergedRuntimeInputs,
         billingSnapshot,
         parentRunId: original.id,
-        startStepIndex: input.stepPosition,
+        startStepIndex: input.stepPosition
       });
 
       return result;
@@ -379,12 +379,12 @@ export const packageRunsRouter = t.router({
     .input(
       z.object({
         runStepId: z.uuid(),
-        outputPath: z.string(),
-      }),
+        outputPath: z.string()
+      })
     )
     .mutation(async ({ ctx, input }) => {
-      if (!ctx.can('Vendors.Write')) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write required' });
+      if (!ctx.can('Packages.Run')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Run required' });
       }
       const [step] = await ctx.db
         .select()
@@ -397,7 +397,7 @@ export const packageRunsRouter = t.router({
         .select({
           id: packageRuns.id,
           siteId: packageRuns.siteId,
-          sensitiveOutputsPurgedAt: packageRuns.sensitiveOutputsPurgedAt,
+          sensitiveOutputsPurgedAt: packageRuns.sensitiveOutputsPurgedAt
         })
         .from(packageRuns)
         .where(eq(packageRuns.id, step.packageRunId))
@@ -432,11 +432,11 @@ export const packageRunsRouter = t.router({
         result: 'success',
         ipAddress: ctx.ipAddress,
         userAgent: ctx.userAgent,
-        metadata: { packageRunId: run.id, outputPath: input.outputPath },
+        metadata: { packageRunId: run.id, outputPath: input.outputPath }
       });
 
       return { value: JSON.parse(decrypted) as unknown };
-    }),
+    })
 });
 
 // Walks the referenced steps to find password-typeHint inputs that were left
@@ -445,7 +445,7 @@ export const packageRunsRouter = t.router({
 // same defaults as the builder's generator widget.
 function materializeGeneratedRuntimeInputs(
   inputs: Record<string, unknown>,
-  steps: Array<{ capabilityId: string; inputBindings?: Record<string, unknown> }>,
+  steps: Array<{ capabilityId: string; inputBindings?: Record<string, unknown> }>
 ): Record<string, unknown> {
   const passwordPromptKeys = new Set<string>();
   for (const step of steps) {
@@ -475,7 +475,7 @@ function materializeGeneratedRuntimeInputs(
 function encryptRuntimeInputs(
   inputs: Record<string, unknown>,
   steps: Array<{ capabilityId: string }>,
-  encryptionKey: string,
+  encryptionKey: string
 ): Record<string, unknown> {
   const sensitiveKeys = new Set<string>();
   for (const step of steps) {
