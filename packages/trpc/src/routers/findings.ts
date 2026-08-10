@@ -1,10 +1,11 @@
 import { z } from 'zod';
-import { and, asc, desc, eq, gt, inArray, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import {
   customerLogs,
   findings,
   findingsWithContext,
   entitySources,
+  policyDependencies,
   users
 } from '@mspbyte/drizzle';
 import { ActionLabels, getPolicyTableShape } from '@mspbyte/shared';
@@ -111,6 +112,54 @@ function canonicalHref(
   const route = resourceTable ? getPolicyTableShape(resourceTable)?.route : null;
   if (route && linkId) return `${route.path}?linkId=${linkId}`;
   return null;
+}
+
+async function loadBlockingParents(
+  db: any,
+  row: { policyId: string; linkId: string | null; siteId: string | null }
+) {
+  const parentRows = (await db
+    .select({ parentPolicyId: policyDependencies.parentPolicyId })
+    .from(policyDependencies)
+    .where(eq(policyDependencies.childPolicyId, row.policyId))
+    .catch(() => [])) as Array<{ parentPolicyId: string }>;
+  const parentPolicyIds = [...new Set(parentRows.map((parent) => parent.parentPolicyId))] as string[];
+  if (parentPolicyIds.length === 0) return [];
+
+  const rows = await db
+    .select({
+      id: findingsWithContext.id,
+      title: findingsWithContext.title,
+      policyId: findingsWithContext.policyId,
+      policyName: findingsWithContext.policyName,
+      severity: findingsWithContext.severity,
+      status: findingsWithContext.status,
+      lastSeenAt: findingsWithContext.lastSeenAt
+    })
+    .from(findingsWithContext)
+    .where(
+      and(
+        inArray(findingsWithContext.policyId, parentPolicyIds),
+        inArray(findingsWithContext.status, [...OPEN_STATUSES]),
+        row.linkId ? eq(findingsWithContext.linkId, row.linkId) : undefined,
+        row.siteId
+          ? or(isNull(findingsWithContext.siteId), eq(findingsWithContext.siteId, row.siteId))
+          : undefined
+      )
+    )
+    .orderBy(desc(findingsWithContext.severity), desc(findingsWithContext.lastSeenAt))
+    .limit(8)
+    .catch(() => []);
+
+  return rows.map((parent: (typeof rows)[number]) => ({
+    findingId: parent.id,
+    findingTitle: parent.title,
+    policyId: parent.policyId,
+    policyName: parent.policyName,
+    severity: parent.severity,
+    status: parent.status,
+    lastSeenAt: parent.lastSeenAt
+  }));
 }
 
 export const findingsRouter = t.router({
@@ -329,6 +378,11 @@ export const findingsRouter = t.router({
       .orderBy(desc(findingsWithContext.severity), desc(findingsWithContext.lastSeenAt))
       .limit(8)
       .catch(() => []);
+    const blockedByParents = await loadBlockingParents(ctx.db, {
+      policyId: row.policyId,
+      linkId: row.linkId,
+      siteId: row.siteId
+    });
 
     return {
       id: row.id,
@@ -357,6 +411,8 @@ export const findingsRouter = t.router({
       lastSeenAt: row.lastSeenAt,
       sources: sourceLabels,
       dataSources,
+      isBlockedByParent: blockedByParents.length > 0,
+      blockedByParents,
       relatedBySite,
       relatedByPolicy
     };

@@ -51,10 +51,17 @@
     queryKey: ['frameworks.list'],
     queryFn: () => trpc.frameworks.list.query(),
   }));
+  const dependencyOptionsQuery = createQuery(() => ({
+    queryKey: ['policies.dependencyOptions'],
+    queryFn: () => trpc.policies.dependencyOptions.query(),
+  }));
 
   let loadedFrameworkMembershipFor = $state('');
   let selectedFrameworkIds = $state<string[]>([]);
   let savingFrameworks = $state(false);
+  let loadedDependenciesFor = $state('');
+  let selectedChildPolicyIds = $state<string[]>([]);
+  let savingDependencies = $state(false);
   let scopeType = $state<ScopeType>('global');
   let targetId = $state('');
   let assignmentEnabled = $state(true);
@@ -96,6 +103,15 @@
       label: framework.name,
     }))
   );
+  const childPolicyOptions = $derived.by(() => {
+    const policy = policyQuery.data;
+    return (dependencyOptionsQuery.data ?? [])
+      .filter((candidate) => candidate.id !== policy?.id)
+      .map((candidate) => ({
+        value: candidate.id,
+        label: candidate.name,
+      }));
+  });
 
   const membershipDirty = $derived.by(() => {
     const policy = policyQuery.data;
@@ -105,12 +121,27 @@
     if (prev.length !== next.length) return true;
     return prev.some((value, index) => value !== next[index]);
   });
+  const dependenciesDirty = $derived.by(() => {
+    const policy = policyQuery.data;
+    if (!policy) return false;
+    const prev = (policy.dependencyChildren ?? []).map((child) => child.policyId).sort();
+    const next = [...selectedChildPolicyIds].sort();
+    if (prev.length !== next.length) return true;
+    return prev.some((value, index) => value !== next[index]);
+  });
 
   $effect(() => {
     const policy = policyQuery.data;
     if (policy && loadedFrameworkMembershipFor !== policy.id) {
       selectedFrameworkIds = (policy.frameworks ?? []).map((framework) => framework.id);
       loadedFrameworkMembershipFor = policy.id;
+    }
+  });
+  $effect(() => {
+    const policy = policyQuery.data;
+    if (policy && loadedDependenciesFor !== policy.id) {
+      selectedChildPolicyIds = (policy.dependencyChildren ?? []).map((child) => child.policyId);
+      loadedDependenciesFor = policy.id;
     }
   });
 
@@ -156,6 +187,10 @@
     return 'bg-muted-foreground';
   }
 
+  function relationshipBadge(kind: string): string {
+    return kind === 'blocks' ? 'BLOCKS' : kind.toUpperCase();
+  }
+
   async function refreshPolicy() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['policies.byId', id] }),
@@ -176,6 +211,12 @@
     selectedFrameworkIds = (policy.frameworks ?? []).map((framework) => framework.id);
   }
 
+  function discardDependencies() {
+    const policy = policyQuery.data;
+    if (!policy) return;
+    selectedChildPolicyIds = (policy.dependencyChildren ?? []).map((child) => child.policyId);
+  }
+
   async function saveFrameworkMembership() {
     savingFrameworks = true;
     try {
@@ -190,6 +231,24 @@
       showErrorToast(error, 'Failed to save framework membership.');
     } finally {
       savingFrameworks = false;
+    }
+  }
+
+  async function saveDependencies() {
+    savingDependencies = true;
+    try {
+      await trpc.policies.setChildPolicyDependencies.mutate({
+        parentPolicyId: id,
+        childPolicyIds: selectedChildPolicyIds,
+        relationshipType: 'blocks',
+      });
+      await refreshPolicy();
+      await queryClient.invalidateQueries({ queryKey: ['policies.dependencyOptions'] });
+      toast.success('Child policy relationships saved');
+    } catch (error) {
+      showErrorToast(error, 'Failed to save child policy relationships.');
+    } finally {
+      savingDependencies = false;
     }
   }
 
@@ -501,7 +560,113 @@
             </div>
           </SectionPanel>
 
-          <SectionPanel code="03" title="OPEN FINDINGS">
+          <SectionPanel code="03" title="DEPENDENCIES">
+            {#snippet aside()}
+              {(policy.dependencyChildren ?? []).length} child · {(policy.dependencyParents ?? []).length} parent
+            {/snippet}
+            <div class="space-y-4 text-sm">
+              <div class="space-y-2 border border-border/60 bg-muted/20 p-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Parent-managed child policies
+                    </div>
+                    <p class="mt-1 text-sm text-muted-foreground">
+                      When this policy is failing, selected child policies stop creating new findings until the parent is healthy again.
+                    </p>
+                  </div>
+                  <span class="rounded-[3px] border border-foreground/15 bg-foreground/4 px-1.5 py-px font-mono text-[10.5px] uppercase tracking-[0.14em] text-foreground/90">
+                    BLOCKS
+                  </span>
+                </div>
+
+                <MultiSelect
+                  options={childPolicyOptions}
+                  bind:selected={selectedChildPolicyIds}
+                  placeholder="Add child policies"
+                  maxDisplay={3}
+                />
+
+                {#if dependenciesDirty}
+                  <div class="flex items-center justify-between gap-3 border-t border-border/50 pt-2">
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                      {selectedChildPolicyIds.length} child policies selected
+                    </span>
+                    <div class="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        onclick={discardDependencies}
+                        disabled={savingDependencies}
+                      >
+                        Discard
+                      </Button>
+                      <Button onclick={saveDependencies} disabled={savingDependencies}>
+                        <Save class="size-4" /> Save
+                      </Button>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+
+              <div class="space-y-1">
+                {#each policy.dependencyChildren ?? [] as child}
+                  <a
+                    href={`/policies/${child.policyId}`}
+                    class="flex items-center justify-between gap-3 border-b border-border/40 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40"
+                  >
+                    <div class="min-w-0">
+                      <div class="flex min-w-0 items-center gap-2">
+                        <span class="truncate">{child.name}</span>
+                        <span class="rounded-[3px] border border-foreground/15 bg-foreground/4 px-1.5 py-px font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/90">
+                          {relationshipBadge(child.relationshipType)}
+                        </span>
+                      </div>
+                      <div class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+                        {prettyText(child.category ?? 'Operational')} · {child.openFindingCount} open
+                      </div>
+                    </div>
+                    <div class="flex shrink-0 items-center gap-2">
+                      <FindingSeverityBadge severity={child.severity} />
+                      <ArrowUpRight class="size-3 text-muted-foreground" />
+                    </div>
+                  </a>
+                {:else}
+                  <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
+                    no child policies linked
+                  </p>
+                {/each}
+              </div>
+
+              {#if (policy.dependencyParents ?? []).length > 0}
+                <div class="border-t border-border/50 pt-3">
+                  <div class="mb-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Managed by parent policies
+                  </div>
+                  <div class="space-y-1">
+                    {#each policy.dependencyParents ?? [] as parent}
+                      <a
+                        href={`/policies/${parent.policyId}`}
+                        class="flex items-center justify-between gap-3 border-b border-border/40 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40"
+                      >
+                        <div class="min-w-0">
+                          <div class="truncate">{parent.name}</div>
+                          <div class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+                            remove from parent policy · {parent.openFindingCount} open
+                          </div>
+                        </div>
+                        <div class="flex shrink-0 items-center gap-2">
+                          <FindingSeverityBadge severity={parent.severity} />
+                          <ArrowUpRight class="size-3 text-muted-foreground" />
+                        </div>
+                      </a>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+            </div>
+          </SectionPanel>
+
+          <SectionPanel code="04" title="OPEN FINDINGS">
             {#snippet aside()}
               <a
                 href={`/findings?policyId=${policy.id}`}

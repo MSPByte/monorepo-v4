@@ -402,6 +402,38 @@
         <div class="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
           <!-- LEFT COLUMN -->
           <div class="space-y-4">
+            {#if finding.isBlockedByParent}
+              <SectionPanel code="00" title="ACTIVE PARENT POLICY">
+                {#snippet aside()}
+                  {finding.blockedByParents.length} blocking
+                {/snippet}
+                <div class="space-y-3 text-sm">
+                  <p class="text-sm leading-relaxed text-foreground/90">
+                    This child finding remains visible, but new child findings from the same policy relationship are paused while a parent policy finding is active.
+                  </p>
+                  <div class="space-y-1">
+                    {#each finding.blockedByParents as parent}
+                      <a
+                        href={`/policies/${parent.policyId}`}
+                        class="flex items-center justify-between gap-3 border-b border-border/40 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40"
+                      >
+                        <div class="min-w-0">
+                          <div class="truncate">{parent.policyName}</div>
+                          <div class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+                            {parent.findingTitle} · last seen {formatRelativeDate(parent.lastSeenAt)}
+                          </div>
+                        </div>
+                        <div class="flex shrink-0 items-center gap-1.5">
+                          <FindingSeverityBadge severity={parent.severity} />
+                          <ArrowUpRight class="size-3 text-muted-foreground" />
+                        </div>
+                      </a>
+                    {/each}
+                  </div>
+                </div>
+              </SectionPanel>
+            {/if}
+
             <SectionPanel code="01" title="EVIDENCE">
               {#snippet aside()}
                 {finding.evidenceSummary ? 'detail' : 'no detail'}

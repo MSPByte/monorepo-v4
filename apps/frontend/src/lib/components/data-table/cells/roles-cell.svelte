@@ -11,9 +11,10 @@
 </script>
 
 {#if Array.isArray(value) && value.length > 0}
-  {#each value as templateId}
-    <Badge variant="outline" class="mr-1">{roleMap[templateId] ?? templateId}</Badge>
-  {/each}
+  <Badge variant="outline" class="mr-1">{roleMap[value[0]] ?? value[0]}</Badge>
+  {#if value.length > 1}
+    <Badge variant="outline" class="mr-1">+{value.length - 1}</Badge>
+  {/if}
 {:else}
   <span class="text-muted-foreground">—</span>
 {/if}

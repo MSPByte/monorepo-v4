@@ -6,6 +6,7 @@ import {
   findings,
   integrationLinks,
   policies,
+  policyDependencies,
   policiesWithStats,
   policyAssignments,
   policySetItems,
@@ -35,6 +36,7 @@ const scopeTypeSchema = z.enum([
   "site_group",
   "integration_link",
 ]);
+const relationshipTypeSchema = z.enum(["blocks"]);
 
 const policyInputSchema = z.object({
   name: z.string().min(1),
@@ -111,6 +113,72 @@ function policyDataSource(
     if (table) return table;
   }
   return fallback ?? "Unknown";
+}
+
+async function loadPolicyDependencyRelations(ctx: Context, policyId: string) {
+  const [parentRows, childRows] = await Promise.all([
+    ctx.db
+      .select({
+        relationshipType: policyDependencies.relationshipType,
+        policyId: policiesWithStats.id,
+        name: policiesWithStats.name,
+        description: policiesWithStats.description,
+        enabled: policiesWithStats.enabled,
+        severity: policiesWithStats.severity,
+        category: policiesWithStats.category,
+        openFindingCount: policiesWithStats.openFindingCount,
+      })
+      .from(policyDependencies)
+      .innerJoin(
+        policiesWithStats,
+        eq(policyDependencies.parentPolicyId, policiesWithStats.id),
+      )
+      .where(eq(policyDependencies.childPolicyId, policyId))
+      .orderBy(policiesWithStats.name)
+      .catch(() => []),
+    ctx.db
+      .select({
+        relationshipType: policyDependencies.relationshipType,
+        policyId: policiesWithStats.id,
+        name: policiesWithStats.name,
+        description: policiesWithStats.description,
+        enabled: policiesWithStats.enabled,
+        severity: policiesWithStats.severity,
+        category: policiesWithStats.category,
+        openFindingCount: policiesWithStats.openFindingCount,
+      })
+      .from(policyDependencies)
+      .innerJoin(
+        policiesWithStats,
+        eq(policyDependencies.childPolicyId, policiesWithStats.id),
+      )
+      .where(eq(policyDependencies.parentPolicyId, policyId))
+      .orderBy(policiesWithStats.name)
+      .catch(() => []),
+  ]);
+
+  return {
+    parents: parentRows.map((row) => ({
+      policyId: row.policyId,
+      name: row.name,
+      description: row.description,
+      enabled: row.enabled,
+      severity: row.severity,
+      category: row.category,
+      openFindingCount: row.openFindingCount,
+      relationshipType: row.relationshipType,
+    })),
+    children: childRows.map((row) => ({
+      policyId: row.policyId,
+      name: row.name,
+      description: row.description,
+      enabled: row.enabled,
+      severity: row.severity,
+      category: row.category,
+      openFindingCount: row.openFindingCount,
+      relationshipType: row.relationshipType,
+    })),
+  };
 }
 
 function requirePoliciesRead(ctx: { can: (p: 'Policies.Read') => boolean }) {
@@ -704,6 +772,101 @@ export const policiesRouter = t.router({
     return { sites: siteRows, siteGroups: groupRows, links: linkRows };
   }),
 
+  dependencyOptions: authProcedure.query(async ({ ctx }) => {
+    requirePoliciesRead(ctx);
+    const rows = await ctx.db
+      .select({
+        id: policiesWithStats.id,
+        name: policiesWithStats.name,
+        description: policiesWithStats.description,
+        enabled: policiesWithStats.enabled,
+        severity: policiesWithStats.severity,
+        category: policiesWithStats.category,
+        openFindingCount: policiesWithStats.openFindingCount,
+      })
+      .from(policiesWithStats)
+      .orderBy(policiesWithStats.name)
+      .catch(() => []);
+    return rows;
+  }),
+
+  setChildPolicyDependencies: authProcedure
+    .input(
+      z.object({
+        parentPolicyId: z.string(),
+        childPolicyIds: z.array(z.string()),
+        relationshipType: relationshipTypeSchema.default("blocks"),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      requirePoliciesWrite(ctx);
+
+      const [parent] = await ctx.db
+        .select({ id: policies.id, name: policies.name })
+        .from(policies)
+        .where(eq(policies.id, input.parentPolicyId))
+        .limit(1);
+      if (!parent) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const nextChildIds = [...new Set(input.childPolicyIds)].filter(
+        (childPolicyId) => childPolicyId !== input.parentPolicyId,
+      );
+      const existingRows = await ctx.db
+        .select({ childPolicyId: policyDependencies.childPolicyId })
+        .from(policyDependencies)
+        .where(eq(policyDependencies.parentPolicyId, input.parentPolicyId));
+      const previousChildIds = existingRows.map((row) => row.childPolicyId).sort();
+      const sortedNextChildIds = [...nextChildIds].sort();
+      const added = sortedNextChildIds.filter((id) => !previousChildIds.includes(id));
+      const removed = previousChildIds.filter((id) => !sortedNextChildIds.includes(id));
+
+      await ctx.db
+        .delete(policyDependencies)
+        .where(eq(policyDependencies.parentPolicyId, input.parentPolicyId));
+      if (sortedNextChildIds.length > 0) {
+        await ctx.db
+          .insert(policyDependencies)
+          .values(
+            sortedNextChildIds.map((childPolicyId) => ({
+              parentPolicyId: input.parentPolicyId,
+              childPolicyId,
+              relationshipType: input.relationshipType,
+            })),
+          )
+          .onConflictDoNothing();
+      }
+
+      if (added.length > 0 || removed.length > 0) {
+        await ctx.db.insert(customerLogs).values({
+          siteId: null,
+          actorType: "user",
+          actorId: ctx.user.id,
+          actorLabel: ctx.user.name || ctx.user.email,
+          action: "update",
+          actionLabel: ActionLabels.PolicyUpdate,
+          targetType: "policy",
+          targetId: parent.id,
+          targetLabel: parent.name,
+          result: "success",
+          ipAddress: ctx.ipAddress,
+          userAgent: ctx.userAgent,
+          metadata: {
+            dependencyMode: "parent_managed",
+            relationshipType: input.relationshipType,
+            added,
+            removed,
+            totalAfter: sortedNextChildIds.length,
+          },
+        });
+      }
+
+      return {
+        parentPolicyId: input.parentPolicyId,
+        childPolicyIds: sortedNextChildIds,
+        relationshipType: input.relationshipType,
+      };
+    }),
+
   byId: authProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
@@ -727,6 +890,7 @@ export const policiesRouter = t.router({
           .where(eq(policySetItems.policyId, input.id))
           .orderBy(policySets.name)
           .catch(() => []);
+      const dependencies = await loadPolicyDependencyRelations(ctx, input.id);
 
       return {
         id: row.id,
@@ -750,6 +914,8 @@ export const policiesRouter = t.router({
         origin: row.source,
         frameworkMembership: frameworkRows.map((framework) => framework.name),
         frameworks: frameworkRows,
+        dependencyParents: dependencies.parents,
+        dependencyChildren: dependencies.children,
         openFindingCount: 0,
         lastEvaluation: row.updatedAt,
         exampleFindings: [],

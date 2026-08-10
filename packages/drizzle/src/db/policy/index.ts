@@ -88,6 +88,30 @@ export const policySetItems = policySchema.table(
   (t) => [unique('policy_set_items_unique').on(t.policySetId, t.policyId), rls]
 );
 
+export const policyDependencies = policySchema.table(
+  'policy_dependencies',
+  {
+    parentPolicyId: text('parent_policy_id')
+      .notNull()
+      .references(() => policies.id, { onDelete: 'cascade' }),
+    childPolicyId: text('child_policy_id')
+      .notNull()
+      .references(() => policies.id, { onDelete: 'cascade' }),
+    relationshipType: text('relationship_type', { enum: ['blocks'] })
+      .notNull()
+      .default('blocks'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow()
+  },
+  (t) => [
+    unique('policy_dependencies_unique').on(t.parentPolicyId, t.childPolicyId, t.relationshipType),
+    index('policy_dependencies_parent_idx').on(t.parentPolicyId),
+    index('policy_dependencies_child_idx').on(t.childPolicyId),
+    rls
+  ]
+);
+
 export const policyAssignments = policySchema.table(
   'assignments',
   {

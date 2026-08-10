@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne, notInArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, ne, notInArray, or, sql } from 'drizzle-orm';
 import {
   assetsWithSites,
   coveEndpoints,
@@ -18,6 +18,7 @@ import {
   m365TeamsConfig,
   peopleWithSites,
   policies,
+  policyDependencies,
   policyAssignments,
   policySetItems,
   siteGroupMembers,
@@ -33,6 +34,7 @@ import { FACET_TABLE_MAP, ProviderFacet } from '@mspbyte/shared';
 type Db = any;
 type JsonObject = Record<string, unknown>;
 type PolicyRow = typeof policies.$inferSelect;
+type PolicyDependencyRow = typeof policyDependencies.$inferSelect;
 type AssignmentRow = typeof policyAssignments.$inferSelect;
 type PolicySetItemRow = typeof policySetItems.$inferSelect;
 
@@ -74,6 +76,11 @@ type ProducedFinding = {
   impact: JsonObject;
   remediation: JsonObject;
   recommendation: string | null;
+};
+
+type EvaluationOutcome = {
+  produced: ProducedFinding[];
+  blockedByPolicyIds: string[];
 };
 
 type TableEntry = {
@@ -268,6 +275,7 @@ export async function evaluatePolicies(
   };
   const activeAssignments = await loadAssignmentsForRun(db, params);
   const setItems = (await db.select().from(policySetItems)) as PolicySetItemRow[];
+  const dependencyRows = (await db.select().from(policyDependencies)) as PolicyDependencyRow[];
   const policyRows = (await db
     .select()
     .from(policies)
@@ -332,13 +340,32 @@ export async function evaluatePolicies(
     scope
   });
 
-  for (const pair of chosen.values()) {
+  const chosenPairs = orderPolicyPairs([...chosen.values()], dependencyRows);
+  const childToParents = groupPolicyDependencies(dependencyRows);
+  const relevantParentIds = [...new Set(chosenPairs.flatMap((pair) => childToParents.get(pair.policy.id) ?? []))];
+  const activeBlockingPolicies = await loadActiveBlockingPolicies(db, {
+    parentPolicyIds: relevantParentIds,
+    linkId: params.linkId,
+    siteId: params.siteId
+  });
+
+  for (const pair of chosenPairs) {
     metrics.policiesEvaluated++;
     const context = buildContext(pair);
-    const produced = await evaluatePolicy(db, context);
-    await upsertProducedFindings(db, produced);
-    metrics.findingsOpen += produced.length;
-    metrics.findingsResolved += await resolveStaleFindings(db, context, produced);
+    const blockingParentIds = (childToParents.get(pair.policy.id) ?? []).filter((parentPolicyId) =>
+      activeBlockingPolicies.has(parentPolicyId)
+    );
+    if (blockingParentIds.length > 0) continue;
+
+    const outcome = await evaluatePolicy(db, context);
+    await upsertProducedFindings(db, outcome.produced);
+    metrics.findingsOpen += outcome.produced.length;
+    metrics.findingsResolved += await resolveStaleFindings(db, context, outcome.produced);
+    if (outcome.produced.length > 0) {
+      activeBlockingPolicies.add(pair.policy.id);
+    } else {
+      activeBlockingPolicies.delete(pair.policy.id);
+    }
   }
 
   // Resolve any prior findings that were produced by an assignment we just
@@ -428,17 +455,86 @@ function groupSetItems(rows: PolicySetItemRow[]): Map<string, string[]> {
   return grouped;
 }
 
-async function evaluatePolicy(db: Db, context: PolicyContext): Promise<ProducedFinding[]> {
+function groupPolicyDependencies(rows: PolicyDependencyRow[]): Map<string, string[]> {
+  const grouped = new Map<string, string[]>();
+  for (const row of rows) {
+    if (row.relationshipType !== 'blocks') continue;
+    const current = grouped.get(row.childPolicyId) ?? [];
+    current.push(row.parentPolicyId);
+    grouped.set(row.childPolicyId, current);
+  }
+  return grouped;
+}
+
+function orderPolicyPairs(pairs: Array<{ assignment: AssignmentRow; policy: PolicyRow }>, rows: PolicyDependencyRow[]) {
+  const pairByPolicyId = new Map<string, { assignment: AssignmentRow; policy: PolicyRow }>(
+    pairs.map((pair) => [pair.policy.id, pair])
+  );
+  const inbound = new Map<string, number>(pairs.map((pair) => [pair.policy.id, 0]));
+  const childrenByParent = new Map<string, string[]>();
+
+  for (const row of rows) {
+    if (row.relationshipType !== 'blocks') continue;
+    if (!pairByPolicyId.has(row.parentPolicyId) || !pairByPolicyId.has(row.childPolicyId)) continue;
+    const children = childrenByParent.get(row.parentPolicyId) ?? [];
+    children.push(row.childPolicyId);
+    childrenByParent.set(row.parentPolicyId, children);
+    inbound.set(row.childPolicyId, (inbound.get(row.childPolicyId) ?? 0) + 1);
+  }
+
+  const queue = pairs
+    .filter((pair) => (inbound.get(pair.policy.id) ?? 0) === 0)
+    .map((pair) => pair.policy.id);
+  const ordered: Array<{ assignment: AssignmentRow; policy: PolicyRow }> = [];
+
+  while (queue.length > 0) {
+    const policyId = queue.shift()!;
+    const pair = pairByPolicyId.get(policyId);
+    if (!pair) continue;
+    ordered.push(pair);
+    for (const childPolicyId of childrenByParent.get(policyId) ?? []) {
+      const nextInbound = (inbound.get(childPolicyId) ?? 1) - 1;
+      inbound.set(childPolicyId, nextInbound);
+      if (nextInbound === 0) queue.push(childPolicyId);
+    }
+  }
+
+  if (ordered.length === pairs.length) return ordered;
+
+  const orderedIds = new Set(ordered.map((pair) => pair.policy.id));
+  return [...ordered, ...pairs.filter((pair) => !orderedIds.has(pair.policy.id))];
+}
+
+async function loadActiveBlockingPolicies(
+  db: Db,
+  params: { parentPolicyIds: string[]; linkId?: string; siteId?: string }
+): Promise<Set<string>> {
+  if (params.parentPolicyIds.length === 0) return new Set<string>();
+
+  const where = and(
+    inArray(findings.policyId, params.parentPolicyIds),
+    inArray(findings.status, ['open', 'acknowledged', 'regressed']),
+    params.linkId ? eq(findings.linkId, params.linkId) : sql`true`,
+    params.siteId ? or(isNull(findings.siteId), eq(findings.siteId, params.siteId)) : sql`true`
+  );
+  const rows = await db
+    .select({ policyId: findings.policyId })
+    .from(findings)
+    .where(where);
+  return new Set(rows.map((row: { policyId: string }) => row.policyId));
+}
+
+async function evaluatePolicy(db: Db, context: PolicyContext): Promise<EvaluationOutcome> {
   const definition = mergeParameters(context.policy.definition, context.assignment.parameters);
-  if (!isObject(definition)) return [];
+  if (!isObject(definition)) return { produced: [], blockedByPolicyIds: [] };
 
   switch (definition.kind) {
     case 'tableThreshold':
-      return evaluateTableThreshold(db, context, definition);
+      return { produced: await evaluateTableThreshold(db, context, definition), blockedByPolicyIds: [] };
     case 'rowExpectation':
-      return evaluateRowExpectation(db, context, definition);
+      return { produced: await evaluateRowExpectation(db, context, definition), blockedByPolicyIds: [] };
     default:
-      return [];
+      return { produced: [], blockedByPolicyIds: [] };
   }
 }
 
