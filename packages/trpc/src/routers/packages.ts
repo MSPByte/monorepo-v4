@@ -9,6 +9,7 @@ import {
   packageRuns,
   packages,
   siteGroupMembers,
+  siteProfileFields,
 } from '@mspbyte/drizzle';
 import { sql } from 'drizzle-orm';
 import {
@@ -53,6 +54,11 @@ const bindingSchema = z.discriminatedUnion('kind', [
     kind: z.literal('generated'),
     generator: z.string().min(1),
     params: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    kind: z.literal('siteFact'),
+    key: z.string().min(1),
+    required: z.boolean(),
   }),
 ]);
 
@@ -589,5 +595,25 @@ export const packagesRouter = t.router({
       appliesToTypeHints: g.appliesToTypeHints,
       defaults: g.defaults,
     }));
+  }),
+
+  // Declared site profile fields — the fact-key catalog for the builder's
+  // siteFact source picker. Filtered to active only so retired fields don't
+  // appear as valid targets.
+  siteFactFields: authProcedure.query(async ({ ctx }) => {
+    if (!ctx.can('Packages.Read')) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Read required' });
+    }
+    return ctx.db
+      .select({
+        key: siteProfileFields.key,
+        label: siteProfileFields.label,
+        type: siteProfileFields.type,
+        valueMode: siteProfileFields.valueMode,
+        section: siteProfileFields.section,
+      })
+      .from(siteProfileFields)
+      .where(eq(siteProfileFields.active, true))
+      .orderBy(siteProfileFields.section, siteProfileFields.displayOrder, siteProfileFields.label);
   }),
 });

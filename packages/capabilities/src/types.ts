@@ -18,7 +18,11 @@ export type Binding =
   | { kind: 'priorOutput'; stepPosition: number; path: string }
   // `generator` names a registered entry in the generators registry
   // (see ./generators). Params are validated per-generator at resolve time.
-  | { kind: 'generated'; generator: string; params: Record<string, unknown> };
+  | { kind: 'generated'; generator: string; params: Record<string, unknown> }
+  // Reads a value from the run's site's `site_profile_facts` at run time.
+  // Requires the run to have a siteId. `required` mirrors the runtime kind:
+  // when false, an absent/unapplicable fact resolves to undefined.
+  | { kind: 'siteFact'; key: string; required: boolean };
 
 export type BindingKind = Binding['kind'];
 
@@ -120,6 +124,11 @@ export interface CapabilityCtx {
   // a generated password so the operator can retrieve it) vs. keep silent
   // for user-supplied values.
   generatedInputs: ReadonlySet<string>;
+  // Facts for the run's site (empty map when the run has no siteId). The
+  // worker resolves this once per run so multiple siteFact bindings share
+  // the read; individual capabilities rarely need to call this directly —
+  // the binding resolver does it for them.
+  siteFacts: ReadonlyMap<string, unknown>;
   loadM365Identity: (identityId: string) => Promise<M365IdentityRow | null>;
   getM365Connector: (linkId: string) => Promise<M365Connector>;
 }

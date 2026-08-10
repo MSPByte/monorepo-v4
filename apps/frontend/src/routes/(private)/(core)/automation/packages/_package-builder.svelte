@@ -9,7 +9,8 @@
         contextKey?: string;
       }
     | { kind: 'priorOutput'; stepPosition: number; path: string }
-    | { kind: 'generated'; generator: string; params: Record<string, unknown> };
+    | { kind: 'generated'; generator: string; params: Record<string, unknown> }
+    | { kind: 'siteFact'; key: string; required: boolean };
 
   export type Step = {
     capabilityId: string;
@@ -69,7 +70,7 @@
   } from '@lucide/svelte';
 
   type EntityType = 'integration_link' | 'm365_identity' | 'm365_group' | 'm365_license';
-  type Source = 'fixed' | 'runtime' | 'row' | 'wire' | 'generated';
+  type Source = 'fixed' | 'runtime' | 'row' | 'wire' | 'generated' | 'fact';
 
   type Props = {
     initial: PackageDraft;
@@ -92,6 +93,27 @@
     queryFn: () => trpc.packages.generators.query(),
     staleTime: 5 * 60_000,
   }));
+
+  const siteFactFieldsQuery = createQuery(() => ({
+    queryKey: ['packages.metadata.siteFactFields'],
+    queryFn: () => trpc.packages.siteFactFields.query(),
+    staleTime: 5 * 60_000,
+  }));
+
+  // Which declared fact fields are compatible with a given input typeHint.
+  // Mapping is intentionally loose — a string fact can drive text/password/upn
+  // inputs; number → number; boolean → boolean; multi-value → stringArray.
+  function factFieldsFor(typeHint: string | undefined) {
+    const all = siteFactFieldsQuery.data ?? [];
+    if (!typeHint) return all;
+    return all.filter((f) => {
+      if (typeHint === 'boolean') return f.type === 'boolean' && f.valueMode === 'single';
+      if (typeHint === 'number') return f.type === 'number' && f.valueMode === 'single';
+      if (typeHint === 'stringArray') return f.type === 'string' && f.valueMode === 'multiple';
+      // text / password / upn: any single-value string field.
+      return f.type === 'string' && f.valueMode === 'single';
+    });
+  }
 
   // Sites + site groups feed the scope pickers in the package details panel.
   const sitesQuery = createQuery(() => ({
@@ -181,6 +203,7 @@
     if (binding.kind === 'runtime') return 'runtime';
     if (binding.kind === 'priorOutput') return 'wire';
     if (binding.kind === 'generated') return 'generated';
+    if (binding.kind === 'siteFact') return 'fact';
     // entity kind:
     return binding.source === 'row-context' ? 'row' : 'runtime';
   }
@@ -198,6 +221,7 @@
     // Only show `generated` if a registered generator applies to this typeHint,
     // otherwise it's dead UI.
     if (set.has('generated') && generatorFor(meta.typeHint)) out.push('generated');
+    if (set.has('siteFact')) out.push('fact');
     return out;
   }
 
@@ -241,6 +265,9 @@
         generator: gen.id,
         params: { ...gen.defaults },
       };
+    }
+    if (source === 'fact') {
+      return { kind: 'siteFact', key: '', required: true };
     }
     return { kind: 'priorOutput', stepPosition: 0, path: '' };
   }
@@ -369,9 +396,17 @@
     row: number;
     literals: number;
     generated: number;
+    facts: number;
   };
   function summarize(step: Step): StepSummary {
-    const s: StepSummary = { prompts: 0, wires: [], row: 0, literals: 0, generated: 0 };
+    const s: StepSummary = {
+      prompts: 0,
+      wires: [],
+      row: 0,
+      literals: 0,
+      generated: 0,
+      facts: 0,
+    };
     for (const binding of Object.values(step.inputBindings)) {
       if (binding.kind === 'runtime') s.prompts += 1;
       else if (binding.kind === 'priorOutput')
@@ -380,6 +415,7 @@
         if (binding.source === 'row-context') s.row += 1;
         else s.prompts += 1;
       } else if (binding.kind === 'generated') s.generated += 1;
+      else if (binding.kind === 'siteFact') s.facts += 1;
       else s.literals += 1;
     }
     return s;
@@ -409,6 +445,7 @@
     if (source === 'runtime') return 'Ask when run';
     if (source === 'row') return 'From triggering row';
     if (source === 'generated') return 'Generate';
+    if (source === 'fact') return 'From site fact';
     return 'Wire from step';
   }
 
@@ -424,6 +461,8 @@
     if (source === 'row')
       return 'Auto-filled from the row that triggered this package (from a table row-action).';
     if (source === 'generated') return 'Produced by a generator at run time.';
+    if (source === 'fact')
+      return "Reads a value from the run's site profile facts — needs a site selected at run time.";
     return 'Reads a specific output from an earlier step in this package.';
   }
 
@@ -432,6 +471,7 @@
     if (source === 'runtime') return 'text-amber-600 dark:text-amber-400';
     if (source === 'row') return 'text-violet-600 dark:text-violet-400';
     if (source === 'generated') return 'text-emerald-600 dark:text-emerald-400';
+    if (source === 'fact') return 'text-fuchsia-600 dark:text-fuchsia-400';
     return 'text-cyan-600 dark:text-cyan-400';
   }
 
@@ -440,6 +480,7 @@
     if (source === 'runtime') return 'border-l-amber-500/70';
     if (source === 'row') return 'border-l-violet-500/70';
     if (source === 'generated') return 'border-l-emerald-500/70';
+    if (source === 'fact') return 'border-l-fuchsia-500/70';
     return 'border-l-cyan-500/70';
   }
 
@@ -459,6 +500,7 @@
         if (binding.kind === 'generated') {
           if (!binding.generator.trim()) return false;
         }
+        if (binding.kind === 'siteFact' && !binding.key.trim()) return false;
       }
     }
     return true;
@@ -630,6 +672,15 @@
                           {summary.generated}
                         </span>
                       {/if}
+                      {#if summary.facts > 0}
+                        <span
+                          class="inline-flex items-center gap-1 rounded-sm bg-fuchsia-500/10 px-1.5 py-0.5 font-mono text-fuchsia-700 dark:text-fuchsia-400"
+                          title="From site facts"
+                        >
+                          <Database class="size-2.5" />
+                          {summary.facts}
+                        </span>
+                      {/if}
                       {#if summary.literals > 0}
                         <span
                           class="inline-flex items-center gap-1 rounded-sm bg-stone-500/10 px-1.5 py-0.5 font-mono text-stone-600 dark:text-stone-400"
@@ -683,6 +734,9 @@
           </span>
           <span class="inline-flex items-center gap-1">
             <Sparkles class="size-2.5 text-emerald-600 dark:text-emerald-400" /> generated
+          </span>
+          <span class="inline-flex items-center gap-1">
+            <Database class="size-2.5 text-fuchsia-600 dark:text-fuchsia-400" /> fact
           </span>
           <span class="inline-flex items-center gap-1">
             <span class="size-2 rounded-sm bg-stone-500/60"></span> fixed
@@ -918,8 +972,8 @@
                   </div>
 
                   <!-- Source picker -->
-                  <div class="grid grid-cols-2 gap-1 border-b bg-muted/30 p-1 sm:grid-cols-5">
-                    {#each ['fixed', 'runtime', 'generated', 'row', 'wire'] as src (src)}
+                  <div class="grid grid-cols-2 gap-1 border-b bg-muted/30 p-1 sm:grid-cols-3 lg:grid-cols-6">
+                    {#each ['fixed', 'runtime', 'generated', 'fact', 'row', 'wire'] as src (src)}
                       {@const isAllowed = allowed.includes(src as Source)}
                       {@const isActive = currentSource === src}
                       <button
@@ -941,6 +995,8 @@
                           <Keyboard class="size-3 {isActive ? sourceIconColor('runtime') : ''}" />
                         {:else if src === 'generated'}
                           <Sparkles class="size-3 {isActive ? sourceIconColor('generated') : ''}" />
+                        {:else if src === 'fact'}
+                          <Database class="size-3 {isActive ? sourceIconColor('fact') : ''}" />
                         {:else if src === 'row'}
                           <Pin class="size-3 {isActive ? sourceIconColor('row') : ''}" />
                         {:else}
@@ -1174,6 +1230,44 @@
                           {gen.description}
                         </div>
                       {/if}
+                    {:else if binding?.kind === 'siteFact'}
+                      {@const factOpts = factFieldsFor(meta.typeHint).map((f) => ({
+                        value: f.key,
+                        label: f.label,
+                        subLabel: `${f.type}${f.valueMode === 'multiple' ? '[]' : ''} · ${f.section}`,
+                      }))}
+                      <div class="space-y-3">
+                        {#if factOpts.length === 0}
+                          <div class="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500">
+                            No declared site profile fields match this input's type. Add one under
+                            Sites → Profile fields, then come back.
+                          </div>
+                        {:else}
+                          <SingleSelect
+                            options={factOpts}
+                            selected={binding.key}
+                            placeholder="Pick a site fact…"
+                            onchange={(v) =>
+                              setBinding(selectedIndex, inputName, { ...binding, key: v })}
+                          />
+                        {/if}
+                        <label class="flex items-center gap-2 text-xs">
+                          <Checkbox
+                            checked={binding.required}
+                            onCheckedChange={(c) =>
+                              setBinding(selectedIndex, inputName, {
+                                ...binding,
+                                required: Boolean(c),
+                              })}
+                          />
+                          <span class="text-muted-foreground">
+                            Required
+                            <span class="ml-1 opacity-60">
+                              (fail the step if the site has no value)
+                            </span>
+                          </span>
+                        </label>
+                      </div>
                     {:else if binding?.kind === 'priorOutput'}
                       {@const upstreamSteps = draft.steps.slice(0, selectedIndex)}
                       {@const upstreamCap = capIndex.get(

@@ -8,6 +8,7 @@ import {
   m365Identities,
   packageRuns,
   packageRunSteps,
+  siteProfileFacts,
 } from "@mspbyte/drizzle";
 import type { PackageJobData } from "@mspbyte/pipeline";
 import {
@@ -142,6 +143,26 @@ export function createPackageWorker(
         }
       }
 
+      // Load site facts once per run — packages with several `siteFact`
+      // bindings then read from an in-memory map. Empty map if the run has
+      // no siteId (siteFact bindings will fail resolution with a clear error).
+      const siteFacts = new Map<string, unknown>();
+      if (run.siteId) {
+        const factRows = await db
+          .select({
+            key: siteProfileFacts.key,
+            value: siteProfileFacts.value,
+            applicable: siteProfileFacts.applicable,
+          })
+          .from(siteProfileFacts)
+          .where(eq(siteProfileFacts.siteId, run.siteId));
+        for (const row of factRows) {
+          // Facts explicitly marked not_applicable are treated as absent.
+          if (row.applicable === "not_applicable") continue;
+          siteFacts.set(row.key, row.value);
+        }
+      }
+
       const ctxBase: Omit<CapabilityCtx, "packageRunStepId" | "generatedInputs"> = {
         encryptionKey,
         user: {
@@ -150,6 +171,7 @@ export function createPackageWorker(
           email: null,
         },
         packageRunId,
+        siteFacts,
         loadM365Identity: (id: string) => loadIdentity(db, id),
         getM365Connector: (linkId: string) =>
           getConnector(db, connectorCache, linkId, encryptionKey),
@@ -205,6 +227,7 @@ export function createPackageWorker(
           step.inputBindings,
           runtimeInputs,
           stepOutputs,
+          { siteId: run.siteId, siteFacts },
         );
         if (!resolveResult.ok) {
           await failStep(db, stepRow.id, {
@@ -430,6 +453,7 @@ function resolveBindings(
   bindings: Record<string, Binding>,
   runtimeInputs: Record<string, unknown>,
   stepOutputs: Map<number, Record<string, unknown>>,
+  runContext: { siteId: string | null; siteFacts: ReadonlyMap<string, unknown> },
 ):
   | { ok: true; value: Record<string, unknown>; generatedInputs: Set<string> }
   | { ok: false; error: string } {
@@ -486,6 +510,23 @@ function resolveBindings(
         }
         value[name] = generator.generate(parsed.data);
         generatedInputs.add(name);
+        break;
+      }
+      case "siteFact": {
+        if (!runContext.siteId) {
+          return {
+            ok: false,
+            error: `Input '${name}' reads site fact '${binding.key}' but this run has no site`,
+          };
+        }
+        const factValue = runContext.siteFacts.get(binding.key);
+        if (factValue === undefined && binding.required) {
+          return {
+            ok: false,
+            error: `Required site fact '${binding.key}' is not set on this site`,
+          };
+        }
+        value[name] = factValue;
         break;
       }
     }

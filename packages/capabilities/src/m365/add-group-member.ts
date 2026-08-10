@@ -33,11 +33,12 @@ export const m365GroupAddMember: Capability<
       required: true,
     },
     groupId: {
-      allowedBindings: ['entity', 'literal', 'runtime'],
+      allowedBindings: ['entity', 'literal', 'runtime', 'siteFact'],
       entityType: 'm365_group',
       typeHint: 'text',
       label: 'Group',
-      description: 'The Microsoft 365 group to add the user to.',
+      description:
+        'The Microsoft 365 group to add the user to. A site fact can carry a per-site standard group id.',
       required: true,
     },
     identityExternalId: {

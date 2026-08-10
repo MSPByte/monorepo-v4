@@ -43,6 +43,14 @@
     // "Global" for unscoped packages; otherwise a compact summary like
     // "2 sites" or "1 site · 1 group". Filterable + sortable.
     scope: string;
+    // Compact string lists derived from the package's steps. Kept as
+    // strings so the DataTable text columns handle sort/filter uniformly.
+    vendors: string;
+    categories: string;
+    // Full-text search haystack — includes capability names + descriptions
+    // so global search catches "reset password" even when the step's label
+    // was renamed to something opaque.
+    searchBlob: string;
     [key: string]: unknown;
   };
 
@@ -119,6 +127,8 @@
     ),
     numberColumn<PackageRow>('stepCount', 'Steps'),
     numberColumn<PackageRow>('version', 'Version'),
+    textColumn<PackageRow>('vendors', 'Vendors', 'Filter vendor'),
+    textColumn<PackageRow>('categories', 'Categories', 'Filter category'),
     textColumn<PackageRow>('scope', 'Scope', 'Search scope'),
     relativeDateColumn<PackageRow>('updatedAt', 'Updated'),
     {
@@ -199,7 +209,8 @@
       const steps = Array.isArray(p.steps)
         ? (p.steps as Array<{ capabilityId: string; label?: string }>)
         : [];
-      const names = steps.map((s) => s.label ?? capMap.get(s.capabilityId)?.name ?? s.capabilityId);
+      const stepCaps = steps.map((s) => capMap.get(s.capabilityId));
+      const names = steps.map((s, i) => s.label ?? stepCaps[i]?.name ?? s.capabilityId);
       const preview =
         names.length === 0
           ? ''
@@ -214,6 +225,20 @@
       else if (sites === 0) scope = `${groups} group${groups === 1 ? '' : 's'}`;
       else
         scope = `${sites} site${sites === 1 ? '' : 's'} · ${groups} group${groups === 1 ? '' : 's'}`;
+
+      const vendorSet = new Set(stepCaps.map((c) => c?.vendor).filter(Boolean) as string[]);
+      const categorySet = new Set(
+        stepCaps.map((c) => c?.category).filter(Boolean) as string[],
+      );
+      const vendors = [...vendorSet].sort().join(', ');
+      const categories = [...categorySet].sort().join(', ');
+      // Full-text search haystack — capability names + descriptions catch
+      // "reset password" even if the step label was renamed.
+      const capBlob = stepCaps
+        .filter(Boolean)
+        .map((c) => `${c!.name} ${c!.description ?? ''}`)
+        .join(' ');
+
       return {
         id: p.id,
         name: p.name,
@@ -224,20 +249,18 @@
         updatedAt: p.updatedAt,
         stepPreview: preview,
         scope,
+        vendors,
+        categories,
+        searchBlob: [p.name, p.description ?? '', preview, vendors, categories, capBlob]
+          .join(' ')
+          .toLowerCase(),
       };
     });
 
     // Client-side filter / search / sort — package counts are always in the
     // tens or low hundreds, so a server endpoint isn't worth building yet.
     const q = opts.globalSearch.trim().toLowerCase();
-    let filtered = q
-      ? rows.filter(
-          (r) =>
-            r.name.toLowerCase().includes(q) ||
-            r.description.toLowerCase().includes(q) ||
-            r.stepPreview.toLowerCase().includes(q)
-        )
-      : rows;
+    let filtered = q ? rows.filter((r) => r.searchBlob.includes(q)) : rows;
 
     for (const f of opts.filters) {
       filtered = filtered.filter((r) => {

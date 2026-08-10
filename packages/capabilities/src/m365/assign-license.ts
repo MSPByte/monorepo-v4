@@ -48,15 +48,15 @@ export const m365LicenseAssign: Capability<
       required: true,
     },
     skuIds: {
-      allowedBindings: ['entity', 'literal', 'runtime'],
+      allowedBindings: ['entity', 'literal', 'runtime', 'siteFact'],
       entityType: 'm365_license',
       typeHint: 'stringArray',
       label: 'Licenses to assign',
-      description: 'Pick from the tenant\'s active SKUs with live availability.',
+      description: 'Pick from the tenant\'s active SKUs with live availability, or drive from a site fact for per-site standard licensing.',
       required: true,
     },
     removeSkuIds: {
-      allowedBindings: ['entity', 'literal'],
+      allowedBindings: ['entity', 'literal', 'siteFact'],
       entityType: 'm365_license',
       typeHint: 'stringArray',
       label: 'Licenses to remove',
