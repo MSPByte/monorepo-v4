@@ -515,7 +515,7 @@
   let showPromptKeyEditor = $state<Record<string, boolean>>({});
 </script>
 
-<div class="flex size-full flex-col overflow-hidden bg-background">
+<div class="flex size-full flex-col overflow-hidden">
   <!-- Header bar -->
   <header class="border-b bg-background">
     <div class="flex flex-wrap items-center gap-3 px-6 py-3">
@@ -572,7 +572,7 @@
   <div class="grid min-h-0 flex-1 grid-cols-[320px_1fr] xl:grid-cols-[360px_1fr]">
     <!-- Canvas: node list -->
     <aside class="flex min-h-0 flex-col border-r bg-muted/20">
-      <div class="border-b bg-background/60 px-4 py-3">
+      <div class="border-b px-4 py-3">
         <div class="flex items-baseline justify-between">
           <h2 class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
             Steps
@@ -972,7 +972,9 @@
                   </div>
 
                   <!-- Source picker -->
-                  <div class="grid grid-cols-2 gap-1 border-b bg-muted/30 p-1 sm:grid-cols-3 lg:grid-cols-6">
+                  <div
+                    class="grid grid-cols-2 gap-1 border-b bg-muted/30 p-1 sm:grid-cols-3 lg:grid-cols-6"
+                  >
                     {#each ['fixed', 'runtime', 'generated', 'fact', 'row', 'wire'] as src (src)}
                       {@const isAllowed = allowed.includes(src as Source)}
                       {@const isActive = currentSource === src}
@@ -1238,7 +1240,9 @@
                       }))}
                       <div class="space-y-3">
                         {#if factOpts.length === 0}
-                          <div class="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500">
+                          <div
+                            class="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500"
+                          >
                             No declared site profile fields match this input's type. Add one under
                             Sites → Profile fields, then come back.
                           </div>
