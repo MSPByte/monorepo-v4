@@ -36,14 +36,16 @@
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import * as Select from '$lib/components/ui/select/index.js';
+  import * as Dialog from '$lib/components/ui/dialog/index.js';
+  import * as ScrollArea from '$lib/components/ui/scroll-area/index.js';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
   import Button from '$lib/components/ui/button/button.svelte';
   import { Input } from '$lib/components/ui/input';
   import { Textarea } from '$lib/components/ui/textarea';
   import { Checkbox } from '$lib/components/ui/checkbox';
   import EntityPicker from '$lib/components/domain/entity-picker.svelte';
-  import SingleSelect from '$lib/components/single-select.svelte';
   import MultiSelect from '$lib/components/multi-select.svelte';
+  import SingleSelect from '$lib/components/single-select.svelte';
   import { fieldLabel } from '$lib/utils/label';
   import {
     ArrowLeft,
@@ -61,6 +63,9 @@
     Circle,
     AlertTriangle,
     Info,
+    Search,
+    SlidersHorizontal,
+    X,
   } from '@lucide/svelte';
 
   type EntityType = 'integration_link' | 'm365_identity' | 'm365_group' | 'm365_license';
@@ -102,19 +107,19 @@
   }));
 
   const siteOptions = $derived(
-    (sitesQuery.data ?? []).map((s) => ({ value: s.id, label: s.name })),
+    (sitesQuery.data ?? []).map((s) => ({ value: s.id, label: s.name }))
   );
   const siteGroupOptions = $derived(
-    (siteGroupsQuery.data ?? []).map((g) => ({ value: g.id, label: g.name })),
+    (siteGroupsQuery.data ?? []).map((g) => ({ value: g.id, label: g.name }))
   );
 
   // Pick the first generator that supports a given input's typeHint. Today
   // that's password ↔ 'password'; more generators plug in the same way.
-  function generatorFor(typeHint: string | undefined): { id: string; defaults: Record<string, unknown> } | undefined {
+  function generatorFor(
+    typeHint: string | undefined
+  ): { id: string; defaults: Record<string, unknown> } | undefined {
     if (!typeHint) return undefined;
-    const g = (generatorsQuery.data ?? []).find((gen) =>
-      gen.appliesToTypeHints.includes(typeHint),
-    );
+    const g = (generatorsQuery.data ?? []).find((gen) => gen.appliesToTypeHints.includes(typeHint));
     return g ? { id: g.id, defaults: g.defaults as Record<string, unknown> } : undefined;
   }
 
@@ -128,22 +133,44 @@
   });
 
   const isGlobalScope = $derived(
-    draft.allowedSites.length === 0 && draft.allowedSiteGroups.length === 0,
+    draft.allowedSites.length === 0 && draft.allowedSiteGroups.length === 0
   );
 
   // Selection defaults to the first step when the package loads; -1 = meta (details).
   let selectedIndex = $state<number>(initial.steps.length > 0 ? 0 : -1);
-  let addingCapabilityId = $state('');
+  let capabilityPickerOpen = $state(false);
+  let capabilitySearch = $state('');
+  let vendorFilters = $state<string[]>([]);
+  let categoryFilters = $state<string[]>([]);
 
   const capIndex = $derived(new Map((capabilitiesQuery.data ?? []).map((c) => [c.id, c])));
 
-  const capabilityOptions = $derived(
+  const capabilityCatalog = $derived(
     (capabilitiesQuery.data ?? []).map((c) => ({
-      value: c.id,
-      label: c.name,
-      subLabel: c.category,
-    })),
+      ...c,
+      searchText: [c.name, c.vendor, c.category, c.description, c.id]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase(),
+    }))
   );
+  const capabilityVendors = $derived(
+    [...new Set(capabilityCatalog.map((c) => c.vendor))].sort((a, b) => a.localeCompare(b))
+  );
+  const capabilityCategories = $derived(
+    [...new Set(capabilityCatalog.map((c) => c.category).filter(Boolean))].sort((a, b) =>
+      a.localeCompare(b)
+    )
+  );
+  const filteredCapabilities = $derived.by(() => {
+    const query = capabilitySearch.trim().toLowerCase();
+    return capabilityCatalog.filter((c) => {
+      if (vendorFilters.length > 0 && !vendorFilters.includes(c.vendor)) return false;
+      if (categoryFilters.length > 0 && !categoryFilters.includes(c.category)) return false;
+      if (query && !c.searchText.includes(query)) return false;
+      return true;
+    });
+  });
 
   // Map an underlying binding to a UX-facing source. `entity+picker` collapses
   // into `runtime` visually — they behave identically at run time (a picker
@@ -185,7 +212,7 @@
       allowedBindings: readonly string[];
       entityType?: string;
       typeHint?: string;
-    },
+    }
   ): Binding {
     if (source === 'fixed') {
       const initialValue =
@@ -195,10 +222,7 @@
     if (source === 'runtime') {
       // If the underlying schema only allows entity+picker (no true runtime),
       // fall back to that shape so the mutation validates server-side.
-      if (
-        !meta.allowedBindings.includes('runtime') &&
-        meta.allowedBindings.includes('entity')
-      ) {
+      if (!meta.allowedBindings.includes('runtime') && meta.allowedBindings.includes('entity')) {
         return { kind: 'entity', source: 'picker', entityType: meta.entityType ?? '' };
       }
       return { kind: 'runtime', promptKey: inputName, required: true };
@@ -227,18 +251,16 @@
       allowedBindings: readonly string[];
       entityType?: string;
       typeHint?: string;
-    },
+    }
   ): Binding {
     const allowed = allowedSourcesFor(meta);
-    const preferred: Source = allowed.includes('runtime')
-      ? 'runtime'
-      : (allowed[0] ?? 'fixed');
+    const preferred: Source = allowed.includes('runtime') ? 'runtime' : (allowed[0] ?? 'fixed');
     return defaultBindingFor(preferred, inputName, meta);
   }
 
-  function addStep() {
-    if (!addingCapabilityId) return;
-    const cap = capIndex.get(addingCapabilityId);
+  function addStep(capabilityId: string) {
+    if (!capabilityId) return;
+    const cap = capIndex.get(capabilityId);
     if (!cap) return;
     const inputBindings: Record<string, Binding> = {};
     for (const [name, meta] of Object.entries(cap.inputMeta)) {
@@ -248,7 +270,28 @@
     const nextIndex = draft.steps.length;
     draft.steps = [...draft.steps, { capabilityId: cap.id, label: cap.name, inputBindings }];
     selectedIndex = nextIndex;
-    addingCapabilityId = '';
+    capabilityPickerOpen = false;
+    capabilitySearch = '';
+  }
+
+  function toggleFilter(current: string[], value: string): string[] {
+    return current.includes(value)
+      ? current.filter((entry) => entry !== value)
+      : [...current, value];
+  }
+
+  function clearCapabilityFilters() {
+    capabilitySearch = '';
+    vendorFilters = [];
+    categoryFilters = [];
+  }
+
+  function formatVendorLabel(value: string): string {
+    return value.replace(/[_-]+/g, ' ').toUpperCase();
+  }
+
+  function formatCategoryLabel(value: string): string {
+    return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
   }
 
   function addOptionalInput(stepIndex: number, inputName: string) {
@@ -276,7 +319,7 @@
           const meta = cap?.inputMeta[name];
           step.inputBindings[name] = defaultForInput(
             name,
-            meta ?? { allowedBindings: ['literal'] },
+            meta ?? { allowedBindings: ['literal'] }
           );
         }
       }
@@ -345,7 +388,7 @@
   // Outputs of a step that at least one downstream step reads. Rendered in
   // the inspector so the user can see wiring in both directions.
   function downstreamReaders(
-    stepIndex: number,
+    stepIndex: number
   ): Map<string, Array<{ toStep: number; toInput: string }>> {
     const map = new Map<string, Array<{ toStep: number; toInput: string }>>();
     for (let i = stepIndex + 1; i < draft.steps.length; i++) {
@@ -371,7 +414,7 @@
 
   function sourceHint(
     source: Source,
-    meta: { entityType?: string; typeHint?: string } | undefined,
+    meta: { entityType?: string; typeHint?: string } | undefined
   ): string {
     if (source === 'fixed') return 'Same value every run.';
     if (source === 'runtime')
@@ -421,12 +464,8 @@
     return true;
   }
 
-  const selectedStep = $derived(
-    selectedIndex >= 0 ? (draft.steps[selectedIndex] ?? null) : null,
-  );
-  const selectedCap = $derived(
-    selectedStep ? capIndex.get(selectedStep.capabilityId) : undefined,
-  );
+  const selectedStep = $derived(selectedIndex >= 0 ? (draft.steps[selectedIndex] ?? null) : null);
+  const selectedCap = $derived(selectedStep ? capIndex.get(selectedStep.capabilityId) : undefined);
 
   // Inspector: prompt-key hint. When the promptKey differs from the input
   // name the user is doing something intentional (dedup across steps) — we
@@ -609,32 +648,29 @@
 
         <!-- Add step control -->
         <div class="border-t bg-background/60 p-3">
-          <div class="flex items-center gap-2">
-            <div class="min-w-0 flex-1">
-              <SingleSelect
-                options={capabilityOptions}
-                selected={addingCapabilityId}
-                placeholder="Add a capability…"
-                onchange={(v) => (addingCapabilityId = v)}
-              />
-            </div>
-            <Button
-              size="sm"
-              class="h-9 shrink-0 gap-1"
-              disabled={!addingCapabilityId}
-              onclick={addStep}
+          <Button
+            variant="outline"
+            class="h-auto w-full items-center justify-between gap-3 overflow-hidden px-3 py-3 text-left"
+            onclick={() => (capabilityPickerOpen = true)}
+          >
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-sm font-medium text-foreground">
+                Add capability
+              </span>
+              <span class="block text-[11px] text-muted-foreground">Browse catalog</span>
+            </span>
+            <span
+              class="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[10px] font-mono text-muted-foreground"
             >
-              <Plus class="size-3.5" />
-              Add
-            </Button>
-          </div>
+              <SlidersHorizontal class="size-3" />
+              {capabilitiesQuery.data?.length ?? 0}
+            </span>
+          </Button>
         </div>
       </div>
 
       <!-- Legend anchor -->
-      <div
-        class="border-t bg-background/40 px-4 py-2.5 text-[10px] text-muted-foreground"
-      >
+      <div class="border-t bg-background/40 px-4 py-2.5 text-[10px] text-muted-foreground">
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono">
           <span class="inline-flex items-center gap-1">
             <Keyboard class="size-2.5 text-amber-600 dark:text-amber-400" /> prompt
@@ -663,8 +699,8 @@
           <div>
             <h2 class="text-lg font-semibold">Package details</h2>
             <p class="mt-1 text-sm text-muted-foreground">
-              Give the package a name your team will recognize and describe what it does. This
-              copy shows up in the runner and in audit logs.
+              Give the package a name your team will recognize and describe what it does. This copy
+              shows up in the runner and in audit logs.
             </p>
           </div>
           <div class="space-y-2">
@@ -834,7 +870,7 @@
                 {@const allowed = allowedSourcesFor(meta)}
                 <div
                   class="rounded-lg border border-l-[3px] bg-card {sourceBorderClass(
-                    currentSource,
+                    currentSource
                   )}"
                 >
                   <div class="flex items-start justify-between gap-3 border-b px-4 py-3">
@@ -842,7 +878,9 @@
                       <div class="flex flex-wrap items-center gap-2">
                         <span class="text-sm font-medium">{label}</span>
                         {#if !optional}
-                          <span class="text-[10px] font-semibold uppercase tracking-wider text-rose-600 dark:text-rose-500">
+                          <span
+                            class="text-[10px] font-semibold uppercase tracking-wider text-rose-600 dark:text-rose-500"
+                          >
                             Required
                           </span>
                         {:else}
@@ -851,7 +889,9 @@
                           </span>
                         {/if}
                         {#if meta.sensitive}
-                          <span class="text-[10px] uppercase tracking-wider text-amber-600 dark:text-amber-500">
+                          <span
+                            class="text-[10px] uppercase tracking-wider text-amber-600 dark:text-amber-500"
+                          >
                             Sensitive
                           </span>
                         {/if}
@@ -898,13 +938,9 @@
                         {#if src === 'fixed'}
                           <Circle class="size-3 {isActive ? sourceIconColor('fixed') : ''}" />
                         {:else if src === 'runtime'}
-                          <Keyboard
-                            class="size-3 {isActive ? sourceIconColor('runtime') : ''}"
-                          />
+                          <Keyboard class="size-3 {isActive ? sourceIconColor('runtime') : ''}" />
                         {:else if src === 'generated'}
-                          <Sparkles
-                            class="size-3 {isActive ? sourceIconColor('generated') : ''}"
-                          />
+                          <Sparkles class="size-3 {isActive ? sourceIconColor('generated') : ''}" />
                         {:else if src === 'row'}
                           <Pin class="size-3 {isActive ? sourceIconColor('row') : ''}" />
                         {:else}
@@ -977,7 +1013,9 @@
                         />
                       {/if}
                     {:else if binding?.kind === 'runtime'}
-                      <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                      <div
+                        class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+                      >
                         {#if meta.entityType}
                           A picker for
                           <span class="font-mono">{meta.entityType.replace('_', ' ')}</span>
@@ -996,9 +1034,8 @@
                           (showPromptKeyEditor[`${selectedIndex}:${inputName}`] =
                             !showPromptKeyEditor[`${selectedIndex}:${inputName}`])}
                       >
-                        {showPromptKeyEditor[`${selectedIndex}:${inputName}`]
-                          ? 'Hide'
-                          : 'Show'} prompt key
+                        {showPromptKeyEditor[`${selectedIndex}:${inputName}`] ? 'Hide' : 'Show'} prompt
+                        key
                         <span class="ml-1 font-mono opacity-60">
                           ({binding.promptKey})
                         </span>
@@ -1014,7 +1051,9 @@
                                 promptKey: (e.target as HTMLInputElement).value,
                               })}
                           />
-                          <label class="flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
+                          <label
+                            class="flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground"
+                          >
                             <Checkbox
                               checked={binding.required}
                               onCheckedChange={(c) =>
@@ -1032,7 +1071,9 @@
                       {/if}
                     {:else if binding?.kind === 'entity' && binding.source === 'picker'}
                       <!-- Legacy shape: entity+picker. Renders same UX as runtime. -->
-                      <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                      <div
+                        class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+                      >
                         A picker will appear when this runs.
                       </div>
                     {:else if binding?.kind === 'entity' && binding.source === 'row-context'}
@@ -1053,10 +1094,12 @@
                       </p>
                     {:else if binding?.kind === 'generated'}
                       {@const gen = (generatorsQuery.data ?? []).find(
-                        (g) => g.id === binding.generator,
+                        (g) => g.id === binding.generator
                       )}
                       {#if !gen}
-                        <div class="rounded-md border border-dashed border-rose-500/40 bg-rose-500/5 px-3 py-2 text-xs text-rose-700 dark:text-rose-500">
+                        <div
+                          class="rounded-md border border-dashed border-rose-500/40 bg-rose-500/5 px-3 py-2 text-xs text-rose-700 dark:text-rose-500"
+                        >
                           Generator "{binding.generator}" not found. Pick another source.
                         </div>
                       {:else if binding.generator === 'password'}
@@ -1085,9 +1128,7 @@
                               }}
                               class="max-w-32"
                             />
-                            <span class="font-mono text-[11px] text-muted-foreground">
-                              chars
-                            </span>
+                            <span class="font-mono text-[11px] text-muted-foreground"> chars </span>
                           </div>
                           <label class="flex items-center gap-2 text-xs">
                             <Checkbox
@@ -1121,20 +1162,22 @@
                             </span>
                           </label>
                           <p class="text-[11px] text-muted-foreground">
-                            A fresh password is generated for every run. If it needs to be
-                            captured, wire the step's <span class="font-mono">temporaryPassword</span>
+                            A fresh password is generated for every run. If it needs to be captured,
+                            wire the step's <span class="font-mono">temporaryPassword</span>
                             output downstream.
                           </p>
                         </div>
                       {:else}
-                        <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                        <div
+                          class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+                        >
                           {gen.description}
                         </div>
                       {/if}
                     {:else if binding?.kind === 'priorOutput'}
                       {@const upstreamSteps = draft.steps.slice(0, selectedIndex)}
                       {@const upstreamCap = capIndex.get(
-                        upstreamSteps[binding.stepPosition]?.capabilityId ?? '',
+                        upstreamSteps[binding.stepPosition]?.capabilityId ?? ''
                       )}
                       {@const stepOpts = upstreamSteps.map((s, i) => ({
                         value: String(i),
@@ -1160,7 +1203,7 @@
                             selected={String(binding.stepPosition)}
                             placeholder="Prior step…"
                             disableSort
-                            onchange={(v) =>
+                            onchange={(v: string) =>
                               setBinding(selectedIndex, inputName, {
                                 ...binding,
                                 stepPosition: Number(v),
@@ -1171,7 +1214,7 @@
                             options={outputOpts}
                             selected={binding.path}
                             placeholder="Output field…"
-                            onchange={(v) =>
+                            onchange={(v: string) =>
                               setBinding(selectedIndex, inputName, { ...binding, path: v })}
                           />
                         </div>
@@ -1191,7 +1234,7 @@
                     options={availableOptional}
                     selected=""
                     placeholder="Add an optional field…"
-                    onchange={(v) => v && addOptionalInput(selectedIndex, v)}
+                    onchange={(v: string) => v && addOptionalInput(selectedIndex, v)}
                   />
                 </div>
                 <span class="whitespace-nowrap text-xs text-muted-foreground">
@@ -1234,7 +1277,7 @@
                                     u.toInput,
                                     capIndex.get(draft.steps[u.toStep]!.capabilityId)?.inputMeta[
                                       u.toInput
-                                    ]?.label,
+                                    ]?.label
                                   )}
                                   <ArrowUpRight class="size-3" />
                                 </button>
@@ -1253,7 +1296,8 @@
           <div class="flex items-center justify-between gap-3 pt-2 text-xs text-muted-foreground">
             <div class="inline-flex items-center gap-1.5">
               <Database class="size-3.5" />
-              Est. cost per run: <span class="font-mono tabular-nums text-foreground">
+              Est. cost per run:
+              <span class="font-mono tabular-nums text-foreground">
                 ${cap.defaultUnitPrice.toFixed(4)}
               </span>
             </div>
@@ -1266,3 +1310,215 @@
   </div>
 </div>
 
+<Dialog.Root bind:open={capabilityPickerOpen}>
+  <Dialog.Content
+    class="flex h-[min(88vh,820px)] w-[min(96vw,1320px)] max-w-[min(96vw,1320px)] flex-col overflow-hidden p-0 sm:max-w-[min(96vw,1320px)]"
+  >
+    <Dialog.Header class="border-b bg-muted/20 px-6 py-5">
+      <Dialog.Title class="text-xl font-semibold tracking-tight">Add capability</Dialog.Title>
+      <Dialog.Description>
+        Search the catalog, narrow the list, then insert the next step.
+      </Dialog.Description>
+    </Dialog.Header>
+
+    <div class="border-b bg-background px-6 py-4">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div class="relative max-w-2xl flex-1">
+          <Search
+            class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            value={capabilitySearch}
+            oninput={(e) => (capabilitySearch = (e.target as HTMLInputElement).value)}
+            placeholder="Search capability, vendor, category, or id"
+            class="h-11 rounded-lg border-border/70 pl-9 text-sm"
+          />
+        </div>
+        <div class="flex items-center gap-2 text-xs text-muted-foreground">
+          <span class="rounded-full border border-border bg-muted/30 px-2.5 py-1 font-mono">
+            {filteredCapabilities.length} shown
+          </span>
+          <span class="rounded-full border border-border bg-muted/30 px-2.5 py-1 font-mono">
+            {capabilityCatalog.length} total
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid min-h-0 flex-1 lg:grid-cols-[280px_1fr]">
+      <aside class="flex min-h-0 flex-col border-r bg-muted/[0.18]">
+        <div class="flex items-center justify-between border-b px-5 py-4">
+          <div>
+            <div
+              class="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground"
+            >
+              Filters
+            </div>
+            <div class="mt-1 text-xs text-muted-foreground">
+              {vendorFilters.length + categoryFilters.length} active
+            </div>
+          </div>
+          <button
+            type="button"
+            class="rounded-full px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+            onclick={clearCapabilityFilters}
+            disabled={!capabilitySearch &&
+              vendorFilters.length === 0 &&
+              categoryFilters.length === 0}
+          >
+            Clear
+          </button>
+        </div>
+
+        <ScrollArea.Root class="min-h-0 flex-1">
+          <div class="space-y-6 p-5">
+            <div class="space-y-3">
+              <div
+                class="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
+              >
+                Vendors
+              </div>
+              <div class="flex flex-wrap gap-2">
+                {#each capabilityVendors as vendor}
+                  <button
+                    type="button"
+                    class="rounded-full border px-3 py-1.5 text-[11px] font-semibold tracking-[0.08em] transition-colors {vendorFilters.includes(
+                      vendor
+                    )
+                      ? 'border-primary/40 bg-primary text-primary-foreground'
+                      : 'border-border bg-background text-foreground/80 hover:border-foreground/20 hover:bg-background'}"
+                    onclick={() => (vendorFilters = toggleFilter(vendorFilters, vendor))}
+                  >
+                    {formatVendorLabel(vendor)}
+                  </button>
+                {/each}
+              </div>
+            </div>
+
+            <div class="space-y-3">
+              <div
+                class="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
+              >
+                Categories
+              </div>
+              <div class="flex flex-wrap gap-2">
+                {#each capabilityCategories as category}
+                  <button
+                    type="button"
+                    class="rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors {categoryFilters.includes(
+                      category
+                    )
+                      ? 'border-primary/20 bg-primary/12 text-primary'
+                      : 'border-border bg-background text-foreground/80 hover:border-foreground/20 hover:bg-background'}"
+                    onclick={() => (categoryFilters = toggleFilter(categoryFilters, category))}
+                  >
+                    {formatCategoryLabel(category)}
+                  </button>
+                {/each}
+              </div>
+            </div>
+          </div>
+        </ScrollArea.Root>
+      </aside>
+
+      <div class="flex min-h-0 flex-col">
+        <div
+          class="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/[0.08] px-6 py-3"
+        >
+          <div class="text-sm font-medium text-foreground">Capability results</div>
+          {#if capabilitySearch || vendorFilters.length > 0 || categoryFilters.length > 0}
+            <div class="flex flex-wrap items-center gap-2">
+              {#each vendorFilters as vendor}
+                <span
+                  class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-[11px] font-semibold tracking-[0.08em] text-primary"
+                >
+                  {formatVendorLabel(vendor)}
+                  <button
+                    type="button"
+                    class="text-primary/70 hover:text-primary"
+                    onclick={() => (vendorFilters = vendorFilters.filter((v) => v !== vendor))}
+                    aria-label={`Remove ${vendor} vendor filter`}
+                  >
+                    <X class="size-3" />
+                  </button>
+                </span>
+              {/each}
+              {#each categoryFilters as category}
+                <span
+                  class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-[11px] text-primary"
+                >
+                  {formatCategoryLabel(category)}
+                  <button
+                    type="button"
+                    class="text-primary/70 hover:text-primary"
+                    onclick={() =>
+                      (categoryFilters = categoryFilters.filter((c) => c !== category))}
+                    aria-label={`Remove ${category} category filter`}
+                  >
+                    <X class="size-3" />
+                  </button>
+                </span>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <ScrollArea.Root class="min-h-0 flex-1">
+          <div class="p-4 md:p-5">
+            {#if filteredCapabilities.length === 0}
+              <div class="rounded-xl border border-dashed p-10 text-center">
+                <p class="text-sm font-medium">No matching capabilities</p>
+                <p class="mt-1 text-xs text-muted-foreground">
+                  Adjust the search or clear some filters to see more results.
+                </p>
+              </div>
+            {:else}
+              <div class="grid gap-3 xl:grid-cols-2">
+                {#each filteredCapabilities as capability (capability.id)}
+                  <button
+                    type="button"
+                    class="w-full rounded-xl border border-border/80 bg-background p-4 text-left transition-colors hover:border-primary/30 hover:bg-muted/20"
+                    onclick={() => addStep(capability.id)}
+                  >
+                    <div class="flex h-full items-start justify-between gap-4">
+                      <div class="min-w-0 flex-1">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <span class="text-sm font-semibold text-foreground">
+                            {capability.name}
+                          </span>
+                          <span
+                            class="rounded-full bg-foreground px-2.5 py-1 text-[10px] font-semibold tracking-[0.12em] text-background"
+                          >
+                            {formatVendorLabel(capability.vendor)}
+                          </span>
+                          <span
+                            class="rounded-full border border-border px-2.5 py-1 text-[10px] font-medium text-muted-foreground"
+                          >
+                            {formatCategoryLabel(capability.category)}
+                          </span>
+                        </div>
+                        {#if capability.description}
+                          <p class="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
+                            {capability.description}
+                          </p>
+                        {/if}
+                        <div class="mt-3 font-mono text-[11px] text-muted-foreground/80">
+                          {capability.id}
+                        </div>
+                      </div>
+                      <span
+                        class="shrink-0 rounded-full border border-primary/20 bg-primary/8 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-primary"
+                      >
+                        Add
+                      </span>
+                    </div>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </ScrollArea.Root>
+      </div>
+    </div>
+  </Dialog.Content>
+</Dialog.Root>
