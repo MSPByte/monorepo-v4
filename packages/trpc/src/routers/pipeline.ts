@@ -9,7 +9,11 @@ import {
   integrations,
   sites
 } from '@mspbyte/drizzle';
-import { enqueueIngestionJob, hasActiveIngestionRun } from '@mspbyte/pipeline';
+import {
+  enqueueIngestionJob,
+  hasActiveIngestionRun,
+  reconcileStaleIngestionRuns
+} from '@mspbyte/pipeline';
 import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 
@@ -203,6 +207,7 @@ export const pipelineRouter = t.router({
   syncStatus: pipelineProcedure
     .input(z.object({ linkId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
+      await reconcileStaleIngestionRuns(ctx.db, ACTIVE_RUN_STALE_MS, { linkId: input.linkId });
       const [contexts, runs] = await Promise.all([
         ctx.db.select().from(syncContext).where(eq(syncContext.linkId, input.linkId)),
         ctx.db
@@ -223,6 +228,7 @@ export const pipelineRouter = t.router({
       })
     )
     .query(async ({ ctx, input }) => {
+      await reconcileStaleIngestionRuns(ctx.db, ACTIVE_RUN_STALE_MS, { linkId: input.linkId });
       const conditions = input.linkId ? [eq(syncRuns.linkId, input.linkId)] : [];
       return ctx.db
         .select()

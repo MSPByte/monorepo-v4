@@ -18,6 +18,8 @@ export type SchedulePlan =
   | { shouldSchedule: false; reason: string }
   | { shouldSchedule: true; mode: SyncMode; delayMs: number; cursor?: string; reason: string };
 
+export type SyncContextRow = typeof syncContext.$inferSelect;
+
 // Backoff schedule for consecutive failures. On the Nth consecutive failure
 // the next attempt is delayed by schedule[N-1] (or the last value once we
 // run past the end). Keeps a broken integration retrying periodically
@@ -34,11 +36,6 @@ export async function planNextRun(
   db: Db,
   ctx: ScheduleContext,
 ): Promise<SchedulePlan> {
-  const facetConfig = getFacetSyncConfig(ctx.integrationId, ctx.facet);
-  if (facetConfig?.enabled === false) {
-    return { shouldSchedule: false, reason: "facet disabled" };
-  }
-
   const [context] = await db
     .select()
     .from(syncContext)
@@ -50,6 +47,18 @@ export async function planNextRun(
       ),
     )
     .limit(1);
+
+  return planNextRunFromContext(ctx, context);
+}
+
+export function planNextRunFromContext(
+  ctx: ScheduleContext,
+  context: SyncContextRow | undefined,
+): SchedulePlan {
+  const facetConfig = getFacetSyncConfig(ctx.integrationId, ctx.facet);
+  if (facetConfig?.enabled === false) {
+    return { shouldSchedule: false, reason: "facet disabled" };
+  }
 
   const now = Date.now();
   const consecutiveFailures = context?.consecutiveFailures ?? 0;
@@ -159,7 +168,14 @@ export async function scheduleNextRun(
     integrationId: target.integrationId,
     facet: target.facet,
   });
+  return schedulePlannedRun(redis, target, plan);
+}
 
+export async function schedulePlannedRun(
+  redis: RedisConnection,
+  target: ScheduleTarget,
+  plan: SchedulePlan,
+): Promise<void> {
   if (!plan.shouldSchedule) {
     logger.debug("Skipping schedule for facet", {
       orgId: target.orgId,

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import type { Redis } from "ioredis";
-import { syncRuns, integrationLinks } from "@mspbyte/drizzle";
+import { syncRuns, syncRunStages, integrationLinks } from "@mspbyte/drizzle";
 import {
   assertBullMqName,
   ingestionRootJobId,
@@ -197,6 +197,52 @@ export async function hasActiveIngestionRun(
   return active.has(type);
 }
 
+export async function reconcileStaleIngestionRuns(
+  db: Db,
+  staleAfterMs: number,
+  params: { linkId?: string } = {},
+): Promise<string[]> {
+  const staleBefore = new Date(Date.now() - staleAfterMs).toISOString();
+  const where = and(
+    params.linkId ? eq(syncRuns.linkId, params.linkId) : undefined,
+    inArray(syncRuns.status, ["pending", "queued", "running"]),
+    or(
+      lt(syncRuns.createdAt, staleBefore),
+      and(isNull(syncRuns.createdAt), lt(syncRuns.startedAt, staleBefore)),
+    ),
+  );
+
+  const staleRuns = await db
+    .select({ id: syncRuns.id })
+    .from(syncRuns)
+    .where(where);
+
+  const staleIds = staleRuns.map((run: { id: string }) => run.id);
+  if (staleIds.length === 0) return [];
+
+  const finishedAt = new Date().toISOString();
+  await db
+    .update(syncRuns)
+    .set({ status: "failed", finishedAt })
+    .where(inArray(syncRuns.id, staleIds));
+
+  await db
+    .update(syncRunStages)
+    .set({
+      status: "failed",
+      finishedAt,
+      error: "Marked failed after exceeding ingestion stale timeout",
+    })
+    .where(
+      and(
+        inArray(syncRunStages.syncRunId, staleIds),
+        eq(syncRunStages.status, "running"),
+      ),
+    );
+
+  return staleIds;
+}
+
 // Batched version of hasActiveIngestionRun — one query per link returns the
 // set of facet types with an in-flight run. Stale runs are marked failed as
 // a side effect so the caller sees only fresh in-flight work.
@@ -205,8 +251,10 @@ export async function getActiveIngestionRunTypes(
   linkId: string,
   staleAfterMs: number,
 ): Promise<Set<string>> {
+  await reconcileStaleIngestionRuns(db, staleAfterMs, { linkId });
+
   const runs = await db
-    .select({ id: syncRuns.id, type: syncRuns.type, createdAt: syncRuns.createdAt })
+    .select({ type: syncRuns.type })
     .from(syncRuns)
     .where(
       and(
@@ -214,24 +262,8 @@ export async function getActiveIngestionRunTypes(
         inArray(syncRuns.status, ["pending", "queued", "running"]),
       ),
     );
-
-  const staleBefore = Date.now() - staleAfterMs;
   const active = new Set<string>();
-  const staleIds: string[] = [];
-
-  for (const run of runs as Array<{ id: string; type: string; createdAt: string | Date }>) {
-    const createdMs =
-      run.createdAt instanceof Date ? run.createdAt.getTime() : new Date(run.createdAt).getTime();
-    if (createdMs > staleBefore) active.add(run.type);
-    else staleIds.push(run.id);
-  }
-
-  if (staleIds.length > 0) {
-    await db
-      .update(syncRuns)
-      .set({ status: "failed", finishedAt: new Date().toISOString() })
-      .where(inArray(syncRuns.id, staleIds));
-  }
+  for (const run of runs as Array<{ type: string }>) active.add(run.type);
 
   return active;
 }

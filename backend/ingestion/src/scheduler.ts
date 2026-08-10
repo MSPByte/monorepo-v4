@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import {
   getCatalogDb,
   getTenantServiceDbByOrgId,
@@ -24,7 +24,7 @@ import { logger } from "./logger.js";
 import { serializeError } from "./errors.js";
 import type { RedisConnection } from "./redis.js";
 import { maybeGetAdapter } from "./adapters/registry.js";
-import { scheduleNextRun } from "./schedule-planner.js";
+import { planNextRunFromContext, schedulePlannedRun, type SyncContextRow } from "./schedule-planner.js";
 
 type Db = any;
 
@@ -90,6 +90,10 @@ async function scanOrg(
   // the ingest queue and build a Set of (linkId::facet) keys we can check
   // inline. Cheap even for hundreds of scheduled facets.
   const scheduled = await getScheduledIngestionKeys(redis, org.id);
+  const contextByKey = await loadSyncContextsForLinks(
+    tenant.db,
+    rows.map((row: { link: { id: string } }) => row.link.id),
+  );
 
   for (const row of rows) {
     const adapter = maybeGetAdapter(row.link.integrationId);
@@ -133,7 +137,7 @@ async function scanOrg(
       if (scheduled.has(scheduledKey(row.link.id, facet))) continue;
       if (activeTypes.has(facet)) continue;
 
-      await scheduleNextRun(redis, tenant.db, {
+      const target = {
         orgId: org.id,
         linkId: row.link.id,
         integrationId: row.link.integrationId,
@@ -142,7 +146,16 @@ async function scanOrg(
         linkMeta: row.link.meta,
         integrationConfig: row.integrationConfig,
         facet,
-      });
+      };
+      const plan = planNextRunFromContext(
+        {
+          linkId: row.link.id,
+          integrationId: row.link.integrationId,
+          facet,
+        },
+        contextByKey.get(syncContextKey(row.link.id, row.link.integrationId, facet)),
+      );
+      await schedulePlannedRun(redis, target, plan);
     }
   }
 }
@@ -246,6 +259,29 @@ async function listActiveLinks(db: Db) {
     .from(integrationLinks)
     .innerJoin(integrations, eq(integrations.id, integrationLinks.integrationId))
     .where(and(eq(integrationLinks.status, "active"), isNull(integrations.deletedAt)));
+}
+
+async function loadSyncContextsForLinks(
+  db: Db,
+  linkIds: string[],
+): Promise<Map<string, SyncContextRow>> {
+  if (linkIds.length === 0) return new Map();
+
+  const contexts = await db
+    .select()
+    .from(syncContext)
+    .where(inArray(syncContext.linkId, [...new Set(linkIds)]));
+
+  return new Map(
+    (contexts as SyncContextRow[]).map((context) => [
+      syncContextKey(context.linkId, context.integrationId, context.type),
+      context,
+    ]),
+  );
+}
+
+function syncContextKey(linkId: string, integrationId: string, type: string): string {
+  return `${linkId}::${integrationId}::${type}`;
 }
 
 function activeOrgWhere() {

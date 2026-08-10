@@ -274,16 +274,10 @@ export async function evaluatePolicies(
     failedCt: 0
   };
   const activeAssignments = await loadAssignmentsForRun(db, params);
-  const setItems = (await db.select().from(policySetItems)) as PolicySetItemRow[];
-  const dependencyRows = (await db.select().from(policyDependencies)) as PolicyDependencyRow[];
-  const policyRows = (await db
-    .select()
-    .from(policies)
-    .where(eq(policies.enabled, true))) as PolicyRow[];
+  const metadata = await loadPolicyMetadata(db, activeAssignments);
   const policyById = new Map<string, PolicyRow>(
-    policyRows.map((policy: PolicyRow) => [policy.id, policy])
+    metadata.policyRows.map((policy: PolicyRow) => [policy.id, policy])
   );
-  const setPolicyIds = groupSetItems(setItems);
   const scope = await loadScopeContext(db, params.linkId, params.siteId);
   const triggerTable = FACET_TABLE_MAP[params.type as ProviderFacet];
 
@@ -293,7 +287,7 @@ export async function evaluatePolicies(
     metrics.assignmentsEvaluated++;
     const policyIds =
       assignment.subjectType === 'policy_set' && assignment.policySetId
-        ? (setPolicyIds.get(assignment.policySetId) ?? [])
+        ? (metadata.setPolicyIds.get(assignment.policySetId) ?? [])
         : assignment.policyId
           ? [assignment.policyId]
           : [];
@@ -340,8 +334,8 @@ export async function evaluatePolicies(
     scope
   });
 
-  const chosenPairs = orderPolicyPairs([...chosen.values()], dependencyRows);
-  const childToParents = groupPolicyDependencies(dependencyRows);
+  const chosenPairs = orderPolicyPairs([...chosen.values()], metadata.dependencyRows);
+  const childToParents = groupPolicyDependencies(metadata.dependencyRows);
   const relevantParentIds = [...new Set(chosenPairs.flatMap((pair) => childToParents.get(pair.policy.id) ?? []))];
   const activeBlockingPolicies = await loadActiveBlockingPolicies(db, {
     parentPolicyIds: relevantParentIds,
@@ -376,6 +370,64 @@ export async function evaluatePolicies(
   }
 
   return metrics;
+}
+
+async function loadPolicyMetadata(
+  db: Db,
+  assignments: AssignmentRow[]
+): Promise<{
+  setPolicyIds: Map<string, string[]>;
+  dependencyRows: PolicyDependencyRow[];
+  policyRows: PolicyRow[];
+}> {
+  const directPolicyIds = new Set<string>();
+  const policySetIds = new Set<string>();
+
+  for (const assignment of assignments) {
+    if (assignment.subjectType === 'policy' && assignment.policyId) {
+      directPolicyIds.add(assignment.policyId);
+    }
+    if (assignment.subjectType === 'policy_set' && assignment.policySetId) {
+      policySetIds.add(assignment.policySetId);
+    }
+  }
+
+  const setItems = policySetIds.size
+    ? ((await db
+        .select()
+        .from(policySetItems)
+        .where(inArray(policySetItems.policySetId, [...policySetIds]))) as PolicySetItemRow[])
+    : [];
+  const setPolicyIds = groupSetItems(setItems);
+
+  const referencedPolicyIds = new Set<string>(directPolicyIds);
+  for (const policyId of setItems.map((item) => item.policyId)) referencedPolicyIds.add(policyId);
+
+  if (referencedPolicyIds.size === 0) {
+    return { setPolicyIds, dependencyRows: [], policyRows: [] };
+  }
+
+  const policyRows = (await db
+    .select()
+    .from(policies)
+    .where(and(eq(policies.enabled, true), inArray(policies.id, [...referencedPolicyIds])))) as PolicyRow[];
+
+  const enabledPolicyIds = new Set(policyRows.map((policy) => policy.id));
+  if (enabledPolicyIds.size === 0) {
+    return { setPolicyIds, dependencyRows: [], policyRows: [] };
+  }
+
+  const dependencyRows = (await db
+    .select()
+    .from(policyDependencies)
+    .where(
+      or(
+        inArray(policyDependencies.parentPolicyId, [...enabledPolicyIds]),
+        inArray(policyDependencies.childPolicyId, [...enabledPolicyIds])
+      )
+    )) as PolicyDependencyRow[];
+
+  return { setPolicyIds, dependencyRows, policyRows };
 }
 
 async function loadScopeContext(
