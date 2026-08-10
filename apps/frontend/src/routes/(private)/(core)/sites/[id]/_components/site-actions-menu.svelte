@@ -142,9 +142,8 @@
     <AlertDialog.Header>
       <AlertDialog.Title>Delete this site?</AlertDialog.Title>
       <AlertDialog.Description>
-        This permanently removes the site profile, notes, stack entries, and other cascading
-        records. Assets, people, and integrations linked to this site must be reassigned or removed
-        first, or the deletion will fail.
+        This permanently removes the site and cleans up related records automatically. Reusable
+        records keep their history by clearing the site association where possible.
       </AlertDialog.Description>
     </AlertDialog.Header>
 

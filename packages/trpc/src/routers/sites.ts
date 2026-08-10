@@ -3,10 +3,14 @@ import { z } from 'zod';
 import { and, count, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import {
   assets,
+  coveEndpoints,
   customerLogs,
+  dattoEndpoints,
   entitySources,
   findings,
+  haloPsaRecurringItems,
   integrationLinks,
+  m365Identities,
   people,
   siteProfileFacts,
   siteProfileFields,
@@ -15,7 +19,12 @@ import {
   siteStackEntries,
   sites,
   sitesWithCounts,
-  sophosFirewallsWithSite
+  sophosEndpointMigrations,
+  sophosEndpoints,
+  sophosFirewalls,
+  sophosFirewallsWithSite,
+  sophosLicenses,
+  sophosTamperProtection
 } from '@mspbyte/drizzle';
 import {
   ActionLabels,
@@ -109,11 +118,10 @@ export const sitesRouter = t.router({
         totalAssets: 0,
         totalPeople: 0,
         severity: { critical: 0, high: 0, medium: 0, low: 0 },
-        hotspot: null as null | { id: string; name: string; openFindingCount: number },
+        hotspot: null as null | { id: string; name: string; openFindingCount: number }
       };
     }
-    const scopeWhere =
-      scope === 'all' ? undefined : inArray(sitesWithCounts.id, [...scope]);
+    const scopeWhere = scope === 'all' ? undefined : inArray(sitesWithCounts.id, [...scope]);
 
     const [totalsRow, severityRows, hotspotRow] = await Promise.all([
       ctx.db
@@ -122,23 +130,23 @@ export const sitesRouter = t.router({
           connectedSites: sql<number>`count(*) filter (where coalesce(array_length(${sitesWithCounts.sources}, 1), 0) > 0)::int`,
           sitesWithFindings: sql<number>`count(*) filter (where ${sitesWithCounts.openFindingCount} > 0)::int`,
           totalAssets: sql<number>`coalesce(sum(${sitesWithCounts.assetCount}), 0)::int`,
-          totalPeople: sql<number>`coalesce(sum(${sitesWithCounts.peopleCount}), 0)::int`,
+          totalPeople: sql<number>`coalesce(sum(${sitesWithCounts.peopleCount}), 0)::int`
         })
         .from(sitesWithCounts)
         .where(scopeWhere)
-        .catch(
-          () => [{
+        .catch(() => [
+          {
             totalSites: 0,
             connectedSites: 0,
             sitesWithFindings: 0,
             totalAssets: 0,
-            totalPeople: 0,
-          }],
-        ),
+            totalPeople: 0
+          }
+        ]),
       ctx.db
         .select({
           severity: findings.severity,
-          count: sql<number>`count(*)::int`,
+          count: sql<number>`count(*)::int`
         })
         .from(findings)
         .where(
@@ -146,10 +154,8 @@ export const sitesRouter = t.router({
             inArray(findings.status, [...OPEN_STATUSES]),
             // Only count findings that map to a site — the portfolio strip
             // shouldn't include unattached findings.
-            scope === 'all'
-              ? isNotNull(findings.siteId)
-              : inArray(findings.siteId, [...scope]),
-          ) as never,
+            scope === 'all' ? isNotNull(findings.siteId) : inArray(findings.siteId, [...scope])
+          ) as never
         )
         .groupBy(findings.severity)
         .catch(() => [] as { severity: number; count: number }[]),
@@ -157,13 +163,13 @@ export const sitesRouter = t.router({
         .select({
           id: sitesWithCounts.id,
           name: sitesWithCounts.name,
-          openFindingCount: sitesWithCounts.openFindingCount,
+          openFindingCount: sitesWithCounts.openFindingCount
         })
         .from(sitesWithCounts)
         .where(scopeWhere)
         .orderBy(desc(sitesWithCounts.openFindingCount))
         .limit(1)
-        .catch(() => [] as { id: string; name: string; openFindingCount: number }[]),
+        .catch(() => [] as { id: string; name: string; openFindingCount: number }[])
     ]);
 
     const severity = { critical: 0, high: 0, medium: 0, low: 0 };
@@ -179,11 +185,10 @@ export const sitesRouter = t.router({
       connectedSites: 0,
       sitesWithFindings: 0,
       totalAssets: 0,
-      totalPeople: 0,
+      totalPeople: 0
     };
 
-    const hotspot =
-      hotspotRow[0] && hotspotRow[0].openFindingCount > 0 ? hotspotRow[0] : null;
+    const hotspot = hotspotRow[0] && hotspotRow[0].openFindingCount > 0 ? hotspotRow[0] : null;
 
     return { ...totals, severity, hotspot };
   }),
@@ -685,11 +690,7 @@ export const sitesRouter = t.router({
     )
     .mutation(async ({ ctx, input }): Promise<SiteRow> => {
       requireSitePermission(ctx, 'Sites.Write');
-      const [existing] = await ctx.db
-        .select()
-        .from(sites)
-        .where(eq(sites.id, input.id))
-        .limit(1);
+      const [existing] = await ctx.db.select().from(sites).where(eq(sites.id, input.id)).limit(1);
       if (!existing) throw new TRPCError({ code: 'NOT_FOUND' });
 
       if (existing.name === input.name) return existing;
@@ -716,15 +717,64 @@ export const sitesRouter = t.router({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       requireSitePermission(ctx, 'Sites.Delete');
-      const [existing] = await ctx.db
-        .select()
-        .from(sites)
-        .where(eq(sites.id, input.id))
-        .limit(1);
+      const [existing] = await ctx.db.select().from(sites).where(eq(sites.id, input.id)).limit(1);
       if (!existing) throw new TRPCError({ code: 'NOT_FOUND' });
 
       try {
-        await ctx.db.delete(sites).where(eq(sites.id, input.id));
+        await ctx.db.transaction(async (tx) => {
+          await tx
+            .update(customerLogs)
+            .set({ siteId: null })
+            .where(eq(customerLogs.siteId, input.id));
+          await tx
+            .update(entitySources)
+            .set({ siteId: null })
+            .where(eq(entitySources.siteId, input.id));
+
+          await tx
+            .update(haloPsaRecurringItems)
+            .set({ siteId: null })
+            .where(eq(haloPsaRecurringItems.siteId, input.id));
+          await tx
+            .update(m365Identities)
+            .set({ siteId: null })
+            .where(eq(m365Identities.siteId, input.id));
+          await tx
+            .update(dattoEndpoints)
+            .set({ siteId: null })
+            .where(eq(dattoEndpoints.siteId, input.id));
+          await tx
+            .update(coveEndpoints)
+            .set({ siteId: null })
+            .where(eq(coveEndpoints.siteId, input.id));
+          await tx
+            .update(sophosEndpoints)
+            .set({ siteId: null })
+            .where(eq(sophosEndpoints.siteId, input.id));
+          await tx
+            .update(sophosTamperProtection)
+            .set({ siteId: null })
+            .where(eq(sophosTamperProtection.siteId, input.id));
+          await tx
+            .update(sophosFirewalls)
+            .set({ siteId: null })
+            .where(eq(sophosFirewalls.siteId, input.id));
+          await tx
+            .update(sophosLicenses)
+            .set({ siteId: null })
+            .where(eq(sophosLicenses.siteId, input.id));
+          await tx
+            .update(sophosEndpointMigrations)
+            .set({ fromSiteId: null })
+            .where(eq(sophosEndpointMigrations.fromSiteId, input.id));
+          await tx
+            .update(sophosEndpointMigrations)
+            .set({ toSiteId: null })
+            .where(eq(sophosEndpointMigrations.toSiteId, input.id));
+
+          await tx.delete(integrationLinks).where(eq(integrationLinks.siteId, input.id));
+          await tx.delete(sites).where(eq(sites.id, input.id));
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         await ctx.db.insert(customerLogs).values({
@@ -746,7 +796,7 @@ export const sitesRouter = t.router({
         throw new TRPCError({
           code: 'CONFLICT',
           message:
-            'Site cannot be deleted while related records (assets, people, integrations, etc.) remain. Remove or reassign them first.'
+            'Site deletion failed while cleaning up related records. Some references may still need explicit handling.'
         });
       }
 
