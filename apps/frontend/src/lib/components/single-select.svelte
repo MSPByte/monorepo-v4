@@ -82,11 +82,11 @@
 
   const selectOption = (value: string) => {
     if (selected === value) {
-      selected = '';
+      selected = undefined;
     } else {
       selected = value;
     }
-    onchange?.(selected);
+    onchange?.(selected ?? '');
     open = false;
   };
 

@@ -27,6 +27,7 @@
   interface Props {
     table: string;
     linkId?: string;
+    groupId?: string;
     integrationId?: string;
     scopeColumn?: 'link' | 'site' | false;
     columns: DataTableColumn<TData>[];
@@ -43,6 +44,7 @@
   let {
     table,
     linkId,
+    groupId,
     integrationId,
     scopeColumn = 'link',
     columns,
@@ -59,7 +61,10 @@
   const trpc = getContext<ReturnType<typeof createTrpcClient>>('trpc');
   const queryClient = useQueryClient();
   const normalizedLinkId = $derived(linkId || undefined);
-  const tableScopeKey = $derived(`${table}:${normalizedLinkId ?? 'all'}:${scopeColumn || 'none'}`);
+  const normalizedGroupId = $derived(groupId || undefined);
+  const tableScopeKey = $derived(
+    `${table}:${normalizedLinkId ?? 'all'}:${normalizedGroupId ?? 'all'}:${scopeColumn || 'none'}`
+  );
 
   const linksQuery = createQuery(() => ({
     queryKey: ['integrationLinks.list', integrationId, 'all'],
@@ -157,6 +162,7 @@
     const queryInput = {
       table,
       linkId: normalizedLinkId,
+      groupId: normalizedGroupId,
       page: input.page + 1,
       pageSize: input.pageSize,
       sortColumn: input.sortField,

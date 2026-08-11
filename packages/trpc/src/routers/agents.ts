@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { agents, agentLogs, agentTickets, customerLogs, sites } from '@mspbyte/drizzle';
 import { ActionLabels } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
+import { loadGroupTargets } from './group-targets.js';
 
 function scopedSiteFilter(scope: 'all' | readonly string[]) {
   if (scope === 'all') return undefined;
@@ -12,14 +13,21 @@ function scopedSiteFilter(scope: 'all' | readonly string[]) {
 }
 
 export const agentsRouter = t.router({
-  siteOverview: authProcedure.query(async ({ ctx }) => {
+  siteOverview: authProcedure
+    .input(z.object({ groupId: z.string().uuid().optional() }).optional())
+    .query(async ({ ctx, input }) => {
     if (!ctx.can('Assets.Read')) {
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Read permission required' });
     }
     const scope = ctx.scopeFor('Assets.Read');
     if (scope !== 'all' && scope.length === 0) return [];
+    const groupTargets = input?.groupId ? await loadGroupTargets(ctx.db, input.groupId) : null;
+    if (groupTargets && groupTargets.siteIds.length === 0) return [];
 
-    const scopeCondition = scope === 'all' ? undefined : inArray(agents.siteId, [...scope]);
+    const conditions = [
+      scope === 'all' ? undefined : inArray(agents.siteId, [...scope]),
+      groupTargets ? inArray(agents.siteId, groupTargets.siteIds) : undefined,
+    ].filter((c): c is NonNullable<typeof c> => c !== undefined);
 
     const rows = await ctx.db
       .select({
@@ -30,7 +38,7 @@ export const agentsRouter = t.router({
       })
       .from(agents)
       .leftJoin(sites, eq(sites.id, agents.siteId))
-      .where(scopeCondition)
+      .where(conditions.length ? and(...conditions) : undefined)
       .groupBy(agents.siteId, sites.name);
 
     return rows.map((row) => ({
@@ -39,27 +47,32 @@ export const agentsRouter = t.router({
       agentCount: Number(row.agentCount ?? 0),
       lastCheckIn: row.lastCheckIn,
     }));
-  }),
+    }),
 
   list: authProcedure
-    .input(z.object({ siteId: z.string().uuid().optional() }).optional())
+    .input(z.object({ siteId: z.string().uuid().optional(), groupId: z.string().uuid().optional() }).optional())
     .query(async ({ ctx, input }) => {
       if (!ctx.can('Assets.Read')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Read permission required' });
       }
       const scope = ctx.scopeFor('Assets.Read');
       const siteId = input?.siteId;
+      const groupId = input?.groupId;
+      const groupTargets = groupId ? await loadGroupTargets(ctx.db, groupId) : null;
 
       if (siteId) {
         if (scope !== 'all' && !scope.includes(siteId)) {
           throw new TRPCError({ code: 'NOT_FOUND' });
         }
+      } else if (groupTargets && groupTargets.siteIds.length === 0) {
+        return [];
       } else if (scope !== 'all' && scope.length === 0) {
         return [];
       }
 
       const conditions = [
         siteId ? eq(agents.siteId, siteId) : undefined,
+        !siteId && groupTargets ? inArray(agents.siteId, groupTargets.siteIds) : undefined,
         !siteId ? scopedSiteFilter(scope) : undefined,
       ].filter((c): c is NonNullable<typeof c> => c !== undefined);
 
@@ -88,24 +101,29 @@ export const agentsRouter = t.router({
     }),
 
   listTickets: authProcedure
-    .input(z.object({ siteId: z.string().uuid().optional() }).optional())
+    .input(z.object({ siteId: z.string().uuid().optional(), groupId: z.string().uuid().optional() }).optional())
     .query(async ({ ctx, input }) => {
       if (!ctx.can('Assets.Read')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Read permission required' });
       }
       const scope = ctx.scopeFor('Assets.Read');
       const siteId = input?.siteId;
+      const groupId = input?.groupId;
+      const groupTargets = groupId ? await loadGroupTargets(ctx.db, groupId) : null;
 
       if (siteId) {
         if (scope !== 'all' && !scope.includes(siteId)) {
           throw new TRPCError({ code: 'NOT_FOUND' });
         }
+      } else if (groupTargets && groupTargets.siteIds.length === 0) {
+        return [];
       } else if (scope !== 'all' && scope.length === 0) {
         return [];
       }
 
       const conditions = [
         siteId ? eq(agentTickets.siteId, siteId) : undefined,
+        !siteId && groupTargets ? inArray(agentTickets.siteId, groupTargets.siteIds) : undefined,
         !siteId && scope !== 'all' ? inArray(agentTickets.siteId, [...scope]) : undefined,
       ].filter((c): c is NonNullable<typeof c> => c !== undefined);
 
@@ -136,6 +154,7 @@ export const agentsRouter = t.router({
         .object({
           agentId: z.string().uuid().optional(),
           siteId: z.string().uuid().optional(),
+          groupId: z.string().uuid().optional(),
           limit: z.number().int().min(1).max(5000).default(2000),
         })
         .optional()
@@ -147,7 +166,9 @@ export const agentsRouter = t.router({
       const scope = ctx.scopeFor('Assets.Read');
       const agentId = input?.agentId;
       const siteId = input?.siteId;
+      const groupId = input?.groupId;
       const limit = input?.limit ?? 2000;
+      const groupTargets = groupId ? await loadGroupTargets(ctx.db, groupId) : null;
 
       if (agentId) {
         const [agent] = await ctx.db
@@ -163,6 +184,8 @@ export const agentsRouter = t.router({
         if (scope !== 'all' && !scope.includes(siteId)) {
           throw new TRPCError({ code: 'NOT_FOUND' });
         }
+      } else if (groupTargets && groupTargets.siteIds.length === 0) {
+        return [];
       } else if (scope !== 'all' && scope.length === 0) {
         return [];
       }
@@ -170,6 +193,7 @@ export const agentsRouter = t.router({
       const conditions = [
         agentId ? eq(agentLogs.agentId, agentId) : undefined,
         !agentId && siteId ? eq(agents.siteId, siteId) : undefined,
+        !agentId && !siteId && groupTargets ? inArray(agents.siteId, groupTargets.siteIds) : undefined,
         !agentId && !siteId && scope !== 'all'
           ? inArray(agents.siteId, [...scope])
           : undefined,

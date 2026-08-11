@@ -52,6 +52,7 @@
 <VendorDataTable
   table="m365_risky_users"
   linkId={scopeStore.currentLink || undefined}
+  groupId={scopeStore.currentGroup || undefined}
   integrationId="microsoft-365"
   {columns}
   onrowclick={(row) => (selectedUser = row as RiskyUserRow)}

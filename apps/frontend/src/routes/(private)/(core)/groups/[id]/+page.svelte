@@ -29,6 +29,7 @@
   import FadeIn from '$lib/components/transition/fade-in.svelte';
   import { authStore } from '$lib/stores/auth.store.svelte';
   import { formatActionLabel } from '@mspbyte/shared';
+  import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
   import { formatRelativeDate } from '$lib/utils/format';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
@@ -53,6 +54,10 @@
     queryKey: ['sites.list'],
     queryFn: () => trpc.sites.list.query(),
   }));
+  const tenantLinksQuery = createQuery(() => ({
+    queryKey: ['integrationLinks.list.groupMembers'],
+    queryFn: () => trpc.integrationLinks.list.query({ status: 'active' }),
+  }));
 
   const activityQuery = createQuery(() => ({
     queryKey: ['siteGroups.recentActivity', id],
@@ -60,11 +65,22 @@
     enabled: !!id,
   }));
 
-  const memberSiteIds = $derived(new Set((membersQuery.data ?? []).map((m) => m.id)));
+  const memberSiteIds = $derived(new Set((membersQuery.data?.sites ?? []).map((m) => m.id)));
+  const memberLinkIds = $derived(new Set((membersQuery.data?.links ?? []).map((m) => m.id)));
   const availableSiteOptions = $derived(
     (sitesQuery.data ?? [])
       .filter((s) => !memberSiteIds.has(s.id))
       .map((s) => ({ value: s.id, label: s.name }))
+  );
+  const availableTenantLinkOptions = $derived(
+    (tenantLinksQuery.data ?? [])
+      .filter((link) => INTEGRATIONS[link.integrationId as ProviderId]?.scope === 'tenant')
+      .filter((link) => !memberLinkIds.has(link.id))
+      .map((link) => ({
+        value: link.id,
+        label: link.name ?? link.externalId ?? link.id,
+        subLabel: INTEGRATIONS[link.integrationId as ProviderId]?.name ?? link.integrationId,
+      }))
   );
 
   async function invalidateGroup() {
@@ -137,25 +153,37 @@
   // Add members dialog
   let addOpen = $state(false);
   let selectedSiteIds = $state<string[]>([]);
+  let selectedLinkIds = $state<string[]>([]);
   let adding = $state(false);
   $effect(() => {
-    if (!addOpen) selectedSiteIds = [];
+    if (!addOpen) {
+      selectedSiteIds = [];
+      selectedLinkIds = [];
+    }
   });
 
   async function addMembers() {
     const ids = selectedSiteIds.filter((sid) => !memberSiteIds.has(sid));
-    if (!ids.length) return;
+    const linkIds = selectedLinkIds.filter((lid) => !memberLinkIds.has(lid));
+    if (!ids.length && !linkIds.length) return;
     adding = true;
     try {
       await Promise.all(
         ids.map((siteId) => trpc.siteGroups.addMember.mutate({ siteGroupId: id, siteId }))
       );
+      await Promise.all(
+        linkIds.map((integrationLinkId) =>
+          trpc.siteGroups.addLinkMember.mutate({ siteGroupId: id, integrationLinkId })
+        )
+      );
       await invalidateGroup();
       selectedSiteIds = [];
+      selectedLinkIds = [];
       addOpen = false;
-      toast.success(ids.length === 1 ? 'Site added' : `${ids.length} sites added`);
+      const total = ids.length + linkIds.length;
+      toast.success(total === 1 ? 'Member added' : `${total} members added`);
     } catch (error) {
-      showErrorToast(error, 'Failed to add sites.');
+      showErrorToast(error, 'Failed to add group members.');
     } finally {
       adding = false;
     }
@@ -172,6 +200,19 @@
       showErrorToast(error, 'Failed to remove site.');
     } finally {
       removingSiteId = null;
+    }
+  }
+
+  let removingLinkId = $state<string | null>(null);
+  async function removeLinkMember(integrationLinkId: string) {
+    removingLinkId = integrationLinkId;
+    try {
+      await trpc.siteGroups.removeLinkMember.mutate({ siteGroupId: id, integrationLinkId });
+      await invalidateGroup();
+    } catch (error) {
+      showErrorToast(error, 'Failed to remove tenant link.');
+    } finally {
+      removingLinkId = null;
     }
   }
 
@@ -270,9 +311,9 @@
             <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
               loading…
             </p>
-          {:else if (membersQuery.data ?? []).length}
+          {:else if (membersQuery.data?.sites ?? []).length}
             <dl>
-              {#each membersQuery.data ?? [] as member (member.id)}
+              {#each membersQuery.data?.sites ?? [] as member (member.id)}
                 {@const isRemoving = removingSiteId === member.id}
                 <div
                   class="group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-border/50 py-[7px] last:border-b-0"
@@ -333,6 +374,82 @@
         </SectionPanel>
 
         <aside class="space-y-4">
+          <SectionPanel code="02" title="TENANT LINKS">
+            {#snippet aside()}
+              <div class="flex items-center gap-3">
+                <span>{(membersQuery.data?.links ?? []).length} member{(membersQuery.data?.links ?? []).length === 1 ? '' : 's'}</span>
+                {#if canWrite}
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-1 border border-border bg-background px-1.5 py-0.5 text-foreground hover:border-primary hover:text-primary disabled:opacity-40"
+                    aria-label="Add tenant links to group"
+                    title="Add tenant links"
+                    disabled={!availableTenantLinkOptions.length || adding}
+                    onclick={() => (addOpen = true)}
+                  >
+                    <Plus class="size-3" />
+                    <span class="tracking-[0.14em]">ADD LINKS</span>
+                  </button>
+                {/if}
+              </div>
+            {/snippet}
+
+            {#if membersQuery.isLoading}
+              <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
+                loading…
+              </p>
+            {:else if (membersQuery.data?.links ?? []).length}
+              <dl>
+                {#each membersQuery.data?.links ?? [] as member (member.id)}
+                  {@const isRemoving = removingLinkId === member.id}
+                  <div
+                    class="group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-border/50 py-[7px] last:border-b-0"
+                  >
+                    <div class="min-w-0">
+                      <div class="truncate text-sm">{member.name ?? member.id}</div>
+                      <div class="truncate text-xs text-muted-foreground">
+                        {member.integrationName}
+                      </div>
+                    </div>
+                    {#if canWrite}
+                      <button
+                        type="button"
+                        class="inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
+                        aria-label={`Remove ${member.name ?? member.id}`}
+                        title="Remove from group"
+                        disabled={isRemoving}
+                        onclick={() => removeLinkMember(member.id)}
+                      >
+                        {#if isRemoving}
+                          <LoaderCircle class="size-3.5 animate-spin" />
+                        {:else}
+                          <X class="size-3.5" />
+                        {/if}
+                      </button>
+                    {/if}
+                  </div>
+                {/each}
+              </dl>
+            {:else}
+              <div
+                class="flex flex-col items-start gap-2 py-4 font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70"
+              >
+                <span>no tenant links in this group</span>
+                {#if canWrite}
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-1 border border-border bg-background px-2 py-0.5 text-foreground hover:border-primary hover:text-primary disabled:opacity-40"
+                    disabled={!availableTenantLinkOptions.length}
+                    onclick={() => (addOpen = true)}
+                  >
+                    <Plus class="size-3" />
+                    <span class="tracking-[0.14em]">ADD FIRST LINK</span>
+                  </button>
+                {/if}
+              </div>
+            {/if}
+          </SectionPanel>
+
           <SectionPanel code="~" title="ACTIVITY">
             {#snippet aside()}
               {#if hasMoreActivity}
@@ -395,32 +512,54 @@
 <Dialog.Root bind:open={addOpen}>
   <Dialog.Content class="sm:max-w-[520px]">
     <Dialog.Header>
-      <Dialog.Title>Add sites to group</Dialog.Title>
-      <Dialog.Description>Pick one or more sites. Existing members are hidden.</Dialog.Description>
+      <Dialog.Title>Add members to group</Dialog.Title>
+      <Dialog.Description>
+        Pick one or more sites or tenant links. Existing members are hidden.
+      </Dialog.Description>
     </Dialog.Header>
     <Separator />
     <div class="grid gap-3 p-4">
-      <MultiSelect
-        options={availableSiteOptions}
-        bind:selected={selectedSiteIds}
-        placeholder="Select sites..."
-        searchPlaceholder="Search sites..."
-        maxDisplay={3}
-        disabled={adding}
-      />
+      <div class="grid gap-2">
+        <Label>Sites</Label>
+        <MultiSelect
+          options={availableSiteOptions}
+          bind:selected={selectedSiteIds}
+          placeholder="Select sites..."
+          searchPlaceholder="Search sites..."
+          maxDisplay={3}
+          disabled={adding}
+        />
+      </div>
+      <div class="grid gap-2">
+        <Label>Tenant links</Label>
+        <MultiSelect
+          options={availableTenantLinkOptions}
+          bind:selected={selectedLinkIds}
+          placeholder="Select tenant links..."
+          searchPlaceholder="Search tenant links..."
+          maxDisplay={3}
+          disabled={adding}
+        />
+      </div>
       <p class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70">
-        {selectedSiteIds.length} selected
+        {selectedSiteIds.length + selectedLinkIds.length} selected
       </p>
     </div>
     <Dialog.Footer>
       <Button variant="ghost" disabled={adding} onclick={() => (addOpen = false)}>Cancel</Button>
-      <Button disabled={adding || !selectedSiteIds.length} onclick={addMembers} class="gap-2">
+      <Button
+        disabled={adding || selectedSiteIds.length + selectedLinkIds.length === 0}
+        onclick={addMembers}
+        class="gap-2"
+      >
         {#if adding}
           <LoaderCircle class="size-4 animate-spin" />
           Adding…
         {:else}
-          Add {selectedSiteIds.length > 0 ? selectedSiteIds.length : ''}
-          {selectedSiteIds.length === 1 ? 'site' : 'sites'}
+          Add {selectedSiteIds.length + selectedLinkIds.length > 0
+            ? selectedSiteIds.length + selectedLinkIds.length
+            : ''}
+          {selectedSiteIds.length + selectedLinkIds.length === 1 ? 'member' : 'members'}
         {/if}
       </Button>
     </Dialog.Footer>

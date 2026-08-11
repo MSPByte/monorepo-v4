@@ -21,13 +21,18 @@
 
   type TicketRow = inferRouterOutputs<AppRouter>['agents']['listTickets'][number];
 
-  const scopeKey = $derived(scopeStore.currentSite ?? 'all');
+  const scopeKey = $derived(`${scopeStore.currentSite ?? 'all'}:${scopeStore.currentGroup ?? 'all'}`);
 
   const ticketsQuery = createQuery(() => ({
     queryKey: ['agents.listTickets', scopeKey],
     queryFn: () =>
       trpc.agents.listTickets.query(
-        scopeStore.currentSite ? { siteId: scopeStore.currentSite } : undefined
+        scopeStore.currentSite || scopeStore.currentGroup
+          ? {
+              siteId: scopeStore.currentSite ?? undefined,
+              groupId: scopeStore.currentGroup ?? undefined,
+            }
+          : undefined
       ),
   }));
 

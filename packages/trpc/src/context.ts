@@ -1,7 +1,14 @@
 import { TRPCError } from '@trpc/server';
 import { getTenantServiceDbByOrgId } from '@mspbyte/drizzle-catalog';
-import { roles, users, userRoleGrants } from '@mspbyte/drizzle';
-import { eq } from 'drizzle-orm';
+import {
+  integrationLinks,
+  roles,
+  siteGroupLinkMembers,
+  siteGroupMembers,
+  users,
+  userRoleGrants
+} from '@mspbyte/drizzle';
+import { eq, inArray } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import {
   hasPermission,
@@ -100,6 +107,63 @@ export async function createContext({ req, redis }: { req: IncomingRequest; redi
     });
   }
 
+  const groupIds = [...new Set(grants.flatMap((grant) => (grant.scope.kind === 'groups' ? grant.scope.ids : [])))];
+  const directSiteIds = [...new Set(grants.flatMap((grant) => (grant.scope.kind === 'sites' ? grant.scope.ids : [])))];
+
+  const [groupSiteRows, groupLinkRows] = groupIds.length
+    ? await Promise.all([
+        db
+          .select({
+            groupId: siteGroupMembers.siteGroupId,
+            siteId: siteGroupMembers.siteId
+          })
+          .from(siteGroupMembers)
+          .where(inArray(siteGroupMembers.siteGroupId, groupIds)),
+        db
+          .select({
+            groupId: siteGroupLinkMembers.siteGroupId,
+            linkId: siteGroupLinkMembers.integrationLinkId
+          })
+          .from(siteGroupLinkMembers)
+          .where(inArray(siteGroupLinkMembers.siteGroupId, groupIds))
+      ])
+    : [[], []];
+
+  const groupSiteIdsByGroup = new Map<string, string[]>();
+  for (const row of groupSiteRows) {
+    const bucket = groupSiteIdsByGroup.get(row.groupId) ?? [];
+    bucket.push(row.siteId);
+    groupSiteIdsByGroup.set(row.groupId, bucket);
+  }
+
+  const groupLinkIdsByGroup = new Map<string, string[]>();
+  for (const row of groupLinkRows) {
+    const bucket = groupLinkIdsByGroup.get(row.groupId) ?? [];
+    bucket.push(row.linkId);
+    groupLinkIdsByGroup.set(row.groupId, bucket);
+  }
+
+  const allScopedSiteIds = [
+    ...new Set([...directSiteIds, ...groupSiteRows.map((row) => row.siteId)])
+  ];
+  const siteLinkRows = allScopedSiteIds.length
+    ? await db
+        .select({
+          siteId: integrationLinks.siteId,
+          linkId: integrationLinks.id
+        })
+        .from(integrationLinks)
+        .where(inArray(integrationLinks.siteId, allScopedSiteIds))
+    : [];
+
+  const linkIdsBySite = new Map<string, string[]>();
+  for (const row of siteLinkRows) {
+    if (!row.siteId) continue;
+    const bucket = linkIdsBySite.get(row.siteId) ?? [];
+    bucket.push(row.linkId);
+    linkIdsBySite.set(row.siteId, bucket);
+  }
+
   return {
     userId,
     orgId: org.id,
@@ -110,7 +174,12 @@ export async function createContext({ req, redis }: { req: IncomingRequest; redi
     grants,
     can: (permission: Permission) => hasPermission(grants, permission),
     canUnder: (prefix: string) => hasAnyPermissionUnder(grants, prefix),
-    scopeFor: (permission: Permission) => scopeFor(grants, permission),
+    scopeFor: (permission: Permission) =>
+      scopeFor(grants, permission, { groupSiteIdsByGroup }),
+    groupScopeFor: (permission: Permission) =>
+      groupScopeFor(grants, permission),
+    linkScopeFor: (permission: Permission) =>
+      linkScopeFor(grants, permission, { groupSiteIdsByGroup, groupLinkIdsByGroup, linkIdsBySite }),
     connectionString: org.serviceConnectionString,
     encryptionKey: process.env.ENCRYPTION_KEY,
     ipAddress:
@@ -187,7 +256,11 @@ export type EffectiveScope = 'all' | readonly string[];
  * Groups-scope grants are treated as empty in Stage 4c (no site expansion).
  * Phase 2 wires site_group_members lookup here.
  */
-function scopeFor(grants: PermissionGrant[], permission: Permission): EffectiveScope {
+function scopeFor(
+  grants: PermissionGrant[],
+  permission: Permission,
+  maps: { groupSiteIdsByGroup: ReadonlyMap<string, readonly string[]> }
+): EffectiveScope {
   const satisfying = grants.filter((g) => hasPermission([g], permission));
   if (satisfying.length === 0) return [];
   if (satisfying.some((g) => g.scope.kind === 'all')) return 'all';
@@ -196,7 +269,57 @@ function scopeFor(grants: PermissionGrant[], permission: Permission): EffectiveS
     if (g.scope.kind === 'sites') {
       for (const id of g.scope.ids) sites.add(id);
     }
-    // g.scope.kind === 'groups' — Phase 2
+    if (g.scope.kind === 'groups') {
+      for (const groupId of g.scope.ids) {
+        for (const siteId of maps.groupSiteIdsByGroup.get(groupId) ?? []) sites.add(siteId);
+      }
+    }
   }
   return [...sites];
+}
+
+function groupScopeFor(grants: PermissionGrant[], permission: Permission): EffectiveScope {
+  const satisfying = grants.filter((g) => hasPermission([g], permission));
+  if (satisfying.length === 0) return [];
+  if (satisfying.some((g) => g.scope.kind === 'all')) return 'all';
+  const groups = new Set<string>();
+  for (const g of satisfying) {
+    if (g.scope.kind === 'groups') {
+      for (const id of g.scope.ids) groups.add(id);
+    }
+  }
+  return [...groups];
+}
+
+function linkScopeFor(
+  grants: PermissionGrant[],
+  permission: Permission,
+  maps: {
+    groupSiteIdsByGroup: ReadonlyMap<string, readonly string[]>;
+    groupLinkIdsByGroup: ReadonlyMap<string, readonly string[]>;
+    linkIdsBySite: ReadonlyMap<string, readonly string[]>;
+  }
+): EffectiveScope {
+  const satisfying = grants.filter((g) => hasPermission([g], permission));
+  if (satisfying.length === 0) return [];
+  if (satisfying.some((g) => g.scope.kind === 'all')) return 'all';
+
+  const linkIds = new Set<string>();
+  const addSiteLinks = (siteId: string) => {
+    for (const linkId of maps.linkIdsBySite.get(siteId) ?? []) linkIds.add(linkId);
+  };
+
+  for (const g of satisfying) {
+    if (g.scope.kind === 'sites') {
+      for (const siteId of g.scope.ids) addSiteLinks(siteId);
+    }
+    if (g.scope.kind === 'groups') {
+      for (const groupId of g.scope.ids) {
+        for (const siteId of maps.groupSiteIdsByGroup.get(groupId) ?? []) addSiteLinks(siteId);
+        for (const linkId of maps.groupLinkIdsByGroup.get(groupId) ?? []) linkIds.add(linkId);
+      }
+    }
+  }
+
+  return [...linkIds];
 }

@@ -17,6 +17,7 @@
     steps: [],
     allowedSites: [],
     allowedSiteGroups: [],
+    allowedIntegrationLinks: [],
   };
 
   const create = createMutation(() => ({
@@ -28,6 +29,7 @@
         steps: draft.steps,
         allowedSites: draft.allowedSites,
         allowedSiteGroups: draft.allowedSiteGroups,
+        allowedIntegrationLinks: draft.allowedIntegrationLinks,
       }),
     onSuccess: (result) => {
       toast.success('Package created');

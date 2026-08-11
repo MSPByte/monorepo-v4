@@ -72,6 +72,7 @@
 <VendorDataTable
   table="m365_licenses"
   linkId={currentLinkId}
+  groupId={scopeStore.currentGroup || undefined}
   integrationId="microsoft-365"
   {columns}
   enableRowSelection={canWrite}

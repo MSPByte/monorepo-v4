@@ -1,18 +1,18 @@
 import {
+  index,
+  unique,
   pgTable,
   text,
   timestamp,
   integer,
   jsonb,
   uuid,
-  unique,
   uniqueIndex,
-  index,
   boolean
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { crudPolicy, authenticatedRole } from 'drizzle-orm/neon';
-import { sites } from './sites.js';
+import { sites, siteGroups } from './sites.js';
 
 export const roles = pgTable(
   'roles',
@@ -135,12 +135,33 @@ export const integrationLinks = pgTable(
   ]
 );
 
+export const siteGroupLinkMembers = pgTable(
+  'site_group_link_members',
+  {
+    siteGroupId: uuid('site_group_id')
+      .notNull()
+      .references(() => siteGroups.id, { onDelete: 'cascade' }),
+    integrationLinkId: uuid('integration_link_id')
+      .notNull()
+      .references(() => integrationLinks.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow()
+  },
+  (t) => [
+    unique('site_group_link_members_unique').on(t.siteGroupId, t.integrationLinkId),
+    index('site_group_link_members_link_idx').on(t.integrationLinkId),
+    crudPolicy({ role: authenticatedRole, read: true, modify: true })
+  ]
+);
+
 export type Role = typeof roles.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type UserRoleGrant = typeof userRoleGrants.$inferSelect;
 export type NewUserRoleGrant = typeof userRoleGrants.$inferInsert;
 export type Integration = typeof integrations.$inferSelect;
 export type IntegrationLink = typeof integrationLinks.$inferSelect;
+export type SiteGroupLinkMember = typeof siteGroupLinkMembers.$inferSelect;
 
 export * from './views/index.js';
 export * from './sites.js';

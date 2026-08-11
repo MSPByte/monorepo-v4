@@ -2,18 +2,18 @@ import { z } from 'zod';
 import { and, count, desc, eq, inArray } from 'drizzle-orm';
 import {
   customerLogs,
+  integrationLinks,
+  siteGroupLinkMembers,
   siteGroupMembers,
   siteGroups,
   sites
 } from '@mspbyte/drizzle';
-import { ActionLabels, type Permission } from '@mspbyte/shared';
+import { ActionLabels, INTEGRATIONS, type Permission, type ProviderId } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
 import { queryTableData, tableDataInputSchema } from './table-data.js';
 import type { Context } from '../context.js';
 
-// Reads gated on Sites.Read; mutations gated on their explicit permission
-// via requirePermission below.
 const siteGroupProcedure = authProcedure.use(({ ctx, next, type }) => {
   if (type === 'query' && !ctx.can('Sites.Read')) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Sites.Read permission required' });
@@ -58,6 +58,58 @@ async function auditGroupChange(
   });
 }
 
+async function loadMemberCounts(ctx: Context, groupIds: string[]) {
+  if (groupIds.length === 0) return new Map<string, number>();
+
+  const [siteCounts, linkCounts] = await Promise.all([
+    ctx.db
+      .select({
+        siteGroupId: siteGroupMembers.siteGroupId,
+        memberCount: count()
+      })
+      .from(siteGroupMembers)
+      .where(inArray(siteGroupMembers.siteGroupId, groupIds))
+      .groupBy(siteGroupMembers.siteGroupId)
+      .catch(() => []),
+    ctx.db
+      .select({
+        siteGroupId: siteGroupLinkMembers.siteGroupId,
+        memberCount: count()
+      })
+      .from(siteGroupLinkMembers)
+      .where(inArray(siteGroupLinkMembers.siteGroupId, groupIds))
+      .groupBy(siteGroupLinkMembers.siteGroupId)
+      .catch(() => [])
+  ]);
+
+  const totals = new Map<string, number>();
+  for (const row of siteCounts) totals.set(row.siteGroupId, Number(row.memberCount));
+  for (const row of linkCounts) {
+    totals.set(row.siteGroupId, (totals.get(row.siteGroupId) ?? 0) + Number(row.memberCount));
+  }
+  return totals;
+}
+
+async function getTenantScopedLink(
+  ctx: Context,
+  integrationLinkId: string
+): Promise<{ id: string; name: string | null; integrationId: string } | null> {
+  const [link] = await ctx.db
+    .select({
+      id: integrationLinks.id,
+      name: integrationLinks.name,
+      integrationId: integrationLinks.integrationId
+    })
+    .from(integrationLinks)
+    .where(eq(integrationLinks.id, integrationLinkId))
+    .limit(1);
+
+  if (!link) return null;
+  const integration = INTEGRATIONS[link.integrationId as ProviderId];
+  if (!integration || integration.scope !== 'tenant') return null;
+  return link;
+}
+
 export const siteGroupsRouter = t.router({
   tableData: siteGroupProcedure.input(tableDataInputSchema).query(async ({ ctx, input }) => {
     const result = await queryTableData<typeof siteGroups.$inferSelect>(
@@ -68,21 +120,9 @@ export const siteGroupsRouter = t.router({
       { column: 'name', direction: 'asc' }
     );
 
-    const groupIds = result.rows.map((row) => row.id);
-    const counts = groupIds.length
-      ? await ctx.db
-          .select({
-            siteGroupId: siteGroupMembers.siteGroupId,
-            memberCount: count()
-          })
-          .from(siteGroupMembers)
-          .where(inArray(siteGroupMembers.siteGroupId, groupIds))
-          .groupBy(siteGroupMembers.siteGroupId)
-          .catch(() => [])
-      : [];
-
-    const countByGroup = new Map<string, number>(
-      counts.map((row) => [row.siteGroupId, Number(row.memberCount)])
+    const countByGroup = await loadMemberCounts(
+      ctx,
+      result.rows.map((row) => row.id)
     );
 
     return {
@@ -117,34 +157,51 @@ export const siteGroupsRouter = t.router({
         .catch(() => []);
       if (!group) throw new TRPCError({ code: 'NOT_FOUND' });
 
-      const [memberCountRow] = await ctx.db
-        .select({ value: count() })
-        .from(siteGroupMembers)
-        .where(eq(siteGroupMembers.siteGroupId, input.id))
-        .catch(() => [{ value: 0 }]);
+      const countByGroup = await loadMemberCounts(ctx, [input.id]);
 
       return {
         ...group,
-        memberCount: Number(memberCountRow?.value ?? 0)
+        memberCount: countByGroup.get(input.id) ?? 0
       };
     }),
 
   members: siteGroupProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      const rows = await ctx.db
-        .select({
-          id: sites.id,
-          name: sites.name,
-          description: sites.description,
-          addedAt: siteGroupMembers.createdAt
-        })
-        .from(siteGroupMembers)
-        .innerJoin(sites, eq(siteGroupMembers.siteId, sites.id))
-        .where(eq(siteGroupMembers.siteGroupId, input.id))
-        .orderBy(sites.name)
-        .catch(() => []);
-      return rows;
+      const [siteRows, linkRows] = await Promise.all([
+        ctx.db
+          .select({
+            id: sites.id,
+            name: sites.name,
+            description: sites.description,
+            addedAt: siteGroupMembers.createdAt
+          })
+          .from(siteGroupMembers)
+          .innerJoin(sites, eq(siteGroupMembers.siteId, sites.id))
+          .where(eq(siteGroupMembers.siteGroupId, input.id))
+          .orderBy(sites.name)
+          .catch(() => []),
+        ctx.db
+          .select({
+            id: integrationLinks.id,
+            name: integrationLinks.name,
+            integrationId: integrationLinks.integrationId,
+            addedAt: siteGroupLinkMembers.createdAt
+          })
+          .from(siteGroupLinkMembers)
+          .innerJoin(integrationLinks, eq(siteGroupLinkMembers.integrationLinkId, integrationLinks.id))
+          .where(eq(siteGroupLinkMembers.siteGroupId, input.id))
+          .orderBy(integrationLinks.name)
+          .catch(() => [])
+      ]);
+
+      return {
+        sites: siteRows,
+        links: linkRows.map((row) => ({
+          ...row,
+          integrationName: INTEGRATIONS[row.integrationId as ProviderId]?.name ?? row.integrationId
+        }))
+      };
     }),
 
   forSite: siteGroupProcedure
@@ -332,7 +389,12 @@ export const siteGroupsRouter = t.router({
         actionLabel: ActionLabels.SiteGroupMemberAdd,
         targetLabel: group.name,
         siteId: site.id,
-        metadata: { siteId: site.id, siteName: site.name, groupName: group.name }
+        metadata: {
+          memberType: 'site',
+          siteId: site.id,
+          siteName: site.name,
+          groupName: group.name
+        }
       });
 
       return { ok: true, changed: true };
@@ -374,7 +436,107 @@ export const siteGroupsRouter = t.router({
         actionLabel: ActionLabels.SiteGroupMemberRemove,
         targetLabel: group.name,
         siteId: site.id,
-        metadata: { siteId: site.id, siteName: site.name, groupName: group.name }
+        metadata: {
+          memberType: 'site',
+          siteId: site.id,
+          siteName: site.name,
+          groupName: group.name
+        }
+      });
+
+      return { ok: true, changed: true };
+    }),
+
+  addLinkMember: siteGroupProcedure
+    .input(z.object({ siteGroupId: z.string().uuid(), integrationLinkId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      requirePermission(ctx, 'Sites.Write');
+      const [group] = await ctx.db
+        .select({ id: siteGroups.id, name: siteGroups.name })
+        .from(siteGroups)
+        .where(eq(siteGroups.id, input.siteGroupId))
+        .limit(1);
+      if (!group) throw new TRPCError({ code: 'NOT_FOUND', message: 'Group not found' });
+
+      const link = await getTenantScopedLink(ctx, input.integrationLinkId);
+      if (!link) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Tenant-scoped integration link not found'
+        });
+      }
+
+      const result = await ctx.db
+        .insert(siteGroupLinkMembers)
+        .values({
+          siteGroupId: input.siteGroupId,
+          integrationLinkId: input.integrationLinkId
+        })
+        .onConflictDoNothing()
+        .returning();
+
+      if (!result.length) return { ok: true, changed: false };
+
+      await auditGroupChange(ctx, {
+        groupId: group.id,
+        action: 'update',
+        actionLabel: ActionLabels.SiteGroupMemberAdd,
+        targetLabel: group.name,
+        metadata: {
+          memberType: 'integration_link',
+          integrationLinkId: link.id,
+          integrationLinkName: link.name,
+          integrationId: link.integrationId,
+          groupName: group.name
+        }
+      });
+
+      return { ok: true, changed: true };
+    }),
+
+  removeLinkMember: siteGroupProcedure
+    .input(z.object({ siteGroupId: z.string().uuid(), integrationLinkId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      requirePermission(ctx, 'Sites.Write');
+      const [group] = await ctx.db
+        .select({ id: siteGroups.id, name: siteGroups.name })
+        .from(siteGroups)
+        .where(eq(siteGroups.id, input.siteGroupId))
+        .limit(1);
+      if (!group) throw new TRPCError({ code: 'NOT_FOUND', message: 'Group not found' });
+
+      const link = await getTenantScopedLink(ctx, input.integrationLinkId);
+      if (!link) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Tenant-scoped integration link not found'
+        });
+      }
+
+      const removed = await ctx.db
+        .delete(siteGroupLinkMembers)
+        .where(
+          and(
+            eq(siteGroupLinkMembers.siteGroupId, input.siteGroupId),
+            eq(siteGroupLinkMembers.integrationLinkId, input.integrationLinkId)
+          )
+        )
+        .returning();
+
+      if (!removed.length) return { ok: true, changed: false };
+
+      await auditGroupChange(ctx, {
+        groupId: group.id,
+        action: 'update',
+        actionLabel: ActionLabels.SiteGroupMemberRemove,
+        targetLabel: group.name,
+        metadata: {
+          memberType: 'integration_link',
+          integrationLinkId: link.id,
+          integrationLinkName: link.name,
+          integrationId: link.integrationId,
+          groupName: group.name
+        }
       });
 
       return { ok: true, changed: true };

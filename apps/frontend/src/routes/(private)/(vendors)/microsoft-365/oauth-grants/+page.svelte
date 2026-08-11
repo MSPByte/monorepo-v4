@@ -36,6 +36,7 @@
 <VendorDataTable
   table="m365_oauth_grants"
   linkId={scopeStore.currentLink || undefined}
+  groupId={scopeStore.currentGroup || undefined}
   integrationId="microsoft-365"
   {columns}
   onrowclick={(row) => (selectedGrant = row as OAuthGrantRow)}

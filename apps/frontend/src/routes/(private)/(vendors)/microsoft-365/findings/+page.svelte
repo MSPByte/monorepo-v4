@@ -6,7 +6,9 @@
 <div class="flex flex-col size-full p-4">
   <VendorFindingsTable
     linkId={scopeStore.currentLink}
+    groupId={scopeStore.currentGroup}
     providerId="microsoft-365"
-    showLinkColumn={!scopeStore.currentLink}
+    showLinkColumn={!scopeStore.currentLink && !scopeStore.currentGroup}
+    showSiteColumn={!scopeStore.currentLink}
   />
 </div>

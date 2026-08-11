@@ -12,17 +12,22 @@
   const NOW = Date.now();
 
   const overviewQuery = createQuery(() => ({
-    queryKey: ['vendor.linkOverview', 'dattormm'],
-    queryFn: () => trpc.vendor.linkOverview.query({ integrationId: 'dattormm' }),
+    queryKey: ['vendor.linkOverview', 'dattormm', scopeStore.currentGroup],
+    queryFn: () =>
+      trpc.vendor.linkOverview.query({
+        integrationId: 'dattormm',
+        groupId: scopeStore.currentGroup ?? undefined,
+      }),
     enabled: !scopeStore.currentSite,
   }));
 
   const siteLinkQuery = createQuery(() => ({
-    queryKey: ['integrationLinks.list', 'dattormm', scopeStore.currentSite],
+    queryKey: ['integrationLinks.list', 'dattormm', scopeStore.currentSite, scopeStore.currentGroup],
     queryFn: () =>
       trpc.integrationLinks.list.query({
         integrationId: 'dattormm',
         siteId: scopeStore.currentSite!,
+        groupId: scopeStore.currentGroup ?? undefined,
       }),
     enabled: !!scopeStore.currentSite,
   }));
@@ -30,11 +35,11 @@
   const currentLink = $derived(siteLinkQuery.data?.[0]?.id ?? null);
 
   const endpointsQuery = createQuery(() => ({
-    queryKey: ['vendor.tableData', 'datto_endpoints', currentLink],
+    queryKey: ['vendor.tableData', 'datto_endpoints', currentLink, scopeStore.currentGroup],
     queryFn: () =>
       trpc.vendor.tableData.query({
         table: 'datto_endpoints',
-        linkId: currentLink!,
+        ...(currentLink ? { linkId: currentLink } : {}),
         page: 1,
         pageSize: 1000,
       }),
@@ -67,7 +72,7 @@
 {#if scopeStore.currentSite}
   {#if siteLinkQuery.isLoading}
     <Loader />
-  {:else if !currentLink}
+  {:else if scopeStore.currentSite && !currentLink}
     <div class="flex flex-col items-center justify-center size-full gap-2 text-muted-foreground">
       <div class="text-sm font-medium">No DattoRMM integration for this site.</div>
     </div>

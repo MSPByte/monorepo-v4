@@ -34,11 +34,13 @@
 
   let {
     linkId,
+    groupId,
     providerId,
     showLinkColumn = false,
     showSiteColumn = true,
   }: {
     linkId?: string | null;
+    groupId?: string | null;
     providerId?: string;
     showLinkColumn?: boolean;
     showSiteColumn?: boolean;
@@ -144,7 +146,11 @@
       ? [...baseInput.filters, ...extraFilters]
       : baseInput.filters;
 
-    const result = await trpc.findings.tableData.query({ ...baseInput, filters });
+    const result = await trpc.findings.tableData.query({
+      ...baseInput,
+      filters,
+      groupId: groupId ?? undefined,
+    });
     return { rows: result.rows as FindingRow[], total: result.total };
   }
 

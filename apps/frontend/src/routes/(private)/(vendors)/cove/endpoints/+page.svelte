@@ -26,11 +26,12 @@
   type EndpointRow = typeof coveEndpointsWithSite.$inferSelect & Record<string, unknown>;
 
   const siteLinkQuery = createQuery(() => ({
-    queryKey: ['integrationLinks.list', 'cove', scopeStore.currentSite],
+    queryKey: ['integrationLinks.list', 'cove', scopeStore.currentSite, scopeStore.currentGroup],
     queryFn: () =>
       trpc.integrationLinks.list.query({
         integrationId: 'cove',
         siteId: scopeStore.currentSite!,
+        groupId: scopeStore.currentGroup ?? undefined,
       }),
     enabled: !!scopeStore.currentSite,
   }));
@@ -184,6 +185,7 @@
   <VendorDataTable
     table="cove_endpoints_with_site"
     linkId={currentLinkId ?? undefined}
+    groupId={scopeStore.currentGroup ?? undefined}
     integrationId="cove"
     scopeColumn={false}
     {columns}

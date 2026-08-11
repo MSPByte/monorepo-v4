@@ -24,6 +24,7 @@
   import RunPackageDialog from '$lib/components/domain/run-package-dialog.svelte';
   import { toUserMessage } from '$lib/utils/errors';
   import { Play, Pencil, Archive, Plus, Copy, Trash2, MoreHorizontal } from '@lucide/svelte';
+  import { prettyText } from '$lib/utils/format';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
@@ -105,7 +106,7 @@
       'status',
       'Status',
       {
-        transform: (v) => String(v ?? ''),
+        transform: (v) => prettyText(String(v ?? '')),
         evaluate: (v) => {
           if (v === 'active') return 'success';
           if (v === 'archived') return 'info';
@@ -127,8 +128,8 @@
     ),
     numberColumn<PackageRow>('stepCount', 'Steps'),
     numberColumn<PackageRow>('version', 'Version'),
-    textColumn<PackageRow>('vendors', 'Vendors', 'Filter vendor'),
-    textColumn<PackageRow>('categories', 'Categories', 'Filter category'),
+    textColumn<PackageRow>('vendors', 'Vendors', 'Filter vendor', { pretty: true }),
+    textColumn<PackageRow>('categories', 'Categories', 'Filter category', { pretty: true }),
     textColumn<PackageRow>('scope', 'Scope', 'Search scope'),
     relativeDateColumn<PackageRow>('updatedAt', 'Updated'),
     {
@@ -219,17 +220,23 @@
             : `${names.slice(0, 3).join(' → ')} +${names.length - 3}`;
       const sites = ((p.allowedSites as string[] | null) ?? []).length;
       const groups = ((p.allowedSiteGroups as string[] | null) ?? []).length;
+      const links = ((p.allowedIntegrationLinks as string[] | null) ?? []).length;
       let scope: string;
-      if (sites === 0 && groups === 0) scope = 'Global';
-      else if (groups === 0) scope = `${sites} site${sites === 1 ? '' : 's'}`;
-      else if (sites === 0) scope = `${groups} group${groups === 1 ? '' : 's'}`;
+      if (sites === 0 && groups === 0 && links === 0) scope = 'Global';
+      else if (groups === 0 && links === 0) scope = `${sites} site${sites === 1 ? '' : 's'}`;
+      else if (sites === 0 && links === 0) scope = `${groups} group${groups === 1 ? '' : 's'}`;
+      else if (sites === 0 && groups === 0) scope = `${links} tenant${links === 1 ? '' : 's'}`;
       else
-        scope = `${sites} site${sites === 1 ? '' : 's'} · ${groups} group${groups === 1 ? '' : 's'}`;
+        scope = [
+          sites > 0 ? `${sites} site${sites === 1 ? '' : 's'}` : null,
+          groups > 0 ? `${groups} group${groups === 1 ? '' : 's'}` : null,
+          links > 0 ? `${links} tenant${links === 1 ? '' : 's'}` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ');
 
       const vendorSet = new Set(stepCaps.map((c) => c?.vendor).filter(Boolean) as string[]);
-      const categorySet = new Set(
-        stepCaps.map((c) => c?.category).filter(Boolean) as string[],
-      );
+      const categorySet = new Set(stepCaps.map((c) => c?.category).filter(Boolean) as string[]);
       const vendors = [...vendorSet].sort().join(', ');
       const categories = [...categorySet].sort().join(', ');
       // Full-text search haystack — capability names + descriptions catch

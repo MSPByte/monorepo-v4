@@ -16,8 +16,8 @@
 
   // ── Global overview (sites with mspagent installed) ──────────────────────
   const overviewQuery = createQuery(() => ({
-    queryKey: ['agents.siteOverview'],
-    queryFn: () => trpc.agents.siteOverview.query(),
+    queryKey: ['agents.siteOverview', scopeStore.currentGroup],
+    queryFn: () => trpc.agents.siteOverview.query({ groupId: scopeStore.currentGroup ?? undefined }),
     enabled: !scopeStore.currentSite,
   }));
 
@@ -52,15 +52,23 @@
 
   // ── Per-site data ─────────────────────────────────────────────────────────
   const agentsQuery = createQuery(() => ({
-    queryKey: ['agents.list', scopeStore.currentSite],
-    queryFn: () => trpc.agents.list.query({ siteId: scopeStore.currentSite! }),
-    enabled: !!scopeStore.currentSite,
+    queryKey: ['agents.list', scopeStore.currentSite, scopeStore.currentGroup],
+    queryFn: () =>
+      trpc.agents.list.query({
+        siteId: scopeStore.currentSite ?? undefined,
+        groupId: scopeStore.currentGroup ?? undefined,
+      }),
+    enabled: !!scopeStore.currentSite || !!scopeStore.currentGroup,
   }));
 
   const ticketsQuery = createQuery(() => ({
-    queryKey: ['agents.listTickets', scopeStore.currentSite],
-    queryFn: () => trpc.agents.listTickets.query({ siteId: scopeStore.currentSite! }),
-    enabled: !!scopeStore.currentSite,
+    queryKey: ['agents.listTickets', scopeStore.currentSite, scopeStore.currentGroup],
+    queryFn: () =>
+      trpc.agents.listTickets.query({
+        siteId: scopeStore.currentSite ?? undefined,
+        groupId: scopeStore.currentGroup ?? undefined,
+      }),
+    enabled: !!scopeStore.currentSite || !!scopeStore.currentGroup,
   }));
 
   const agentStats = $derived.by(() => {

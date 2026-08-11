@@ -9,11 +9,12 @@
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
 
   const siteLinkQuery = createQuery(() => ({
-    queryKey: ['integrationLinks.list', 'sophos-partner', scopeStore.currentSite],
+    queryKey: ['integrationLinks.list', 'sophos-partner', scopeStore.currentSite, scopeStore.currentGroup],
     queryFn: () =>
       trpc.integrationLinks.list.query({
         integrationId: 'sophos-partner',
         siteId: scopeStore.currentSite!,
+        groupId: scopeStore.currentGroup ?? undefined,
       }),
     enabled: !!scopeStore.currentSite,
   }));
@@ -24,8 +25,9 @@
 <div class="flex flex-col size-full p-4">
   <VendorFindingsTable
     linkId={currentLink}
+    groupId={scopeStore.currentGroup}
     providerId="sophos-partner"
-    showLinkColumn={!scopeStore.currentSite}
+    showLinkColumn={!scopeStore.currentSite && !scopeStore.currentGroup}
     showSiteColumn={!scopeStore.currentSite}
   />
 </div>

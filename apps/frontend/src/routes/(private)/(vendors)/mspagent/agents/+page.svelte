@@ -33,14 +33,19 @@
 
   const canDeleteAssets = $derived(authStore.isAllowed('Assets.Delete'));
 
-  const queryKey = $derived(['agents.list', scopeStore.currentSite ?? 'all'] as const);
-  const scopeKey = $derived(scopeStore.currentSite ?? 'all');
+  const queryKey = $derived(['agents.list', scopeStore.currentSite ?? 'all', scopeStore.currentGroup ?? 'all'] as const);
+  const scopeKey = $derived(`${scopeStore.currentSite ?? 'all'}:${scopeStore.currentGroup ?? 'all'}`);
 
   const agentsQuery = createQuery(() => ({
     queryKey,
     queryFn: () =>
       trpc.agents.list.query(
-        scopeStore.currentSite ? { siteId: scopeStore.currentSite } : undefined
+        scopeStore.currentSite || scopeStore.currentGroup
+          ? {
+              siteId: scopeStore.currentSite ?? undefined,
+              groupId: scopeStore.currentGroup ?? undefined,
+            }
+          : undefined
       ),
   }));
 

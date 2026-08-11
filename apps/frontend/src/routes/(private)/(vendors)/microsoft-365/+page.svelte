@@ -12,8 +12,12 @@
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
 
   const overviewQuery = createQuery(() => ({
-    queryKey: ['vendor.linkOverview', 'microsoft-365'],
-    queryFn: () => trpc.vendor.linkOverview.query({ integrationId: 'microsoft-365' }),
+    queryKey: ['vendor.linkOverview', 'microsoft-365', scopeStore.currentGroup],
+    queryFn: () =>
+      trpc.vendor.linkOverview.query({
+        integrationId: 'microsoft-365',
+        groupId: scopeStore.currentGroup ?? undefined,
+      }),
     enabled: !scopeStore.currentLink,
   }));
 

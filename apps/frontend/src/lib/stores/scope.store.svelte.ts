@@ -12,6 +12,10 @@ type Integration = {
 };
 
 function createScopeStore() {
+  const currentGroupId = new PersistedState<string | null>('current_group_id', null, {
+    storage: 'session',
+    syncTabs: false,
+  });
   const currentSiteId = new PersistedState<string | null>('current_site_id', null, {
     storage: 'session',
     syncTabs: false,
@@ -34,10 +38,13 @@ function createScopeStore() {
       return currentIntegration.current ? INTEGRATIONS[currentIntegration.current].scope : null;
     },
     get currentLink() {
-      return currentLinkId.current;
+      return currentLinkId.current || null;
+    },
+    get currentGroup() {
+      return currentGroupId.current || null;
     },
     get currentSite() {
-      return currentSiteId.current;
+      return currentSiteId.current || null;
     },
     get currentIntegration() {
       return currentIntegration.current || null;
@@ -45,14 +52,37 @@ function createScopeStore() {
     get activeIntegrations() {
       return activeIntegrations.current;
     },
+    clearScope() {
+      currentGroupId.current = '';
+      currentSiteId.current = '';
+      currentLinkId.current = '';
+    },
     set currentSite(v: string | null) {
-      currentSiteId.current = v;
+      currentSiteId.current = v ?? '';
+      if (v) {
+        currentGroupId.current = null;
+        currentLinkId.current = null;
+      }
     },
     set currentLink(v: string | null) {
-      currentLinkId.current = v;
+      currentLinkId.current = v ?? '';
+      if (v) {
+        currentGroupId.current = null;
+        currentSiteId.current = null;
+      }
+    },
+    set currentGroup(v: string | null) {
+      currentGroupId.current = v ?? '';
+      if (v) {
+        currentSiteId.current = null;
+        currentLinkId.current = null;
+      }
     },
     set currentIntegration(v: ProviderId | null) {
-      currentIntegration.current = (v ?? '') as ProviderId;
+      currentIntegration.current = v;
+      currentGroupId.current = null;
+      currentSiteId.current = null;
+      currentLinkId.current = null;
     },
     set activeIntegrations(v: Integration[]) {
       activeIntegrations.current = v;

@@ -21,11 +21,12 @@
   type FirewallRow = typeof sophosFirewallsWithSite.$inferSelect & Record<string, unknown>;
 
   const siteLinkQuery = createQuery(() => ({
-    queryKey: ['integrationLinks.list', 'sophos-partner', scopeStore.currentSite],
+    queryKey: ['integrationLinks.list', 'sophos-partner', scopeStore.currentSite, scopeStore.currentGroup],
     queryFn: () =>
       trpc.integrationLinks.list.query({
         integrationId: 'sophos-partner',
         siteId: scopeStore.currentSite!,
+        groupId: scopeStore.currentGroup ?? undefined,
       }),
     enabled: !!scopeStore.currentSite,
   }));
@@ -113,6 +114,7 @@
   <VendorDataTable
     table="sophos_firewalls_with_site"
     linkId={currentLinkId ?? undefined}
+    groupId={scopeStore.currentGroup ?? undefined}
     integrationId="sophos-partner"
     scopeColumn={false}
     {columns}

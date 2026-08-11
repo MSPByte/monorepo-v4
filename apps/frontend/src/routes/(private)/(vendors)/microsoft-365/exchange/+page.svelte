@@ -110,6 +110,7 @@
         <VendorDataTable
           table="m365_mailbox_forwarding"
           linkId={scopeStore.currentLink || undefined}
+          groupId={scopeStore.currentGroup || undefined}
           integrationId="microsoft-365"
           columns={forwardingColumns}
           onrowclick={(row) => (selectedForwarding = row as ForwardingRow)}
@@ -118,6 +119,7 @@
         <VendorDataTable
           table="m365_inbox_rules"
           linkId={scopeStore.currentLink || undefined}
+          groupId={scopeStore.currentGroup || undefined}
           integrationId="microsoft-365"
           columns={inboxRuleColumns}
           onrowclick={(row) => (selectedInboxRule = row as InboxRuleRow)}
@@ -125,6 +127,7 @@
       {:else if !scopeStore.currentLink}
         <VendorDataTable
           table="m365_exchange_configs"
+          groupId={scopeStore.currentGroup || undefined}
           integrationId="microsoft-365"
           columns={configColumns}
         />

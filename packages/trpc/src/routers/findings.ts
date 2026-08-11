@@ -12,6 +12,7 @@ import { ActionLabels, getPolicyTableShape } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
 import { queryTableData, tableDataInputSchema } from './table-data.js';
+import { loadGroupTargets } from './group-targets.js';
 
 const OPEN_STATUSES = ['open', 'acknowledged', 'regressed'] as const;
 
@@ -163,13 +164,37 @@ async function loadBlockingParents(
 }
 
 export const findingsRouter = t.router({
-  tableData: authProcedure.input(tableDataInputSchema).query(async ({ ctx, input }) => {
+  tableData: authProcedure
+    .input(
+      tableDataInputSchema.extend({
+        groupId: z.string().uuid().optional()
+      })
+    )
+    .query(async ({ ctx, input }) => {
     const scope = ctx.scopeFor('Findings.Read');
     if (scope !== 'all' && scope.length === 0) {
       return { rows: [], total: 0, page: input.page, pageSize: input.pageSize, pageCount: 0 };
     }
+    const groupTargets = input.groupId ? await loadGroupTargets(ctx.db, input.groupId) : null;
+    const scopeWhereParts = [];
+    if (scope !== 'all') scopeWhereParts.push(inArray(findingsWithContext.siteId, [...scope]));
+    if (groupTargets) {
+      if (groupTargets.siteIds.length === 0 && groupTargets.linkIds.length === 0) {
+        return { rows: [], total: 0, page: input.page, pageSize: input.pageSize, pageCount: 0 };
+      }
+      scopeWhereParts.push(
+        groupTargets.siteIds.length > 0 && groupTargets.linkIds.length > 0
+          ? or(
+              inArray(findingsWithContext.siteId, groupTargets.siteIds),
+              inArray(findingsWithContext.linkId, groupTargets.linkIds)
+            )
+          : groupTargets.siteIds.length > 0
+            ? inArray(findingsWithContext.siteId, groupTargets.siteIds)
+            : inArray(findingsWithContext.linkId, groupTargets.linkIds)
+      );
+    }
     const scopeWhere =
-      scope === 'all' ? undefined : inArray(findingsWithContext.siteId, [...scope]);
+      scopeWhereParts.length > 1 ? and(...scopeWhereParts) : scopeWhereParts[0];
     return queryTableData<typeof findingsWithContext.$inferSelect>(
       ctx.db,
       findingsWithContext,
@@ -179,7 +204,7 @@ export const findingsRouter = t.router({
       findingSelection,
       scopeWhere
     );
-  }),
+    }),
 
   list: authProcedure.input(listInput).query(async ({ ctx, input }) => {
     const scope = ctx.scopeFor('Findings.Read');

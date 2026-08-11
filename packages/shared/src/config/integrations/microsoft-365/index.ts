@@ -47,7 +47,7 @@ export const M365_INTEGRATION_CONFIG: Integration = {
   id: 'microsoft-365',
   name: 'Microsoft 365',
   category: 'security',
-  scope: 'link',
+  scope: 'tenant',
   supportedFacets: [
     {
       facet: ProviderFacet.M365Identities,

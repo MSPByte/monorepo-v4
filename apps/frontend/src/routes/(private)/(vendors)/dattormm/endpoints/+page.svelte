@@ -19,11 +19,12 @@
 
   // ── Resolve the link for this site ──────────────────────────────────────
   const siteLinkQuery = createQuery(() => ({
-    queryKey: ['integrationLinks.list', 'dattormm', scopeStore.currentSite],
+    queryKey: ['integrationLinks.list', 'dattormm', scopeStore.currentSite, scopeStore.currentGroup],
     queryFn: () =>
       trpc.integrationLinks.list.query({
         integrationId: 'dattormm',
         siteId: scopeStore.currentSite!,
+        groupId: scopeStore.currentGroup ?? undefined,
       }),
     enabled: !!scopeStore.currentSite,
   }));
@@ -75,6 +76,7 @@
   <VendorDataTable
     table="datto_endpoints"
     linkId={currentLinkId ?? undefined}
+    groupId={scopeStore.currentGroup ?? undefined}
     integrationId="dattormm"
     scopeColumn="site"
     {columns}

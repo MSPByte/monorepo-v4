@@ -23,10 +23,11 @@
     description: string;
     status: 'draft' | 'active' | 'archived';
     steps: Step[];
-    // Empty arrays => global. Non-empty restricts which sites this package
-    // can run against (site direct-match OR any of the site's groups).
+    // Empty arrays => global. Non-empty restricts which sites, groups, or
+    // tenant links this package can run against.
     allowedSites: string[];
     allowedSiteGroups: string[];
+    allowedIntegrationLinks: string[];
   };
 </script>
 
@@ -48,6 +49,7 @@
   import MultiSelect from '$lib/components/multi-select.svelte';
   import SingleSelect from '$lib/components/single-select.svelte';
   import { fieldLabel } from '$lib/utils/label';
+  import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
   import {
     ArrowLeft,
     ArrowUp,
@@ -115,7 +117,7 @@
     });
   }
 
-  // Sites + site groups feed the scope pickers in the package details panel.
+  // Sites, groups, and tenant links feed the scope pickers in the details panel.
   const sitesQuery = createQuery(() => ({
     queryKey: ['sites.list.scopePicker'],
     queryFn: () => trpc.sites.list.query(),
@@ -133,6 +135,20 @@
   );
   const siteGroupOptions = $derived(
     (siteGroupsQuery.data ?? []).map((g) => ({ value: g.id, label: g.name }))
+  );
+  const tenantLinksQuery = createQuery(() => ({
+    queryKey: ['integrationLinks.list.packageScope'],
+    queryFn: () => trpc.integrationLinks.list.query({ status: 'active' }),
+    staleTime: 60_000,
+  }));
+  const tenantLinkOptions = $derived(
+    (tenantLinksQuery.data ?? [])
+      .filter((link) => INTEGRATIONS[link.integrationId as ProviderId]?.scope === 'tenant')
+      .map((link) => ({
+        value: link.id,
+        label: link.name ?? link.externalId ?? link.id,
+        subLabel: INTEGRATIONS[link.integrationId as ProviderId]?.name ?? link.integrationId,
+      }))
   );
 
   // Pick the first generator that supports a given input's typeHint. Today
@@ -152,10 +168,13 @@
     steps: structuredClone(initial.steps),
     allowedSites: [...(initial.allowedSites ?? [])],
     allowedSiteGroups: [...(initial.allowedSiteGroups ?? [])],
+    allowedIntegrationLinks: [...(initial.allowedIntegrationLinks ?? [])],
   });
 
   const isGlobalScope = $derived(
-    draft.allowedSites.length === 0 && draft.allowedSiteGroups.length === 0
+    draft.allowedSites.length === 0 &&
+      draft.allowedSiteGroups.length === 0 &&
+      draft.allowedIntegrationLinks.length === 0
   );
 
   // Selection defaults to the first step when the package loads; -1 = meta (details).
@@ -792,7 +811,7 @@
               >
                 {isGlobalScope
                   ? 'Global'
-                  : `${draft.allowedSites.length} sites · ${draft.allowedSiteGroups.length} groups`}
+                  : `${draft.allowedSites.length} sites · ${draft.allowedSiteGroups.length} groups · ${draft.allowedIntegrationLinks.length} tenants`}
               </span>
             </div>
             <div class="space-y-2">
@@ -811,6 +830,15 @@
                 selected={draft.allowedSiteGroups}
                 placeholder="No group restriction"
                 onchange={(v) => (draft.allowedSiteGroups = v)}
+              />
+            </div>
+            <div class="space-y-2">
+              <div class="text-xs text-muted-foreground">Allowed tenant links</div>
+              <MultiSelect
+                options={tenantLinkOptions}
+                selected={draft.allowedIntegrationLinks}
+                placeholder="No tenant restriction"
+                onchange={(v) => (draft.allowedIntegrationLinks = v)}
               />
             </div>
           </div>

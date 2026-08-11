@@ -23,13 +23,18 @@
 
   type LogRow = inferRouterOutputs<AppRouter>['agents']['listLogs'][number];
 
-  const scopeKey = $derived(scopeStore.currentSite ?? 'all');
+  const scopeKey = $derived(`${scopeStore.currentSite ?? 'all'}:${scopeStore.currentGroup ?? 'all'}`);
 
   const logsQuery = createQuery(() => ({
     queryKey: ['agents.listLogs', 'all', scopeKey],
     queryFn: () =>
       trpc.agents.listLogs.query(
-        scopeStore.currentSite ? { siteId: scopeStore.currentSite } : undefined
+        scopeStore.currentSite || scopeStore.currentGroup
+          ? {
+              siteId: scopeStore.currentSite ?? undefined,
+              groupId: scopeStore.currentGroup ?? undefined,
+            }
+          : undefined
       ),
   }));
 

@@ -10,6 +10,7 @@
 
   type Props = {
     entityType: EntityType;
+    packageId?: string;
     integrationLinkId?: string;
     integrationId?: string;
     // Single mode: string | null. Multi mode: string[].
@@ -22,6 +23,7 @@
 
   let {
     entityType,
+    packageId,
     integrationLinkId,
     integrationId,
     value,
@@ -37,12 +39,14 @@
     queryKey: [
       'packages.entityOptions',
       entityType,
+      packageId ?? null,
       integrationLinkId ?? null,
       integrationId ?? null,
     ],
     queryFn: () =>
       trpc.packages.entityOptions.query({
         entityType,
+        packageId,
         integrationLinkId,
         integrationId,
       }),

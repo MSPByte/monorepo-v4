@@ -28,6 +28,7 @@
         steps: draft.steps,
         allowedSites: draft.allowedSites,
         allowedSiteGroups: draft.allowedSiteGroups,
+        allowedIntegrationLinks: draft.allowedIntegrationLinks,
       }),
     onSuccess: () => {
       toast.success('Package saved');
@@ -47,6 +48,7 @@
       steps: (pkg.steps as Step[]) ?? [],
       allowedSites: (pkg.allowedSites as string[] | null) ?? [],
       allowedSiteGroups: (pkg.allowedSiteGroups as string[] | null) ?? [],
+      allowedIntegrationLinks: (pkg.allowedIntegrationLinks as string[] | null) ?? [],
     };
   });
 </script>

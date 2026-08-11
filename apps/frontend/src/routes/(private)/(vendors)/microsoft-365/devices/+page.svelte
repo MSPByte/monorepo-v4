@@ -39,6 +39,7 @@
 <VendorDataTable
   table="m365_devices"
   linkId={scopeStore.currentLink || undefined}
+  groupId={scopeStore.currentGroup || undefined}
   integrationId="microsoft-365"
   {columns}
   onrowclick={(row) => (selectedDevice = row as DeviceRow)}

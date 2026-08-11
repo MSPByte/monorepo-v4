@@ -35,8 +35,12 @@
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
 
   const packagesQuery = createQuery(() => ({
-    queryKey: ['packages.list'],
-    queryFn: () => trpc.packages.list.query(),
+    queryKey: ['packages.list', siteId ?? null, linkId ?? null],
+    queryFn: () =>
+      trpc.packages.list.query({
+        siteId: siteId ?? undefined,
+        linkId: linkId ?? undefined,
+      }),
     enabled: open,
     staleTime: 30_000,
   }));
@@ -468,6 +472,7 @@
                   {:else}
                     <EntityPicker
                       entityType={field.entityType}
+                      packageId={selectedPackage.id}
                       integrationLinkId={field.entityType !== 'integration_link'
                         ? cascadeLinkId
                         : undefined}

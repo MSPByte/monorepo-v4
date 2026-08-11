@@ -9,7 +9,8 @@ export type IntegrationCategory =
   | "security"
   | "identity"
   | "other";
-export type IntegrationScope = "site" | "link";
+export type IngestScopeLevel = "site" | "link";
+export type IntegrationScope = "site" | "tenant";
 
 export type DbRoute = {
   table: string;
@@ -28,7 +29,7 @@ export type FacetSyncConfig = {
 
 export type IngestTypeConfig = {
   facet: ProviderFacet;
-  scopeLevel: IntegrationScope;
+  scopeLevel: IngestScopeLevel;
   db?: DbRoute;
   sync?: FacetSyncConfig;
 };

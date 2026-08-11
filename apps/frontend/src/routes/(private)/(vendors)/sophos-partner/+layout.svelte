@@ -12,7 +12,7 @@
     ...SOPHOS_PARTNER_CONFIG.navigation.map((n) => ({
       label: n.label,
       href: `/sophos-partner${n.route}`,
-      disabled: () => n.isNullable && !scopeStore.currentSite,
+      disabled: () => n.isNullable && !scopeStore.currentSite && !scopeStore.currentGroup,
     })),
   ];
 </script>

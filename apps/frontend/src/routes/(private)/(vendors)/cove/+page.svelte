@@ -13,17 +13,22 @@
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
 
   const overviewQuery = createQuery(() => ({
-    queryKey: ['vendor.linkOverview', 'cove'],
-    queryFn: () => trpc.vendor.linkOverview.query({ integrationId: 'cove' }),
+    queryKey: ['vendor.linkOverview', 'cove', scopeStore.currentGroup],
+    queryFn: () =>
+      trpc.vendor.linkOverview.query({
+        integrationId: 'cove',
+        groupId: scopeStore.currentGroup ?? undefined,
+      }),
     enabled: !scopeStore.currentSite,
   }));
 
   const siteLinkQuery = createQuery(() => ({
-    queryKey: ['integrationLinks.list', 'cove', scopeStore.currentSite],
+    queryKey: ['integrationLinks.list', 'cove', scopeStore.currentSite, scopeStore.currentGroup],
     queryFn: () =>
       trpc.integrationLinks.list.query({
         integrationId: 'cove',
         siteId: scopeStore.currentSite!,
+        groupId: scopeStore.currentGroup ?? undefined,
       }),
     enabled: !!scopeStore.currentSite,
   }));
@@ -40,13 +45,15 @@
 {#if scopeStore.currentSite}
   {#if siteLinkQuery.isLoading}
     <Loader />
-  {:else if !currentLink}
+  {:else if scopeStore.currentSite && !currentLink}
     <div class="flex flex-col items-center justify-center size-full gap-2 text-muted-foreground">
       <div class="text-sm font-medium">No Cove integration for this site.</div>
     </div>
   {:else}
     <FadeIn class="flex-1 overflow-hidden size-full">
-      <InsightsPanel linkId={currentLink} />
+      {#if currentLink}
+        <InsightsPanel linkId={currentLink} />
+      {/if}
     </FadeIn>
   {/if}
 {:else}

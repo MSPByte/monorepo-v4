@@ -11,7 +11,7 @@
     ...MSPAGENT_CONFIG.navigation.map((n) => ({
       label: n.label,
       href: `/mspagent${n.route}`,
-      disabled: () => n.isNullable && !scopeStore.currentSite,
+      disabled: () => n.isNullable && !scopeStore.currentSite && !scopeStore.currentGroup,
     })),
   ];
 </script>

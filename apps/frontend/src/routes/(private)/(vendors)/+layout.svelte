@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { page } from '$app/state';
   import { replaceState } from '$app/navigation';
   import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
@@ -25,24 +25,32 @@
     const url = page.url;
     const linkId = url.searchParams.get('linkId');
     const siteId = url.searchParams.get('siteId');
-    if (!linkId && !siteId) return;
+    const groupId = url.searchParams.get('groupId');
+    if (!linkId && !siteId && !groupId) return;
 
     const scope = INTEGRATIONS[provider].scope;
 
-    if (scopeStore.currentIntegration !== provider) {
-      scopeStore.currentIntegration = provider;
-    }
+    // URL parameters provide initial scope only. Keep these store reads untracked so
+    // clearing a scope in the chip cannot cause this effect to restore it from the URL.
+    untrack(() => {
+      if (scopeStore.currentIntegration !== provider) {
+        scopeStore.currentIntegration = provider;
+      }
 
-    if (scope === 'link' && linkId && scopeStore.currentLink !== linkId) {
-      scopeStore.currentLink = linkId;
-    } else if (scope === 'site' && siteId && scopeStore.currentSite !== siteId) {
-      scopeStore.currentSite = siteId;
-    }
+      if (groupId && scopeStore.currentGroup !== groupId) {
+        scopeStore.currentGroup = groupId;
+      } else if (scope === 'tenant' && linkId && scopeStore.currentLink !== linkId) {
+        scopeStore.currentLink = linkId;
+      } else if (scope === 'site' && siteId && scopeStore.currentSite !== siteId) {
+        scopeStore.currentSite = siteId;
+      }
+    });
 
     if (!mounted) return;
     const stripped = new URL(url);
     stripped.searchParams.delete('linkId');
     stripped.searchParams.delete('siteId');
+    stripped.searchParams.delete('groupId');
     tick().then(() => replaceState(stripped, page.state));
   });
 </script>

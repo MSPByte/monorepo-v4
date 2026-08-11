@@ -34,12 +34,13 @@ export const packages = packagesSchema.table(
     // Ordered list of package-level FailureAction records (see @mspbyte/capabilities).
     // Worker executes them after any terminal failed/halted/partial state.
     failureActions: jsonb('failure_actions').notNull().default(sql`'[]'::jsonb`),
-    // Scoping: uuid arrays of sites/site-groups this package is allowed to
-    // run against. Both empty => global (any site or no site). Enforced at
-    // run-start; the list endpoint also filters by these when a siteId is
-    // supplied.
+    // Scoping: uuid arrays of sites/site-groups/integration-links this
+    // package is allowed to run against. All empty => global.
     allowedSites: jsonb('allowed_sites').notNull().default(sql`'[]'::jsonb`),
     allowedSiteGroups: jsonb('allowed_site_groups').notNull().default(sql`'[]'::jsonb`),
+    allowedIntegrationLinks: jsonb('allowed_integration_links')
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     authorUserId: text('author_user_id'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .notNull()

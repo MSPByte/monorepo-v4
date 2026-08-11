@@ -45,6 +45,7 @@ import {
 } from '@mspbyte/drizzle';
 import { Encryption, SophosConnector, ActionLabels } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
+import { loadGroupTargets } from './group-targets.js';
 
 const VENDOR_TABLE_MAP = {
   m365_identities: m365Identities,
@@ -71,6 +72,33 @@ const VENDOR_TABLE_MAP = {
 } as const;
 
 type VendorTableKey = keyof typeof VENDOR_TABLE_MAP;
+
+const VENDOR_TABLE_SCOPE_COLUMNS: Record<
+  VendorTableKey,
+  { siteId: boolean; linkId: boolean }
+> = {
+  m365_identities: { siteId: true, linkId: true },
+  m365_groups: { siteId: false, linkId: true },
+  m365_policies: { siteId: false, linkId: true },
+  m365_licenses: { siteId: false, linkId: true },
+  m365_exchange_configs: { siteId: false, linkId: true },
+  m365_devices: { siteId: false, linkId: true },
+  m365_oauth_grants: { siteId: false, linkId: true },
+  m365_domain_config: { siteId: false, linkId: true },
+  m365_teams_config: { siteId: false, linkId: true },
+  m365_risky_users: { siteId: false, linkId: true },
+  m365_mailbox_forwarding: { siteId: false, linkId: true },
+  m365_inbox_rules: { siteId: false, linkId: true },
+  sophos_endpoints: { siteId: true, linkId: true },
+  sophos_firewalls: { siteId: true, linkId: true },
+  sophos_licenses: { siteId: true, linkId: true },
+  sophos_endpoints_with_site: { siteId: true, linkId: true },
+  sophos_firewalls_with_site: { siteId: true, linkId: true },
+  sophos_licenses_with_site: { siteId: true, linkId: true },
+  datto_endpoints: { siteId: true, linkId: true },
+  cove_endpoints: { siteId: true, linkId: true },
+  cove_endpoints_with_site: { siteId: true, linkId: true }
+};
 
 function camelToSnake(str: string): string {
   return str.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
@@ -988,6 +1016,7 @@ export const vendorRouter = t.router({
       z.object({
         table: z.string(),
         linkId: z.uuid().optional(),
+        groupId: z.uuid().optional(),
         page: z.number().int().min(1).default(1),
         pageSize: z.number().int().min(1).max(1000).default(25),
         sortColumn: z.string().optional(),
@@ -1008,21 +1037,19 @@ export const vendorRouter = t.router({
         });
       }
 
-      const table = VENDOR_TABLE_MAP[input.table as VendorTableKey] as any;
+      const tableKey = input.table as VendorTableKey;
+      const table = VENDOR_TABLE_MAP[tableKey] as any;
+      const scopeColumns = VENDOR_TABLE_SCOPE_COLUMNS[tableKey];
       const offset = (input.page - 1) * input.pageSize;
 
-      // Build base filter: linkId takes priority, else siteId
+      // Build base filter: explicit link/site scope can be further narrowed by group.
       const baseConditions: ReturnType<typeof sql>[] = [];
       if (input.linkId) {
         baseConditions.push(sql`${sql.identifier('link_id')} = ${input.linkId}`);
       }
-
-      // Scope filter: every vendor table has a site_id column, so restrict to
-      // the caller's scoped sites when scope !== 'all'. Empty scope short-
-      // circuits to zero rows.
-      const scope = ctx.scopeFor('Vendors.Read');
-      if (scope !== 'all') {
-        if (scope.length === 0) {
+      if (input.groupId) {
+        const targets = await loadGroupTargets(ctx.db, input.groupId);
+        if (targets.siteIds.length === 0 && targets.linkIds.length === 0) {
           return {
             rows: [] as unknown[],
             total: 0,
@@ -1031,11 +1058,76 @@ export const vendorRouter = t.router({
             pageCount: 0
           };
         }
-        const idParams = sql.join(
-          scope.map((id) => sql`${id}::uuid`),
-          sql`, `
+        const groupParts: ReturnType<typeof sql>[] = [];
+        if (scopeColumns.siteId && targets.siteIds.length > 0) {
+          const siteParams = sql.join(
+            targets.siteIds.map((id) => sql`${id}::uuid`),
+            sql`, `
+          );
+          groupParts.push(sql`${sql.identifier('site_id')} IN (${siteParams})`);
+        }
+        if (scopeColumns.linkId && targets.linkIds.length > 0) {
+          const linkParams = sql.join(
+            targets.linkIds.map((id) => sql`${id}::uuid`),
+            sql`, `
+          );
+          groupParts.push(sql`${sql.identifier('link_id')} IN (${linkParams})`);
+        }
+        if (groupParts.length === 0) {
+          return {
+            rows: [] as unknown[],
+            total: 0,
+            page: input.page,
+            pageSize: input.pageSize,
+            pageCount: 0
+          };
+        }
+        baseConditions.push(
+          groupParts.length === 1 ? groupParts[0]! : sql`(${groupParts.reduce((acc, c) => sql`${acc} or ${c}`)})`
         );
-        baseConditions.push(sql`${sql.identifier('site_id')} IN (${idParams})`);
+      }
+
+      const siteScope = ctx.scopeFor('Vendors.Read');
+      const linkScope = ctx.linkScopeFor('Vendors.Read');
+      if (siteScope !== 'all' || linkScope !== 'all') {
+        if (
+          siteScope !== 'all' &&
+          linkScope !== 'all' &&
+          siteScope.length === 0 &&
+          linkScope.length === 0
+        ) {
+          return {
+            rows: [] as unknown[],
+            total: 0,
+            page: input.page,
+            pageSize: input.pageSize,
+            pageCount: 0
+          };
+        }
+        const scopeParts: ReturnType<typeof sql>[] = [];
+        if (scopeColumns.siteId && siteScope === 'all') {
+          scopeParts.push(sql`${sql.identifier('site_id')} is not null`);
+        } else if (scopeColumns.siteId && siteScope !== 'all' && siteScope.length > 0) {
+          const siteParams = sql.join(
+            siteScope.map((id) => sql`${id}::uuid`),
+            sql`, `
+          );
+          scopeParts.push(sql`${sql.identifier('site_id')} IN (${siteParams})`);
+        }
+        if (scopeColumns.linkId && linkScope === 'all') {
+          scopeParts.push(sql`${sql.identifier('link_id')} is not null`);
+        } else if (scopeColumns.linkId && linkScope !== 'all' && linkScope.length > 0) {
+          const linkParams = sql.join(
+            linkScope.map((id) => sql`${id}::uuid`),
+            sql`, `
+          );
+          scopeParts.push(sql`${sql.identifier('link_id')} IN (${linkParams})`);
+        }
+        if (scopeParts.length > 0) {
+          baseConditions.push(
+            scopeParts.length === 1 ? scopeParts[0]! : sql`(${scopeParts.reduce((acc, c) => sql`${acc} or ${c}`)})`
+          );
+        }
       }
 
       // Apply user-supplied filters
@@ -2289,8 +2381,9 @@ export const vendorRouter = t.router({
     }),
 
   linkOverview: authProcedure
-    .input(z.object({ integrationId: z.string() }))
+    .input(z.object({ integrationId: z.string(), groupId: z.string().uuid().optional() }))
     .query(async ({ ctx, input }) => {
+      const groupTargets = input.groupId ? await loadGroupTargets(ctx.db, input.groupId) : null;
       const links = await ctx.db
         .select({
           id: integrationLinks.id,
@@ -2303,7 +2396,23 @@ export const vendorRouter = t.router({
           updatedAt: integrationLinks.updatedAt
         })
         .from(integrationLinks)
-        .where(eq(integrationLinks.integrationId, input.integrationId))
+        .where(
+          and(
+            eq(integrationLinks.integrationId, input.integrationId),
+            groupTargets
+              ? groupTargets.siteIds.length > 0 && groupTargets.linkIds.length > 0
+                ? or(
+                    inArray(integrationLinks.siteId, groupTargets.siteIds),
+                    inArray(integrationLinks.id, groupTargets.linkIds)
+                  )
+                : groupTargets.siteIds.length > 0
+                  ? inArray(integrationLinks.siteId, groupTargets.siteIds)
+                  : groupTargets.linkIds.length > 0
+                    ? inArray(integrationLinks.id, groupTargets.linkIds)
+                    : sql`false`
+              : undefined
+          )
+        )
         .orderBy(integrationLinks.name);
 
       const siteIds = links.map((link) => link.siteId).filter((id): id is string => !!id);

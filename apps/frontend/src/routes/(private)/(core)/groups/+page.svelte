@@ -35,7 +35,7 @@
   const columns: DataTableColumn<GroupRow>[] = [
     textColumn<GroupRow>('name', 'Group', undefined, undefined, { width: '260px' }),
     textColumn<GroupRow>('description', 'Description'),
-    numberColumn<GroupRow>('memberCount', 'Sites'),
+    numberColumn<GroupRow>('memberCount', 'Members'),
   ];
 
   async function fetchData(input: PaginationInput) {
@@ -83,9 +83,9 @@
 <div class="flex size-full flex-col gap-4 overflow-hidden p-6">
   <div class="flex items-start justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-semibold tracking-normal">Site Groups</h1>
+      <h1 class="text-2xl font-semibold tracking-normal">Groups</h1>
       <p class="text-sm text-muted-foreground">
-        Arbitrary groupings of sites — parent/child, region, tier, or any other slicing.
+        Arbitrary groupings of sites and tenant links for scoping, packaging, and reporting.
       </p>
     </div>
     {#if canWriteSites}
@@ -110,7 +110,7 @@
     <Dialog.Header>
       <Dialog.Title>Create group</Dialog.Title>
       <Dialog.Description>
-        Groups let you assign policies, billing, and framework scope to a slice of sites.
+        Groups let you assign policies, billing, frameworks, and packages to a slice of sites or tenant links.
       </Dialog.Description>
     </Dialog.Header>
     <Separator />

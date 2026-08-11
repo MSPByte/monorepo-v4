@@ -5,7 +5,6 @@ import {
   packageRuns,
   packageRunSteps,
   packages as packagesTable,
-  siteGroupMembers
 } from '@mspbyte/drizzle';
 import { TRPCError } from '@trpc/server';
 import { generatePassword, getCapability } from '@mspbyte/capabilities';
@@ -13,6 +12,7 @@ import { createPendingPackageRun } from '@mspbyte/pipeline';
 import { Encryption } from '@mspbyte/encryption';
 import { ActionLabels } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
+import { loadMatchingGroupIds, packageMatchesScope, readPackageScope } from './package-scope.js';
 
 const runtimeInputsSchema = z.record(z.string(), z.unknown()).default({});
 
@@ -114,32 +114,20 @@ export const packageRunsRouter = t.router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Package is not active' });
       }
 
-      // Scope enforcement: if the package restricts sites/groups, the run's
-      // siteId must satisfy one of them. Global packages (both empty) skip
-      // this check entirely.
-      const allowedSites = (pkg.allowedSites ?? []) as string[];
-      const allowedGroups = (pkg.allowedSiteGroups ?? []) as string[];
-      const isScoped = allowedSites.length > 0 || allowedGroups.length > 0;
-      if (isScoped) {
-        if (!input.siteId) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'This package is scoped to specific sites — pick a site to run against.'
-          });
-        }
-        let allowed = allowedSites.includes(input.siteId);
-        if (!allowed && allowedGroups.length > 0) {
-          const groupRows = await ctx.db
-            .select({ groupId: siteGroupMembers.siteGroupId })
-            .from(siteGroupMembers)
-            .where(eq(siteGroupMembers.siteId, input.siteId));
-          const memberOf = new Set(groupRows.map((r) => r.groupId));
-          allowed = allowedGroups.some((g) => memberOf.has(g));
-        }
+      const scope = readPackageScope(pkg);
+      if (!input.siteId && !input.linkId && !packageMatchesScope(scope, input, new Set())) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'This package is scoped to specific sites, groups, or tenant links.'
+        });
+      }
+      if (input.siteId || input.linkId) {
+        const matchingGroupIds = await loadMatchingGroupIds(ctx.db, input);
+        const allowed = packageMatchesScope(scope, input, matchingGroupIds);
         if (!allowed) {
           throw new TRPCError({
             code: 'FORBIDDEN',
-            message: 'This package is not permitted to run against the selected site.'
+            message: 'This package is not permitted to run against the selected target.'
           });
         }
       }

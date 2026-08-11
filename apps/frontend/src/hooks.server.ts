@@ -1,5 +1,7 @@
-import { building } from '$app/environment';
-import { redirect, type Handle } from '@sveltejs/kit';
+import { building, dev } from '$app/environment';
+import { redirect, type Handle, type RequestEvent } from '@sveltejs/kit';
+import { env } from '$env/dynamic/private';
+import { PUBLIC_DEV_ORG } from '$env/static/public';
 import { eq } from 'drizzle-orm';
 import { auth } from '$lib/server/auth';
 import { getTenantServiceDbByOrgId } from '@mspbyte/drizzle-catalog';
@@ -24,6 +26,10 @@ const handleAuth: Handle = async ({ event, resolve }) => {
   }
 
   if (isPublicRoute(event.url.pathname)) {
+    return svelteKitHandler({ event, resolve, auth, building });
+  }
+
+  if (await applyLocalDevAuth(event)) {
     return svelteKitHandler({ event, resolve, auth, building });
   }
 
@@ -117,6 +123,39 @@ const handleDev: Handle = async ({ event, resolve }) => {
 };
 
 export const handle = sequence(handleAuth, handleDev);
+
+/**
+ * Enables browser testing against local development data without a social-login flow.
+ * It is deliberately unavailable outside a Vite dev build, off loopback hosts, or
+ * unless explicitly enabled in the local environment.
+ */
+async function applyLocalDevAuth(event: RequestEvent): Promise<boolean> {
+  const loopbackHosts = new Set(['localhost', '127.0.0.1', '::1']);
+  const enabled = env.LOCAL_DEV_AUTH_BYPASS === 'true';
+  const orgId = PUBLIC_DEV_ORG;
+  if (!dev || !enabled || !orgId || !loopbackHosts.has(event.url.hostname)) return false;
+
+  const result = await getTenantServiceDbByOrgId(orgId, ENCRYPTION_KEY, CATALOG_DATABASE_URL);
+  if (!result?.org.isDev || result.org.status !== 'active') {
+    throw new Error('LOCAL_DEV_AUTH_BYPASS requires an active development organization');
+  }
+
+  const [user] = await result.db.select().from(users).limit(1);
+  if (!user) throw new Error('LOCAL_DEV_AUTH_BYPASS requires a user in the development organization');
+
+  const { grants, primaryRole } = await loadGrants(result.db, user.id);
+  if (!primaryRole || grants.length === 0) {
+    throw new Error('LOCAL_DEV_AUTH_BYPASS requires a user with role grants');
+  }
+
+  event.locals.auth = { userId: user.authUserId, orgId: result.org.id, email: user.email };
+  event.locals.user = user;
+  event.locals.role = primaryRole;
+  event.locals.grants = grants;
+  event.locals.org = result.org;
+  event.locals.connectionString = result.org.serviceConnectionString;
+  return true;
+}
 
 async function loadGrants(
   db: Awaited<ReturnType<typeof getTenantServiceDbByOrgId>>['db'],

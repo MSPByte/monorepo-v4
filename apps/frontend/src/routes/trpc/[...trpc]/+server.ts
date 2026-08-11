@@ -30,6 +30,8 @@ const handler: RequestHandler = async (event) => {
       can: (p: Permission) => hasPermission(grants, p),
       canUnder: (prefix: string) => hasAnyPermissionUnder(grants, prefix),
       scopeFor: (p: Permission): EffectiveScope => computeScopeFor(grants, p),
+      groupScopeFor: (p: Permission): EffectiveScope => computeGroupScopeFor(grants, p),
+      linkScopeFor: (_p: Permission): EffectiveScope => [],
       connectionString: event.locals.connectionString,
       encryptionKey: ENCRYPTION_KEY,
       ipAddress: event.getClientAddress(),
@@ -58,4 +60,15 @@ function computeScopeFor(grants: PermissionGrant[], permission: Permission): Eff
     if (g.scope.kind === 'sites') for (const id of g.scope.ids) sites.add(id);
   }
   return [...sites];
+}
+
+function computeGroupScopeFor(grants: PermissionGrant[], permission: Permission): EffectiveScope {
+  const satisfying = grants.filter((g) => hasPermission([g], permission));
+  if (satisfying.length === 0) return [];
+  if (satisfying.some((g) => g.scope.kind === 'all')) return 'all';
+  const groups = new Set<string>();
+  for (const g of satisfying) {
+    if (g.scope.kind === 'groups') for (const id of g.scope.ids) groups.add(id);
+  }
+  return [...groups];
 }

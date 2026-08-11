@@ -1,11 +1,12 @@
 // TODO: Findings Implementation
 import { z } from 'zod';
 import { customerLogs, integrationLinks } from '@mspbyte/drizzle';
-import { eq, and, inArray, ne } from 'drizzle-orm';
+import { eq, and, inArray, ne, or } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import { ActionLabels, INTEGRATIONS, META_VERSION_KEY, type ProviderId } from '@mspbyte/shared';
 import type { Context } from '../context.js';
 import { t, authProcedure } from '../trpc.js';
+import { loadGroupTargets } from './group-targets.js';
 
 type IntegrationLinkRow = typeof integrationLinks.$inferSelect;
 
@@ -78,6 +79,7 @@ export const integrationLinksRouter = t.router({
       z.object({
         integrationId: z.string().optional(),
         siteId: z.string().uuid().optional(),
+        groupId: z.string().uuid().optional(),
         status: z.enum(['active', 'error', 'disabled', 'mapping']).optional()
       })
     )
@@ -86,23 +88,68 @@ export const integrationLinksRouter = t.router({
       // integration configuration OR vendor data. A scoped Auditor with only
       // Vendors.Read still needs to resolve the linkId when browsing vendor
       // pages. Effective scope is the union of both permissions' scopes.
-      const vendorScope = ctx.scopeFor('Vendors.Read');
-      const integrationScope = ctx.scopeFor('Integrations.Read');
-      const noVendor = Array.isArray(vendorScope) && vendorScope.length === 0;
-      const noIntegration = Array.isArray(integrationScope) && integrationScope.length === 0;
+      const vendorSiteScope = ctx.scopeFor('Vendors.Read');
+      const vendorLinkScope = ctx.linkScopeFor('Vendors.Read');
+      const integrationSiteScope = ctx.scopeFor('Integrations.Read');
+      const integrationLinkScope = ctx.linkScopeFor('Integrations.Read');
+      const noVendor =
+        Array.isArray(vendorSiteScope) &&
+        vendorSiteScope.length === 0 &&
+        Array.isArray(vendorLinkScope) &&
+        vendorLinkScope.length === 0;
+      const noIntegration =
+        Array.isArray(integrationSiteScope) &&
+        integrationSiteScope.length === 0 &&
+        Array.isArray(integrationLinkScope) &&
+        integrationLinkScope.length === 0;
       if (noVendor && noIntegration) return [];
 
-      const scope: 'all' | readonly string[] =
-        vendorScope === 'all' || integrationScope === 'all'
+      const siteScope: 'all' | readonly string[] =
+        vendorSiteScope === 'all' || integrationSiteScope === 'all'
           ? 'all'
-          : [...new Set([...(vendorScope as string[]), ...(integrationScope as string[])])];
+          : [
+              ...new Set([...(vendorSiteScope as string[]), ...(integrationSiteScope as string[])])
+            ];
+      const linkScope: 'all' | readonly string[] =
+        vendorLinkScope === 'all' || integrationLinkScope === 'all'
+          ? 'all'
+          : [
+              ...new Set([...(vendorLinkScope as string[]), ...(integrationLinkScope as string[])])
+            ];
 
       const conditions = [];
       if (input.integrationId)
         conditions.push(eq(integrationLinks.integrationId, input.integrationId));
       if (input.siteId) conditions.push(eq(integrationLinks.siteId, input.siteId));
       if (input.status) conditions.push(eq(integrationLinks.status, input.status));
-      if (scope !== 'all') conditions.push(inArray(integrationLinks.siteId, [...scope]));
+
+      if (input.groupId) {
+        const targets = await loadGroupTargets(ctx.db, input.groupId);
+        if (targets.siteIds.length === 0 && targets.linkIds.length === 0) return [];
+        if (targets.siteIds.length > 0 && targets.linkIds.length > 0) {
+          conditions.push(or(inArray(integrationLinks.id, targets.linkIds), inArray(integrationLinks.siteId, targets.siteIds)));
+        } else if (targets.linkIds.length > 0) {
+          conditions.push(inArray(integrationLinks.id, targets.linkIds));
+        } else {
+          conditions.push(inArray(integrationLinks.siteId, targets.siteIds));
+        }
+      }
+
+      if (siteScope !== 'all' || linkScope !== 'all') {
+        const scopeConditions = [];
+        if (siteScope === 'all') {
+          scopeConditions.push(ne(integrationLinks.id, '00000000-0000-0000-0000-000000000000'));
+        } else if (siteScope.length > 0) {
+          scopeConditions.push(inArray(integrationLinks.siteId, [...siteScope]));
+        }
+        if (linkScope === 'all') {
+          scopeConditions.push(ne(integrationLinks.id, '00000000-0000-0000-0000-000000000000'));
+        } else if (linkScope.length > 0) {
+          scopeConditions.push(inArray(integrationLinks.id, [...linkScope]));
+        }
+        if (scopeConditions.length === 0) return [];
+        conditions.push(scopeConditions.length === 1 ? scopeConditions[0]! : or(...scopeConditions));
+      }
 
       return ctx.db
         .select()

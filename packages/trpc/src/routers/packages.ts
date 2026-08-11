@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import {
   customerLogs,
   integrationLinks,
@@ -8,7 +8,7 @@ import {
   m365Licenses,
   packageRuns,
   packages,
-  siteGroupMembers,
+  siteGroupLinkMembers,
   siteProfileFields,
 } from '@mspbyte/drizzle';
 import { sql } from 'drizzle-orm';
@@ -21,6 +21,12 @@ import {
 import { ActionLabels } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
+import {
+  assertTenantScopedIntegrationLinks,
+  loadMatchingGroupIds,
+  packageMatchesScope,
+  readPackageScope,
+} from './package-scope.js';
 
 // Bindings are validated shallowly here — the worker's zod.parse on
 // capability.inputs is the real gate. The builder UI is trusted to compose
@@ -92,9 +98,10 @@ const packageInputSchema = z.object({
   steps: z.array(stepSchema).min(1),
   failureActions: z.array(failureActionSchema).default([]),
   // Scope: empty arrays => global. Non-empty restricts which sites can run
-  // this package (site direct-match OR any of the site's groups matches).
+  // this package (site direct-match, tenant direct-match, or any matching group).
   allowedSites: z.array(z.uuid()).default([]),
   allowedSiteGroups: z.array(z.uuid()).default([]),
+  allowedIntegrationLinks: z.array(z.uuid()).default([]),
 });
 
 const entityTypeSchema = z.enum([
@@ -157,9 +164,10 @@ export const packagesRouter = t.router({
       z
         .object({
           // When provided, filters to packages runnable at this site: global
-          // packages (empty allow-lists) or scoped packages that include this
-          // site directly or via one of its groups.
+          // packages (empty allow-lists) or scoped packages that include the
+          // current site/link directly or via one of its groups.
           siteId: z.uuid().optional(),
+          linkId: z.uuid().optional(),
         })
         .default({}),
     )
@@ -177,29 +185,23 @@ export const packagesRouter = t.router({
           steps: packages.steps,
           allowedSites: packages.allowedSites,
           allowedSiteGroups: packages.allowedSiteGroups,
+          allowedIntegrationLinks: packages.allowedIntegrationLinks,
           createdAt: packages.createdAt,
           updatedAt: packages.updatedAt,
         })
         .from(packages)
         .orderBy(desc(packages.updatedAt));
 
-      if (!input.siteId) return rows;
+      if (!input.siteId && !input.linkId) return rows;
 
-      // Filter in-app rather than in SQL — jsonb array containment across
-      // two columns + a group-membership subquery is awkward, and the
-      // package list is small (hundreds at most, not millions).
-      const groupRows = await ctx.db
-        .select({ groupId: siteGroupMembers.siteGroupId })
-        .from(siteGroupMembers)
-        .where(eq(siteGroupMembers.siteId, input.siteId));
-      const siteGroupIds = new Set(groupRows.map((r) => r.groupId));
+      const matchingGroupIds = await loadMatchingGroupIds(ctx.db, {
+        siteId: input.siteId,
+        linkId: input.linkId,
+      });
 
       return rows.filter((row) => {
-        const sites = (row.allowedSites ?? []) as string[];
-        const groups = (row.allowedSiteGroups ?? []) as string[];
-        if (sites.length === 0 && groups.length === 0) return true;
-        if (sites.includes(input.siteId!)) return true;
-        return groups.some((g) => siteGroupIds.has(g));
+        const scope = readPackageScope(row);
+        return packageMatchesScope(scope, input, matchingGroupIds);
       });
     }),
 
@@ -226,6 +228,13 @@ export const packagesRouter = t.router({
       }
       const err = validateStepsAgainstRegistry(input.steps);
       if (err) throw new TRPCError({ code: 'BAD_REQUEST', message: err });
+      const directLinkScope = await assertTenantScopedIntegrationLinks(
+        ctx.db,
+        input.allowedIntegrationLinks
+      );
+      if (!directLinkScope.ok) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: directLinkScope.message });
+      }
 
       const inserted = await ctx.db
         .insert(packages)
@@ -238,6 +247,7 @@ export const packagesRouter = t.router({
           failureActions: input.failureActions,
           allowedSites: input.allowedSites,
           allowedSiteGroups: input.allowedSiteGroups,
+          allowedIntegrationLinks: input.allowedIntegrationLinks,
           authorUserId: ctx.user.id,
         })
         .returning({ id: packages.id });
@@ -272,6 +282,7 @@ export const packagesRouter = t.router({
         failureActions: z.array(failureActionSchema).optional(),
         allowedSites: z.array(z.uuid()).optional(),
         allowedSiteGroups: z.array(z.uuid()).optional(),
+        allowedIntegrationLinks: z.array(z.uuid()).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -289,6 +300,15 @@ export const packagesRouter = t.router({
         const err = validateStepsAgainstRegistry(input.steps);
         if (err) throw new TRPCError({ code: 'BAD_REQUEST', message: err });
       }
+      if (input.allowedIntegrationLinks) {
+        const directLinkScope = await assertTenantScopedIntegrationLinks(
+          ctx.db,
+          input.allowedIntegrationLinks
+        );
+        if (!directLinkScope.ok) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: directLinkScope.message });
+        }
+      }
 
       const stepsChanged =
         input.steps !== undefined &&
@@ -304,6 +324,8 @@ export const packagesRouter = t.router({
           failureActions: input.failureActions ?? current.failureActions,
           allowedSites: input.allowedSites ?? current.allowedSites,
           allowedSiteGroups: input.allowedSiteGroups ?? current.allowedSiteGroups,
+          allowedIntegrationLinks:
+            input.allowedIntegrationLinks ?? current.allowedIntegrationLinks,
           version: stepsChanged ? current.version + 1 : current.version,
           updatedAt: new Date().toISOString(),
         })
@@ -465,12 +487,44 @@ export const packagesRouter = t.router({
     .input(
       z.object({
         entityType: entityTypeSchema,
+        packageId: z.uuid().optional(),
         integrationLinkId: z.uuid().optional(),
         integrationId: z.string().optional(),
         limit: z.number().int().min(1).max(500).default(200),
       }),
     )
     .query(async ({ ctx, input }): Promise<EntityOption[]> => {
+      let scopedLinkIds: Set<string> | null = null;
+      if (input.packageId) {
+        const [pkg] = await ctx.db
+          .select({
+            allowedSites: packages.allowedSites,
+            allowedSiteGroups: packages.allowedSiteGroups,
+            allowedIntegrationLinks: packages.allowedIntegrationLinks,
+          })
+          .from(packages)
+          .where(eq(packages.id, input.packageId))
+          .limit(1);
+        if (!pkg) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Package not found' });
+        }
+
+        const scope = readPackageScope(pkg);
+        if (scope.links.length > 0 || scope.groups.length > 0) {
+          const groupLinkRows =
+            scope.groups.length > 0
+              ? await ctx.db
+                  .select({ integrationLinkId: siteGroupLinkMembers.integrationLinkId })
+                  .from(siteGroupLinkMembers)
+                  .where(inArray(siteGroupLinkMembers.siteGroupId, scope.groups))
+              : [];
+          scopedLinkIds = new Set([
+            ...scope.links,
+            ...groupLinkRows.map((row) => row.integrationLinkId),
+          ]);
+        }
+      }
+
       if (input.entityType === 'integration_link') {
         // Only offer links that are actually usable — status='active' means
         // the tenant is connected and healthy. Error/disabled/dispositioned
@@ -489,11 +543,13 @@ export const packagesRouter = t.router({
           .where(and(...filters))
           .orderBy(asc(integrationLinks.name))
           .limit(input.limit);
-        return rows.map((r) => ({
+        return rows
+          .filter((r) => (scopedLinkIds ? scopedLinkIds.has(r.id) : true))
+          .map((r) => ({
           id: r.id,
           label: r.name ?? r.id,
           subLabel: r.integrationId,
-        }));
+          }));
       }
 
       if (input.entityType === 'm365_identity') {
