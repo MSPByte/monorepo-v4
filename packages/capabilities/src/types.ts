@@ -63,7 +63,18 @@ export type CapabilityResult<Outputs> =
 // Hint the runtime input form renderer. Sensitive fields auto-render as
 // password inputs regardless of typeHint. Server-side zod is still the
 // authority — this is UI-only.
-export type InputTypeHint = 'text' | 'boolean' | 'stringArray' | 'number' | 'password' | 'upn';
+export type InputTypeHint =
+  | 'text'
+  | 'boolean'
+  | 'stringArray'
+  | 'number'
+  | 'password'
+  | 'upn'
+  // Address-aware hints: postalCode triggers autofill; city/countryCode/state are targets.
+  | 'postalCode'
+  | 'city'
+  | 'countryCode'
+  | 'state';
 
 export interface InputMetaEntry {
   allowedBindings: ReadonlyArray<BindingKind>;
@@ -86,6 +97,9 @@ export interface InputMetaEntry {
   defaultValue?: unknown;
   // For typeHint === 'text' with a closed set of choices.
   choices?: ReadonlyArray<{ value: string; label: string }>;
+  // Key for dynamic option lists fetched at run time by the run dialog.
+  // Supported values: 'coveChildPartners'
+  dynamicSource?: string;
 }
 
 export interface OutputMetaEntry {

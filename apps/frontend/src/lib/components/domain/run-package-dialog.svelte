@@ -15,8 +15,6 @@
   import EntityPicker from './entity-picker.svelte';
   import { fieldLabel } from '$lib/utils/label';
 
-  // Magic value that means "the capability handler generates a strong password
-  // at run time". Kept in sync with @mspbyte/capabilities/m365/create-identity.
   const GENERATE_PASSWORD_SENTINEL = '__generate__';
 
   type EntityType = 'integration_link' | 'm365_identity' | 'm365_group' | 'm365_license';
@@ -24,7 +22,6 @@
   type Props = {
     open: boolean;
     onOpenChange: (open: boolean) => void;
-    // Optional preselection — skips the package picker step.
     packageId?: string;
     linkId?: string | null;
     siteId?: string | null;
@@ -65,11 +62,10 @@
 
   let selectedPackageId = $state<string>('');
   let values = $state<Record<string, string | boolean | string[]>>({});
-  // Password fields have a two-mode UX: generate (server-side) or custom.
-  // Default to 'generate' the first time we encounter a password field.
   let passwordModes = $state<Record<string, 'generate' | 'custom'>>({});
-  // Site fields have a two-mode UX: select existing (returns UUID) or create new (returns name).
   let siteModes = $state<Record<string, 'select' | 'create'>>({});
+  let postalLookupStatus = $state<Record<string, 'idle' | 'loading' | 'done' | 'error'>>({});
+  let postalLookupTimer: ReturnType<typeof setTimeout> | null = null;
   let startStepIndex = $state(0);
 
   $effect(() => {
@@ -79,8 +75,53 @@
       values = {};
       passwordModes = {};
       siteModes = {};
+      postalLookupStatus = {};
     }
   });
+
+  async function lookupPostalCode(promptKey: string, postalCode: string) {
+    const code = postalCode.trim();
+    if (code.length < 3) { postalLookupStatus[promptKey] = 'idle'; return; }
+    postalLookupStatus[promptKey] = 'loading';
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?postalcode=${encodeURIComponent(code)}&format=json&addressdetails=1&limit=1`,
+        { headers: { 'Accept-Language': 'en' } },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const results = (await res.json()) as Array<{ address?: Record<string, string> }>;
+      const addr = results[0]?.address;
+      if (!addr) { postalLookupStatus[promptKey] = 'idle'; return; }
+
+      const city = addr.city ?? addr.town ?? addr.municipality ?? addr.village ?? addr.hamlet;
+      const countryCode = addr.country_code?.toUpperCase();
+      const state = addr.state;
+
+      const empty = (key: string) => !String(values[key] ?? '').trim();
+
+      const cityField = runtimeFields.find((f) => f.typeHint === 'city');
+      if (cityField && city && empty(cityField.promptKey)) values[cityField.promptKey] = city;
+
+      const countryField = runtimeFields.find((f) => f.typeHint === 'countryCode');
+      if (countryField && countryCode && empty(countryField.promptKey)) values[countryField.promptKey] = countryCode;
+
+      const stateField = runtimeFields.find((f) => f.typeHint === 'state');
+      if (stateField && state && empty(stateField.promptKey)) values[stateField.promptKey] = state;
+
+      postalLookupStatus[promptKey] = 'done';
+    } catch {
+      postalLookupStatus[promptKey] = 'error';
+    }
+  }
+
+  function onPostalCodeInput(promptKey: string, value: string) {
+    values[promptKey] = value;
+    postalLookupStatus[promptKey] = 'idle';
+    if (postalLookupTimer) clearTimeout(postalLookupTimer);
+    if (value.trim().length >= 3) {
+      postalLookupTimer = setTimeout(() => lookupPostalCode(promptKey, value), 600);
+    }
+  }
 
   const selectedPackage = $derived(
     (packagesQuery.data ?? []).find((p) => p.id === selectedPackageId),
@@ -102,11 +143,21 @@
     promptKey: string;
     inputName: string;
     required: boolean;
-    typeHint: 'text' | 'boolean' | 'stringArray' | 'password' | 'upn';
+    typeHint: 'text' | 'boolean' | 'stringArray' | 'password' | 'upn' | 'postalCode' | 'city' | 'countryCode' | 'state';
     sensitive: boolean;
     entityType?: EntityType;
     label?: string;
     description?: string;
+    choices?: ReadonlyArray<{ value: string; label: string }>;
+    dynamicSource?: string;
+  };
+
+  type StepGroup = {
+    position: number;
+    capabilityId: string;
+    capabilityName: string;
+    category: string;
+    fields: RuntimeField[];
   };
 
   const packageSteps = $derived((selectedPackage?.steps as Step[] | undefined) ?? []);
@@ -116,7 +167,7 @@
     for (let pos = startStepIndex; pos < packageSteps.length; pos++) {
       const step = packageSteps[pos];
       if (!step) continue;
-      for (const [name, binding] of Object.entries(step.inputBindings)) {
+      for (const [, binding] of Object.entries(step.inputBindings)) {
         if (binding.kind === 'priorOutput' && binding.stepPosition < startStepIndex) {
           return `Step ${pos + 1} needs output from step ${binding.stepPosition + 1}. Start earlier or run the full package.`;
         }
@@ -125,112 +176,70 @@
     return null;
   });
 
-  // Walks every step's runtime bindings and dedupes by promptKey. Skipped
-  // steps (position < startStepIndex) contribute no prompts. Fields inherit
-  // the strictest requirement across usages.
-  const runtimeFields = $derived.by<RuntimeField[]>(() => {
+  // Walks steps in order and groups runtime fields by the step they first
+  // appear in. inputMeta key order is preserved within each step so the
+  // form renders fields in the same order the capability declares them.
+  const stepGroups = $derived.by<StepGroup[]>(() => {
     if (!selectedPackage || !capabilitiesQuery.data) return [];
     const capMeta = new Map(capabilitiesQuery.data.map((c) => [c.id, c]));
-    const map = new Map<string, RuntimeField>();
+    const seenKeys = new Set<string>();
+    const groups: StepGroup[] = [];
     const steps = (selectedPackage.steps as Step[]) ?? [];
+
     for (let pos = 0; pos < steps.length; pos++) {
       if (pos < startStepIndex) continue;
       const step = steps[pos]!;
       const cap = capMeta.get(step.capabilityId);
       if (!cap) continue;
-      for (const [inputName, binding] of Object.entries(step.inputBindings)) {
-        if (binding.kind !== 'runtime') continue;
-        const meta = (cap.inputMeta as Record<string, {
+
+      const fields: RuntimeField[] = [];
+      // Iterate inputMeta keys in declaration order to preserve field sequence.
+      for (const [inputName, meta] of Object.entries(
+        cap.inputMeta as Record<string, {
           sensitive?: boolean;
           typeHint?: RuntimeField['typeHint'];
           entityType?: EntityType;
           label?: string;
           description?: string;
           required?: boolean;
-        }>)[inputName];
-        if (!meta) continue;
-        const existing = map.get(binding.promptKey);
-        map.set(binding.promptKey, {
+          choices?: ReadonlyArray<{ value: string; label: string }>;
+          dynamicSource?: string;
+        }>
+      )) {
+        const binding = (step.inputBindings as Record<string, Binding>)[inputName];
+        if (!binding || binding.kind !== 'runtime') continue;
+        if (seenKeys.has(binding.promptKey)) continue;
+        seenKeys.add(binding.promptKey);
+        fields.push({
           promptKey: binding.promptKey,
           inputName,
-          required: existing?.required || binding.required,
-          typeHint: meta.typeHint ?? existing?.typeHint ?? 'text',
-          sensitive: meta.sensitive ?? existing?.sensitive ?? false,
-          entityType: meta.entityType ?? existing?.entityType,
-          label: meta.label ?? existing?.label,
-          description: meta.description ?? existing?.description,
+          required: binding.required,
+          typeHint: meta.typeHint ?? 'text',
+          sensitive: meta.sensitive ?? false,
+          entityType: meta.entityType,
+          label: meta.label,
+          description: meta.description,
+          choices: meta.choices,
+          dynamicSource: meta.dynamicSource,
         });
       }
+
+      groups.push({
+        position: pos,
+        capabilityId: step.capabilityId,
+        capabilityName: step.label ?? cap.name,
+        category: cap.category,
+        fields,
+      });
     }
-    return sortFields(Array.from(map.values()));
+    return groups;
   });
 
-  // Entity types that require a live lookup scoped to a tenant integration link.
-  // Internal MSPByte entities (e.g. 'site') are NOT in this set and render as
-  // plain text inputs at run time — they don't need a tenant selected first.
+  // Flat list of all runtime fields for canSubmit / cascadeLinkId / postal autofill.
+  const runtimeFields = $derived(stepGroups.flatMap((g) => g.fields));
+
   const TENANT_SCOPED_ENTITY_TYPES = new Set(['m365_identity', 'm365_group', 'm365_license']);
 
-  // Sort so tenant picker comes first, then any other integration_link, then
-  // non-cascading fields, then dependent m365_* pickers. This is the order a
-  // user actually needs to fill things in.
-  type FieldGroup = 'tenant' | 'in-tenant' | 'input';
-  function groupOf(f: RuntimeField): FieldGroup {
-    if (f.entityType === 'integration_link') return 'tenant';
-    if ((f.entityType && TENANT_SCOPED_ENTITY_TYPES.has(f.entityType)) || f.typeHint === 'upn') return 'in-tenant';
-    return 'input';
-  }
-  function sortFields(fields: RuntimeField[]): RuntimeField[] {
-    const rank = (f: RuntimeField): number => {
-      const g = groupOf(f);
-      return g === 'tenant' ? 0 : g === 'input' ? 1 : 2;
-    };
-    return [...fields].sort((a, b) => {
-      const dr = rank(a) - rank(b);
-      if (dr !== 0) return dr;
-      return a.promptKey.localeCompare(b.promptKey);
-    });
-  }
-
-  type Section = { key: FieldGroup; title: string; hint: string; fields: RuntimeField[] };
-  const sections = $derived.by<Section[]>(() => {
-    const groups = new Map<FieldGroup, RuntimeField[]>();
-    for (const f of runtimeFields) {
-      const g = groupOf(f);
-      const arr = groups.get(g) ?? [];
-      arr.push(f);
-      groups.set(g, arr);
-    }
-    const out: Section[] = [];
-    if (groups.has('tenant')) {
-      out.push({
-        key: 'tenant',
-        title: 'Choose tenant',
-        hint: 'Which environment this runs against.',
-        fields: groups.get('tenant')!,
-      });
-    }
-    if (groups.has('input')) {
-      out.push({
-        key: 'input',
-        title: 'Details',
-        hint: 'Fill in the values for this run.',
-        fields: groups.get('input')!,
-      });
-    }
-    if (groups.has('in-tenant')) {
-      out.push({
-        key: 'in-tenant',
-        title: 'Pick in tenant',
-        hint: 'Live lookups against the tenant you chose above.',
-        fields: groups.get('in-tenant')!,
-      });
-    }
-    return out;
-  });
-
-  // Downstream m365_* pickers cascade from whichever runtime input holds an
-  // integration_link. If more than one tenant field exists, use the first
-  // filled-in one.
   const cascadeLinkId = $derived.by<string | undefined>(() => {
     for (const field of runtimeFields) {
       if (field.entityType !== 'integration_link') continue;
@@ -240,8 +249,22 @@
     return undefined;
   });
 
-  // Live domain list for the picked tenant — fed to any UPN composite input.
-  // Only fires once we have a tenant so we don't hammer Graph on every open.
+  const hasCovePartnerField = $derived(
+    runtimeFields.some((f) => f.dynamicSource === 'coveChildPartners')
+  );
+
+  const covePartnersQuery = createQuery(() => ({
+    queryKey: ['vendor.coveChildPartners'],
+    queryFn: () => trpc.vendor.coveChildPartners.query(),
+    enabled: open && hasCovePartnerField,
+    staleTime: 5 * 60_000,
+  }));
+
+  const covePartnerOptions = $derived([
+    { value: '', label: 'None (root account)' },
+    ...(covePartnersQuery.data ?? []).map((p) => ({ value: p.name, label: p.name })),
+  ]);
+
   const domainsQuery = createQuery(() => ({
     queryKey: ['vendor.m365DomainOptions', cascadeLinkId],
     queryFn: () =>
@@ -319,12 +342,9 @@
   }
 
   function isBlockedByTenant(field: RuntimeField): boolean {
-    // UPN composite needs domain list from the tenant.
     if (field.typeHint === 'upn') return !cascadeLinkId;
     if (!field.entityType || field.entityType === 'integration_link') return false;
-    // Internal entity types (e.g. 'site') don't need a tenant link.
     if (!TENANT_SCOPED_ENTITY_TYPES.has(field.entityType)) return false;
-    // Tenant-scoped picker with no tenant selected yet.
     return !cascadeLinkId;
   }
 
@@ -402,7 +422,7 @@
 
 <Dialog.Root bind:open onOpenChange={onOpenChange}>
   <Dialog.Content
-    class="sm:max-w-[560px] max-h-[85vh] overflow-hidden grid-rows-[auto_1fr_auto]"
+    class="sm:max-w-[600px] max-h-[85vh] overflow-hidden grid-rows-[auto_1fr_auto]"
   >
     <Dialog.Header>
       <Dialog.Title>Run a package</Dialog.Title>
@@ -411,9 +431,9 @@
       </Dialog.Description>
     </Dialog.Header>
 
-    <div class="space-y-6 overflow-y-auto px-4 pb-2 pt-2">
+    <div class="space-y-4 overflow-y-auto px-1 pb-2 pt-1">
       {#if !packageId}
-        <section class="space-y-2">
+        <section class="space-y-2 px-3">
           <Label class="text-xs uppercase tracking-wide text-muted-foreground">Package</Label>
           <SingleSelect
             options={packageOptions}
@@ -426,7 +446,7 @@
 
       {#if selectedPackage}
         {#if packageSteps.length > 1}
-          <section class="space-y-2">
+          <section class="space-y-2 px-3">
             <Label class="text-xs uppercase tracking-wide text-muted-foreground">
               Start from
             </Label>
@@ -442,193 +462,247 @@
           </section>
         {/if}
 
-        {#if runtimeFields.length > 0}
-          {#each sections as section, sIdx (section.key)}
-            <section class="space-y-3">
-              <div class="flex items-baseline gap-2 border-b pb-1.5">
-                <span class="font-mono text-[10px] tabular-nums text-muted-foreground/70">
-                  {String(sIdx + 1).padStart(2, '0')}
-                </span>
-                <h3 class="text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
-                  {section.title}
-                </h3>
-                <span class="ml-auto text-[11px] text-muted-foreground">{section.hint}</span>
-              </div>
-              {#each section.fields as field (field.promptKey)}
-              {@const label = fieldLabel(field.promptKey, field.label)}
-              {@const blocked = isBlockedByTenant(field)}
-              <div class="space-y-1.5">
-                <Label for={`rp-${field.promptKey}`} class="text-sm">
-                  {label}
-                  {#if field.required}<span class="text-rose-500">*</span>{/if}
-                </Label>
-                {#if field.description}
-                  <p class="text-xs text-muted-foreground">{field.description}</p>
-                {/if}
-                {#if field.typeHint === 'upn'}
-                  {#if blocked}
-                    <div class="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-                      Choose a tenant first.
-                    </div>
-                  {:else}
-                    {@const parsed = parseUpn(values[field.promptKey])}
-                    <div class="grid gap-2 sm:grid-cols-[1fr_auto_1.2fr] sm:items-center">
-                      <Input
-                        id={`rp-${field.promptKey}`}
-                        placeholder="alias"
-                        value={parsed.local}
-                        oninput={(e) =>
-                          writeUpn(
-                            field.promptKey,
-                            (e.target as HTMLInputElement).value,
-                            parsed.domain,
-                          )}
-                      />
-                      <span class="hidden text-muted-foreground sm:inline">@</span>
-                      <SingleSelect
-                        options={domainOptions}
-                        selected={parsed.domain}
-                        placeholder={domainsQuery.isLoading ? 'Loading domains…' : 'Choose a domain'}
-                        onchange={(v) => writeUpn(field.promptKey, parsed.local, v)}
-                      />
-                    </div>
-                  {/if}
-                {:else if field.entityType && (field.entityType === 'integration_link' || TENANT_SCOPED_ENTITY_TYPES.has(field.entityType))}
-                  {#if blocked}
-                    <div class="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-                      Choose a tenant first.
-                    </div>
-                  {:else}
-                    <EntityPicker
-                      entityType={field.entityType}
-                      packageId={selectedPackage.id}
-                      integrationLinkId={field.entityType !== 'integration_link'
-                        ? cascadeLinkId
-                        : undefined}
-                      integrationId={field.entityType === 'integration_link'
-                        ? 'microsoft-365'
-                        : undefined}
-                      multiple={field.typeHint === 'stringArray'}
-                      value={values[field.promptKey] as string | string[] | null | undefined ??
-                        (field.typeHint === 'stringArray' ? [] : null)}
-                      onValueChange={(v) => (values[field.promptKey] = v as any)}
-                      placeholder="Choose…"
-                    />
-                  {/if}
-                {:else if field.typeHint === 'password'}
-                  <RadioGroup.Root
-                    value={passwordMode(field)}
-                    onValueChange={(v) =>
-                      (passwordModes[field.promptKey] = v as 'generate' | 'custom')}
-                    class="gap-2"
-                  >
-                    <label class="flex items-start gap-2 text-sm cursor-pointer">
-                      <RadioGroup.Item value="generate" class="mt-0.5" />
-                      <div class="flex flex-col gap-0.5">
-                        <span>Generate a strong random password</span>
-                        <span class="text-xs text-muted-foreground">
-                          Shown once after the run — copy it from the run detail before it
-                          expires.
-                        </span>
-                      </div>
-                    </label>
-                    <label class="flex items-start gap-2 text-sm cursor-pointer">
-                      <RadioGroup.Item value="custom" class="mt-0.5" />
-                      <div class="flex flex-col gap-0.5">
-                        <span>Set a specific password</span>
-                        {#if passwordMode(field) === 'custom'}
-                          <Input
-                            id={`rp-${field.promptKey}`}
-                            type="text"
-                            autocomplete="new-password"
-                            placeholder="Min 8 chars, 3 of upper/lower/digit/symbol"
-                            value={typeof values[field.promptKey] === 'string'
-                              ? (values[field.promptKey] as string)
-                              : ''}
-                            oninput={(e) =>
-                              (values[field.promptKey] = (e.target as HTMLInputElement).value)}
-                            class="mt-1.5"
+        {#if stepGroups.length > 0}
+          {#each stepGroups as group (group.position)}
+            {#if group.fields.length > 0}
+              <div class="rounded-lg border overflow-hidden">
+                <!-- Step header -->
+                <div class="flex items-center gap-2.5 px-3 py-2 bg-muted/40 border-b">
+                  <span class="text-[10px] font-mono tabular-nums text-muted-foreground/60 select-none">
+                    {String(group.position + 1).padStart(2, '0')}
+                  </span>
+                  <span class="text-sm font-medium truncate">{group.capabilityName}</span>
+                  <span class="ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider bg-muted text-muted-foreground">
+                    {group.category}
+                  </span>
+                </div>
+
+                <!-- Fields -->
+                <div class="space-y-4 p-3">
+                  {#each group.fields as field (field.promptKey)}
+                    {@const label = fieldLabel(field.promptKey, field.label)}
+                    {@const blocked = isBlockedByTenant(field)}
+                    <div class="space-y-1.5">
+                      <Label for={`rp-${field.promptKey}`} class="text-sm">
+                        {label}
+                        {#if field.required}<span class="text-rose-500 ml-0.5">*</span>{/if}
+                      </Label>
+                      {#if field.description}
+                        <p class="text-xs text-muted-foreground">{field.description}</p>
+                      {/if}
+
+                      {#if field.typeHint === 'upn'}
+                        {#if blocked}
+                          <div class="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                            Choose a tenant first.
+                          </div>
+                        {:else}
+                          {@const parsed = parseUpn(values[field.promptKey])}
+                          <div class="grid gap-2 sm:grid-cols-[1fr_auto_1.2fr] sm:items-center">
+                            <Input
+                              id={`rp-${field.promptKey}`}
+                              placeholder="alias"
+                              value={parsed.local}
+                              oninput={(e) =>
+                                writeUpn(field.promptKey, (e.target as HTMLInputElement).value, parsed.domain)}
+                            />
+                            <span class="hidden text-muted-foreground sm:inline">@</span>
+                            <SingleSelect
+                              options={domainOptions}
+                              selected={parsed.domain}
+                              placeholder={domainsQuery.isLoading ? 'Loading domains…' : 'Choose a domain'}
+                              onchange={(v) => writeUpn(field.promptKey, parsed.local, v)}
+                            />
+                          </div>
+                        {/if}
+                      {:else if field.entityType && (field.entityType === 'integration_link' || TENANT_SCOPED_ENTITY_TYPES.has(field.entityType))}
+                        {#if blocked}
+                          <div class="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                            Choose a tenant first.
+                          </div>
+                        {:else}
+                          <EntityPicker
+                            entityType={field.entityType}
+                            packageId={selectedPackage.id}
+                            integrationLinkId={field.entityType !== 'integration_link'
+                              ? cascadeLinkId
+                              : undefined}
+                            integrationId={field.entityType === 'integration_link'
+                              ? 'microsoft-365'
+                              : undefined}
+                            multiple={field.typeHint === 'stringArray'}
+                            value={values[field.promptKey] as string | string[] | null | undefined ??
+                              (field.typeHint === 'stringArray' ? [] : null)}
+                            onValueChange={(v) => (values[field.promptKey] = v as any)}
+                            placeholder="Choose…"
                           />
                         {/if}
-                      </div>
-                    </label>
-                  </RadioGroup.Root>
-                {:else if field.typeHint === 'boolean'}
-                  <label class="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      id={`rp-${field.promptKey}`}
-                      checked={Boolean(values[field.promptKey])}
-                      onCheckedChange={(c) => (values[field.promptKey] = Boolean(c))}
-                    />
-                    <span class="text-muted-foreground">
-                      {Boolean(values[field.promptKey]) ? 'Yes' : 'No'}
-                    </span>
-                  </label>
-                {:else if field.entityType === 'site'}
-                  <RadioGroup.Root
-                    value={siteMode(field)}
-                    onValueChange={(v) => {
-                      siteModes[field.promptKey] = v as 'select' | 'create';
-                      values[field.promptKey] = '';
-                    }}
-                    class="gap-2"
-                  >
-                    <label class="flex items-start gap-2 text-sm cursor-pointer">
-                      <RadioGroup.Item value="select" class="mt-0.5" />
-                      <span>Select an existing site</span>
-                    </label>
-                    <label class="flex items-start gap-2 text-sm cursor-pointer">
-                      <RadioGroup.Item value="create" class="mt-0.5" />
-                      <span>Create a new site</span>
-                    </label>
-                  </RadioGroup.Root>
-                  {#if siteMode(field) === 'select'}
-                    <SingleSelect
-                      options={siteOptions}
-                      selected={typeof values[field.promptKey] === 'string' ? values[field.promptKey] as string : ''}
-                      placeholder={sitesQuery.isLoading ? 'Loading sites…' : 'Choose a site…'}
-                      onchange={(v) => (values[field.promptKey] = v)}
-                    />
-                  {:else}
-                    <Input
-                      id={`rp-${field.promptKey}`}
-                      placeholder="New site name"
-                      value={typeof values[field.promptKey] === 'string' ? values[field.promptKey] as string : ''}
-                      oninput={(e) => (values[field.promptKey] = (e.target as HTMLInputElement).value)}
-                    />
-                  {/if}
-                {:else if field.typeHint === 'stringArray'}
-                  <Input
-                    id={`rp-${field.promptKey}`}
-                    placeholder="Comma-separated values"
-                    value={typeof values[field.promptKey] === 'string'
-                      ? (values[field.promptKey] as string)
-                      : ''}
-                    oninput={(e) =>
-                      (values[field.promptKey] = (e.target as HTMLInputElement).value)}
-                  />
-                {:else}
-                  <Input
-                    id={`rp-${field.promptKey}`}
-                    type={field.sensitive ? 'password' : 'text'}
-                    value={typeof values[field.promptKey] === 'string'
-                      ? (values[field.promptKey] as string)
-                      : ''}
-                    oninput={(e) =>
-                      (values[field.promptKey] = (e.target as HTMLInputElement).value)}
-                  />
-                {/if}
+                      {:else if field.entityType === 'site'}
+                        <RadioGroup.Root
+                          value={siteMode(field)}
+                          onValueChange={(v) => {
+                            siteModes[field.promptKey] = v as 'select' | 'create';
+                            values[field.promptKey] = '';
+                          }}
+                          class="flex gap-4"
+                        >
+                          <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+                            <RadioGroup.Item value="select" />
+                            <span>Select existing</span>
+                          </label>
+                          <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+                            <RadioGroup.Item value="create" />
+                            <span>Create new</span>
+                          </label>
+                        </RadioGroup.Root>
+                        {#if siteMode(field) === 'select'}
+                          <SingleSelect
+                            options={siteOptions}
+                            selected={typeof values[field.promptKey] === 'string' ? values[field.promptKey] as string : ''}
+                            placeholder={sitesQuery.isLoading ? 'Loading sites…' : 'Choose a site…'}
+                            onchange={(v) => (values[field.promptKey] = v)}
+                          />
+                        {:else}
+                          <Input
+                            id={`rp-${field.promptKey}`}
+                            placeholder="New site name"
+                            value={typeof values[field.promptKey] === 'string' ? values[field.promptKey] as string : ''}
+                            oninput={(e) => (values[field.promptKey] = (e.target as HTMLInputElement).value)}
+                          />
+                        {/if}
+                      {:else if field.typeHint === 'password'}
+                        <RadioGroup.Root
+                          value={passwordMode(field)}
+                          onValueChange={(v) =>
+                            (passwordModes[field.promptKey] = v as 'generate' | 'custom')}
+                          class="gap-2"
+                        >
+                          <label class="flex items-start gap-2 text-sm cursor-pointer">
+                            <RadioGroup.Item value="generate" class="mt-0.5" />
+                            <div class="flex flex-col gap-0.5">
+                              <span>Generate a strong random password</span>
+                              <span class="text-xs text-muted-foreground">
+                                Shown once after the run — copy it from the run detail.
+                              </span>
+                            </div>
+                          </label>
+                          <label class="flex items-start gap-2 text-sm cursor-pointer">
+                            <RadioGroup.Item value="custom" class="mt-0.5" />
+                            <div class="flex flex-col gap-0.5">
+                              <span>Set a specific password</span>
+                              {#if passwordMode(field) === 'custom'}
+                                <Input
+                                  id={`rp-${field.promptKey}`}
+                                  type="text"
+                                  autocomplete="new-password"
+                                  placeholder="Min 8 chars, 3 of upper/lower/digit/symbol"
+                                  value={typeof values[field.promptKey] === 'string'
+                                    ? (values[field.promptKey] as string)
+                                    : ''}
+                                  oninput={(e) =>
+                                    (values[field.promptKey] = (e.target as HTMLInputElement).value)}
+                                  class="mt-1.5"
+                                />
+                              {/if}
+                            </div>
+                          </label>
+                        </RadioGroup.Root>
+                      {:else if field.typeHint === 'boolean'}
+                        <label class="flex items-center gap-2 text-sm">
+                          <Checkbox
+                            id={`rp-${field.promptKey}`}
+                            checked={Boolean(values[field.promptKey])}
+                            onCheckedChange={(c) => (values[field.promptKey] = Boolean(c))}
+                          />
+                          <span class="text-muted-foreground">
+                            {Boolean(values[field.promptKey]) ? 'Yes' : 'No'}
+                          </span>
+                        </label>
+                      {:else if field.typeHint === 'postalCode'}
+                        <div class="relative">
+                          <Input
+                            id={`rp-${field.promptKey}`}
+                            value={typeof values[field.promptKey] === 'string' ? (values[field.promptKey] as string) : ''}
+                            placeholder="e.g. 10115 or 90210"
+                            oninput={(e) => onPostalCodeInput(field.promptKey, (e.target as HTMLInputElement).value)}
+                          />
+                          {#if postalLookupStatus[field.promptKey] === 'loading'}
+                            <span class="absolute right-3 top-2.5 text-xs text-muted-foreground animate-pulse">
+                              Looking up…
+                            </span>
+                          {:else if postalLookupStatus[field.promptKey] === 'done'}
+                            <span class="absolute right-3 top-2.5 text-xs text-emerald-600 dark:text-emerald-400">
+                              ✓ Auto-filled
+                            </span>
+                          {/if}
+                        </div>
+                      {:else if field.dynamicSource === 'coveChildPartners'}
+                        <SingleSelect
+                          options={covePartnerOptions}
+                          selected={typeof values[field.promptKey] === 'string' ? values[field.promptKey] as string : ''}
+                          placeholder={covePartnersQuery.isLoading ? 'Loading partners…' : 'Choose a Cove partner…'}
+                          onchange={(v) => (values[field.promptKey] = v)}
+                        />
+                      {:else if field.choices && field.choices.length > 0}
+                        {#if field.choices.length <= 4}
+                          <!-- Inline radio for small choice sets -->
+                          <RadioGroup.Root
+                            value={typeof values[field.promptKey] === 'string' ? values[field.promptKey] as string : ''}
+                            onValueChange={(v) => (values[field.promptKey] = v)}
+                            class="flex flex-wrap gap-x-5 gap-y-2"
+                          >
+                            {#each field.choices as choice (choice.value)}
+                              <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+                                <RadioGroup.Item value={choice.value} />
+                                <span>{choice.label}</span>
+                              </label>
+                            {/each}
+                          </RadioGroup.Root>
+                        {:else}
+                          <!-- Dropdown for larger choice sets -->
+                          <SingleSelect
+                            options={field.choices as { value: string; label: string }[]}
+                            selected={typeof values[field.promptKey] === 'string' ? values[field.promptKey] as string : ''}
+                            placeholder="Choose…"
+                            onchange={(v) => (values[field.promptKey] = v)}
+                          />
+                        {/if}
+                      {:else if field.typeHint === 'stringArray'}
+                        <Input
+                          id={`rp-${field.promptKey}`}
+                          placeholder="Comma-separated values"
+                          value={typeof values[field.promptKey] === 'string'
+                            ? (values[field.promptKey] as string)
+                            : ''}
+                          oninput={(e) =>
+                            (values[field.promptKey] = (e.target as HTMLInputElement).value)}
+                        />
+                      {:else}
+                        <Input
+                          id={`rp-${field.promptKey}`}
+                          type={field.sensitive ? 'password' : 'text'}
+                          value={typeof values[field.promptKey] === 'string'
+                            ? (values[field.promptKey] as string)
+                            : ''}
+                          oninput={(e) =>
+                            (values[field.promptKey] = (e.target as HTMLInputElement).value)}
+                        />
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
               </div>
-              {/each}
-            </section>
+            {/if}
           {/each}
         {/if}
 
         {#if costPreview}
-          <section class="space-y-2">
-            <Label class="text-xs uppercase tracking-wide text-muted-foreground">Cost</Label>
-            <div class="rounded-md border bg-muted/30 p-3 text-sm">
-              <dl class="space-y-1">
+          <div class="rounded-lg border overflow-hidden">
+            <div class="px-3 py-2 bg-muted/40 border-b">
+              <span class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Cost</span>
+            </div>
+            <div class="p-3">
+              <dl class="space-y-1 text-sm">
                 {#each costPreview.lines as line}
                   <div
                     class={'flex justify-between gap-3 ' +
@@ -639,12 +713,12 @@
                   </div>
                 {/each}
               </dl>
-              <div class="mt-2 flex justify-between border-t pt-2 font-medium">
+              <div class="mt-2 flex justify-between border-t pt-2 font-medium text-sm">
                 <span>Total per run</span>
                 <span class="tabular-nums">${costPreview.total.toFixed(4)}</span>
               </div>
             </div>
-          </section>
+          </div>
         {/if}
       {/if}
     </div>

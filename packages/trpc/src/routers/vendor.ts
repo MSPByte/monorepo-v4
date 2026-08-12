@@ -43,7 +43,7 @@ import {
   dattoEndpoints,
   coveEndpoints
 } from '@mspbyte/drizzle';
-import { Encryption, SophosConnector, ActionLabels } from '@mspbyte/shared';
+import { Encryption, SophosConnector, CoveConnector, ActionLabels } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 import { loadGroupTargets } from './group-targets.js';
 
@@ -3122,5 +3122,40 @@ export const vendorRouter = t.router({
           : [];
 
       return { ...row, endpoints: endpointRows };
-    })
+    }),
+
+  // Returns the flat list of child partners visible to the configured Cove
+  // integration. Used by the run-package dialog to populate the parent partner
+  // picker without requiring the user to know Cove internal IDs.
+  coveChildPartners: authProcedure.query(async ({ ctx }) => {
+    if (!ctx.can('Vendors.Read')) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Read permission required' });
+    }
+    const [integration] = await ctx.db
+      .select()
+      .from(integrations)
+      .where(eq(integrations.id, 'cove'))
+      .limit(1);
+    if (!integration || integration.deletedAt) return [];
+
+    const config = z.object({
+      server: z.string(),
+      partnerId: z.number(),
+      clientId: z.string(),
+      clientSecret: z.string(),
+    }).safeParse(integration.config);
+    if (!config.success) return [];
+
+    const { server, partnerId, clientId, clientSecret } = config.data;
+    const encryptionKey = ctx.encryptionKey ?? process.env.ENCRYPTION_KEY;
+    if (!encryptionKey) return [];
+    const decrypted = Encryption.decrypt(clientSecret, encryptionKey);
+    if (!decrypted) return [];
+
+    const connector = new CoveConnector(server, clientId, decrypted);
+    const children = await connector.partner.children.list(partnerId).catch(() => []);
+    return children
+      .map((c) => ({ id: c.Info.Id, name: c.Info.Name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }),
 });

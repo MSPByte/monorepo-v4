@@ -18,6 +18,39 @@ export interface SophosTenant {
   apiHost?: string;
   status?: string;
   dataGeography?: string;
+  dataRegion?: string;
+}
+
+export interface SophosTenantCreateRequest {
+  name: string;
+  billingType: 'trial' | 'usage' | 'ordered';
+  dataGeography?: string;
+  dataRegion?: string;
+  contact: {
+    firstName: string;
+    lastName: string;
+    phone: string;
+    email?: string;
+    mobile?: string;
+    fax?: string;
+    address: {
+      address1: string;
+      address2?: string;
+      address3?: string;
+      city: string;
+      state?: string;
+      countryCode: string;
+      postalCode: string;
+    };
+  };
+  admin?: {
+    name: string;
+    email: string;
+    firstName?: string;
+    lastName?: string;
+  };
+  products?: Array<{ code: string; quantity?: number }>;
+  acceptedSampleSubmission?: boolean;
 }
 
 export class SophosConnector {
@@ -77,7 +110,7 @@ export class SophosConnector {
   readonly partner: {
     tenants: {
       list: () => Promise<SophosTenant[]>;
-      create: (name: string, dataGeography?: string, billingType?: string) => Promise<SophosTenant>;
+      create: (req: SophosTenantCreateRequest) => Promise<SophosTenant>;
     };
   };
 
@@ -174,8 +207,7 @@ export class SophosConnector {
     this.partner = {
       tenants: {
         list: () => this.fetchPartnerTenants(),
-        create: (name, dataGeography, billingType) =>
-          this.createPartnerTenant(name, dataGeography, billingType),
+        create: (req) => this.createPartnerTenant(req),
       }
     };
   }
@@ -189,11 +221,7 @@ export class SophosConnector {
     }
   }
 
-  private async createPartnerTenant(
-    name: string,
-    dataGeography?: string,
-    billingType?: string
-  ): Promise<SophosTenant> {
+  private async createPartnerTenant(req: SophosTenantCreateRequest): Promise<SophosTenant> {
     const whoami = await this.client.get<{
       id: string;
       idType: string;
@@ -205,13 +233,9 @@ export class SophosConnector {
     }
 
     const globalHost = whoami.apiHosts?.global ?? 'https://api.central.sophos.com';
-    const body: Record<string, unknown> = { name };
-    if (dataGeography) body.dataGeography = dataGeography;
-    if (billingType) body.billingType = billingType;
-
-    const tenant = await this.client.post<SophosTenant & { apiHost?: string }>(
+    const tenant = await this.client.post<SophosTenant>(
       `${globalHost}/partner/v1/tenants`,
-      body,
+      req,
       undefined,
       { partnerId: whoami.id }
     );

@@ -7,6 +7,10 @@ const inputs = z.object({
   mspbyteSiteId: z.uuid(),
   // Name to assign the new Cove partner account.
   coveName: z.string().min(1).max(200),
+  // Name of the Cove sub-partner to nest the new account under. Leave blank to create
+  // directly under the MSP's root Cove account. The handler resolves this by name so
+  // the user never needs to know Cove's internal integer partner IDs.
+  coveParentPartnerName: z.string().min(1).max(200).optional(),
 });
 
 const outputs = z.object({
@@ -47,6 +51,15 @@ export const coveCreateSite: Capability<
       required: true,
       priorOutputCompat: ['mspbyte.siteName'],
     },
+    coveParentPartnerName: {
+      allowedBindings: ['literal', 'runtime'],
+      typeHint: 'text',
+      label: 'Parent partner',
+      description: 'Cove sub-partner to nest the new account under. Leave blank to create directly under the MSP\'s root Cove account.',
+      required: false,
+      advanced: true,
+      dynamicSource: 'coveChildPartners',
+    },
   },
   outputMeta: {
     covePartnerId: { label: 'Cove partner ID', outputType: 'cove.partnerId' },
@@ -61,8 +74,24 @@ export const coveCreateSite: Capability<
     try {
       const { connector, rootPartnerId } = await ctx.getCoveConnector();
 
+      let parentId = rootPartnerId;
+      if (input.coveParentPartnerName) {
+        const partners = await connector.partner.children.list(rootPartnerId);
+        const match = partners.find(
+          (p) => p.Info.Name.toLowerCase() === input.coveParentPartnerName!.toLowerCase()
+        );
+        if (!match) {
+          return {
+            outcome: 'fail',
+            errorClass: 'not_found',
+            message: `Cove partner '${input.coveParentPartnerName}' not found under the root account`,
+          };
+        }
+        parentId = match.Info.Id;
+      }
+
       const child = await connector.partner.children.create(
-        rootPartnerId,
+        parentId,
         input.coveName,
       );
 
