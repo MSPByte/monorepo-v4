@@ -77,6 +77,7 @@ export class SophosConnector {
   readonly partner: {
     tenants: {
       list: () => Promise<SophosTenant[]>;
+      create: (name: string, dataGeography?: string, billingType?: string) => Promise<SophosTenant>;
     };
   };
 
@@ -172,7 +173,9 @@ export class SophosConnector {
 
     this.partner = {
       tenants: {
-        list: () => this.fetchPartnerTenants()
+        list: () => this.fetchPartnerTenants(),
+        create: (name, dataGeography, billingType) =>
+          this.createPartnerTenant(name, dataGeography, billingType),
       }
     };
   }
@@ -184,6 +187,35 @@ export class SophosConnector {
     } catch {
       return false;
     }
+  }
+
+  private async createPartnerTenant(
+    name: string,
+    dataGeography?: string,
+    billingType?: string
+  ): Promise<SophosTenant> {
+    const whoami = await this.client.get<{
+      id: string;
+      idType: string;
+      apiHosts?: { global?: string };
+    }>('https://api.central.sophos.com/whoami/v1');
+
+    if (whoami.idType !== 'partner' || !whoami.id) {
+      throw new Error('Sophos integration is not configured as a partner account');
+    }
+
+    const globalHost = whoami.apiHosts?.global ?? 'https://api.central.sophos.com';
+    const body: Record<string, unknown> = { name };
+    if (dataGeography) body.dataGeography = dataGeography;
+    if (billingType) body.billingType = billingType;
+
+    const tenant = await this.client.post<SophosTenant & { apiHost?: string }>(
+      `${globalHost}/partner/v1/tenants`,
+      body,
+      undefined,
+      { partnerId: whoami.id }
+    );
+    return tenant;
   }
 
   private async fetchPartnerTenants(): Promise<SophosTenant[]> {

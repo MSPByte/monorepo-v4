@@ -1309,11 +1309,18 @@
                         value: String(i),
                         label: `Step ${String(i + 1).padStart(2, '0')}: ${s.label ?? capIndex.get(s.capabilityId)?.name ?? s.capabilityId}`,
                       }))}
+                      {@const compatTypes = (meta as { priorOutputCompat?: string[] }).priorOutputCompat}
                       {@const outputOpts = upstreamCap
-                        ? Object.entries(upstreamCap.outputMeta).map(([k, m]) => ({
-                            value: k,
-                            label: fieldLabel(k, (m as { label?: string }).label),
-                          }))
+                        ? Object.entries(upstreamCap.outputMeta)
+                            .filter(([, m]) => {
+                              if (!compatTypes || compatTypes.length === 0) return true;
+                              const t = (m as { outputType?: string }).outputType;
+                              return t ? compatTypes.includes(t) : false;
+                            })
+                            .map(([k, m]) => ({
+                              value: k,
+                              label: fieldLabel(k, (m as { label?: string }).label),
+                            }))
                         : []}
                       {#if upstreamSteps.length === 0}
                         <div
@@ -1344,6 +1351,14 @@
                               setBinding(selectedIndex, inputName, { ...binding, path: v })}
                           />
                         </div>
+                        {#if upstreamCap && outputOpts.length === 0}
+                          <div
+                            class="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500"
+                          >
+                            The selected step has no compatible outputs for this input. Try a
+                            different step.
+                          </div>
+                        {/if}
                       {/if}
                     {/if}
                   </div>

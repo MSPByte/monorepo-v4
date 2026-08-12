@@ -5,14 +5,26 @@ import { m365LicenseAssign } from './m365/assign-license.js';
 import { m365IdentityDisable } from './m365/disable-identity.js';
 import { m365IdentityRevokeSessions } from './m365/revoke-sessions.js';
 import { m365GroupAddMember } from './m365/add-group-member.js';
+import { coreSiteProvision } from './core/provision-site.js';
+import { sophosEndpointEnableTamper } from './sophos/enable-tamper.js';
+import { sophosEndpointDelete } from './sophos/delete-endpoint.js';
+import { sophosCreateSite } from './sophos/create-site.js';
+import { dattoCreateSite } from './datto/create-site.js';
+import { coveCreateSite } from './cove/create-site.js';
 
 export const CAPABILITIES = {
+  [coreSiteProvision.id]: coreSiteProvision,
   [m365IdentityResetPassword.id]: m365IdentityResetPassword,
   [m365IdentityCreate.id]: m365IdentityCreate,
   [m365LicenseAssign.id]: m365LicenseAssign,
   [m365IdentityDisable.id]: m365IdentityDisable,
   [m365IdentityRevokeSessions.id]: m365IdentityRevokeSessions,
   [m365GroupAddMember.id]: m365GroupAddMember,
+  [sophosEndpointEnableTamper.id]: sophosEndpointEnableTamper,
+  [sophosEndpointDelete.id]: sophosEndpointDelete,
+  [sophosCreateSite.id]: sophosCreateSite,
+  [dattoCreateSite.id]: dattoCreateSite,
+  [coveCreateSite.id]: coveCreateSite,
 } as const satisfies Record<string, AnyCapability>;
 
 export type CapabilityId = keyof typeof CAPABILITIES;

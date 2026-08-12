@@ -52,11 +52,24 @@
     staleTime: 5 * 60_000,
   }));
 
+  const sitesQuery = createQuery(() => ({
+    queryKey: ['sites.list'],
+    queryFn: () => trpc.sites.list.query(),
+    enabled: open,
+    staleTime: 60_000,
+  }));
+
+  const siteOptions = $derived(
+    (sitesQuery.data ?? []).map((s: { id: string; name: string }) => ({ value: s.id, label: s.name }))
+  );
+
   let selectedPackageId = $state<string>('');
   let values = $state<Record<string, string | boolean | string[]>>({});
   // Password fields have a two-mode UX: generate (server-side) or custom.
   // Default to 'generate' the first time we encounter a password field.
   let passwordModes = $state<Record<string, 'generate' | 'custom'>>({});
+  // Site fields have a two-mode UX: select existing (returns UUID) or create new (returns name).
+  let siteModes = $state<Record<string, 'select' | 'create'>>({});
   let startStepIndex = $state(0);
 
   $effect(() => {
@@ -65,6 +78,7 @@
       startStepIndex = 0;
       values = {};
       passwordModes = {};
+      siteModes = {};
     }
   });
 
@@ -151,13 +165,18 @@
     return sortFields(Array.from(map.values()));
   });
 
+  // Entity types that require a live lookup scoped to a tenant integration link.
+  // Internal MSPByte entities (e.g. 'site') are NOT in this set and render as
+  // plain text inputs at run time — they don't need a tenant selected first.
+  const TENANT_SCOPED_ENTITY_TYPES = new Set(['m365_identity', 'm365_group', 'm365_license']);
+
   // Sort so tenant picker comes first, then any other integration_link, then
   // non-cascading fields, then dependent m365_* pickers. This is the order a
   // user actually needs to fill things in.
   type FieldGroup = 'tenant' | 'in-tenant' | 'input';
   function groupOf(f: RuntimeField): FieldGroup {
     if (f.entityType === 'integration_link') return 'tenant';
-    if (f.entityType || f.typeHint === 'upn') return 'in-tenant';
+    if ((f.entityType && TENANT_SCOPED_ENTITY_TYPES.has(f.entityType)) || f.typeHint === 'upn') return 'in-tenant';
     return 'input';
   }
   function sortFields(fields: RuntimeField[]): RuntimeField[] {
@@ -295,10 +314,16 @@
     return passwordModes[field.promptKey] ?? 'generate';
   }
 
+  function siteMode(field: RuntimeField): 'select' | 'create' {
+    return siteModes[field.promptKey] ?? 'select';
+  }
+
   function isBlockedByTenant(field: RuntimeField): boolean {
     // UPN composite needs domain list from the tenant.
     if (field.typeHint === 'upn') return !cascadeLinkId;
     if (!field.entityType || field.entityType === 'integration_link') return false;
+    // Internal entity types (e.g. 'site') don't need a tenant link.
+    if (!TENANT_SCOPED_ENTITY_TYPES.has(field.entityType)) return false;
     // Tenant-scoped picker with no tenant selected yet.
     return !cascadeLinkId;
   }
@@ -324,6 +349,10 @@
       if (!field.required) continue;
       const raw = values[field.promptKey];
       if (field.typeHint === 'boolean') continue;
+      if (field.entityType === 'site') {
+        if (typeof raw !== 'string' || raw.trim().length === 0) return false;
+        continue;
+      }
       if (field.typeHint === 'password') {
         if (passwordMode(field) === 'generate') continue;
         if (typeof raw !== 'string' || raw.length < 8) return false;
@@ -464,7 +493,7 @@
                       />
                     </div>
                   {/if}
-                {:else if field.entityType}
+                {:else if field.entityType && (field.entityType === 'integration_link' || TENANT_SCOPED_ENTITY_TYPES.has(field.entityType))}
                   {#if blocked}
                     <div class="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
                       Choose a tenant first.
@@ -535,6 +564,39 @@
                       {Boolean(values[field.promptKey]) ? 'Yes' : 'No'}
                     </span>
                   </label>
+                {:else if field.entityType === 'site'}
+                  <RadioGroup.Root
+                    value={siteMode(field)}
+                    onValueChange={(v) => {
+                      siteModes[field.promptKey] = v as 'select' | 'create';
+                      values[field.promptKey] = '';
+                    }}
+                    class="gap-2"
+                  >
+                    <label class="flex items-start gap-2 text-sm cursor-pointer">
+                      <RadioGroup.Item value="select" class="mt-0.5" />
+                      <span>Select an existing site</span>
+                    </label>
+                    <label class="flex items-start gap-2 text-sm cursor-pointer">
+                      <RadioGroup.Item value="create" class="mt-0.5" />
+                      <span>Create a new site</span>
+                    </label>
+                  </RadioGroup.Root>
+                  {#if siteMode(field) === 'select'}
+                    <SingleSelect
+                      options={siteOptions}
+                      selected={typeof values[field.promptKey] === 'string' ? values[field.promptKey] as string : ''}
+                      placeholder={sitesQuery.isLoading ? 'Loading sites…' : 'Choose a site…'}
+                      onchange={(v) => (values[field.promptKey] = v)}
+                    />
+                  {:else}
+                    <Input
+                      id={`rp-${field.promptKey}`}
+                      placeholder="New site name"
+                      value={typeof values[field.promptKey] === 'string' ? values[field.promptKey] as string : ''}
+                      oninput={(e) => (values[field.promptKey] = (e.target as HTMLInputElement).value)}
+                    />
+                  {/if}
                 {:else if field.typeHint === 'stringArray'}
                   <Input
                     id={`rp-${field.promptKey}`}

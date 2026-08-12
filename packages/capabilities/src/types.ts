@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import type { M365Connector } from '@mspbyte/connectors';
+import type { M365Connector, SophosConnector, DattoConnector, CoveConnector } from '@mspbyte/connectors';
 import type { ActionLabels } from '@mspbyte/shared';
 
 // Tagged union describing how a step's input value is produced at run time.
@@ -92,6 +92,31 @@ export interface OutputMetaEntry {
   sensitive?: boolean;
   label?: string;
   description?: string;
+  // Semantic type identifier used by the package builder UI to filter compatible
+  // priorOutput wires. Inputs declare which outputTypes they accept via priorOutputCompat.
+  outputType?: string;
+}
+
+// Row shape the worker resolves for Sophos endpoint capabilities.
+export interface SophosEndpointRow {
+  id: string;
+  linkId: string;
+  siteId: string | null;
+  externalId: string;
+  hostname: string;
+  tamperProtectionEnabled: boolean | null;
+  tenantId: string | null;
+  apiHost: string | null;
+}
+
+// Options for creating an integration link inside a capability handler.
+export interface CreateIntegrationLinkOpts {
+  siteId: string;
+  integrationId: string;
+  externalId: string;
+  name: string;
+  status?: 'active' | 'error' | 'disabled';
+  meta?: Record<string, unknown>;
 }
 
 // Row shape the worker resolves for identity-scoped capabilities. Mirrors the
@@ -131,6 +156,25 @@ export interface CapabilityCtx {
   siteFacts: ReadonlyMap<string, unknown>;
   loadM365Identity: (identityId: string) => Promise<M365IdentityRow | null>;
   getM365Connector: (linkId: string) => Promise<M365Connector>;
+  // Loads a Sophos endpoint row (with resolved tenantId / apiHost) from the DB.
+  loadSophosEndpoint: (endpointId: string) => Promise<SophosEndpointRow | null>;
+  // Returns a SophosConnector for a specific site-level integration link.
+  // Used by endpoint capabilities where the link is resolved from the endpoint row.
+  getSophosConnector: (linkId: string) => Promise<SophosConnector>;
+  // Returns a SophosConnector for the Sophos Partner integration (loaded by integration ID,
+  // no link selection needed). Used by site-creation capabilities.
+  getSophosPartnerConnector: () => Promise<SophosConnector>;
+  // Returns a DattoConnector for the Datto RMM integration (loaded by integration ID).
+  getDattoConnector: () => Promise<DattoConnector>;
+  // Returns a CoveConnector for the Cove integration (loaded by integration ID) plus
+  // the root partner ID read from the root integration link (siteId IS NULL).
+  getCoveConnector: () => Promise<{ connector: CoveConnector; rootPartnerId: number }>;
+  // Looks up a MSPByte site by id. Returns null if not found.
+  lookupSite: (siteId: string) => Promise<{ id: string; name: string } | null>;
+  // Creates a new MSPByte internal site. Returns the site id and name.
+  createSite: (name: string, description?: string) => Promise<{ id: string; name: string }>;
+  // Creates an integration link connecting a MSPByte site to a vendor account.
+  createIntegrationLink: (opts: CreateIntegrationLinkOpts) => Promise<{ id: string }>;
 }
 
 export interface Capability<Inputs = unknown, Outputs = unknown> {
@@ -138,7 +182,7 @@ export interface Capability<Inputs = unknown, Outputs = unknown> {
   vendor: string;
   name: string;
   description: string;
-  category: 'identity' | 'license' | 'group' | 'role' | 'device' | 'admin';
+  category: 'identity' | 'license' | 'group' | 'role' | 'device' | 'admin' | 'site';
   inputs: z.ZodType<Inputs>;
   outputs: z.ZodType<Outputs>;
   inputMeta: Record<string, InputMetaEntry>;

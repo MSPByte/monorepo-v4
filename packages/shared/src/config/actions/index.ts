@@ -89,7 +89,11 @@ export enum ActionLabels {
   PackageUpdate = 'package.update',
   PackageDelete = 'package.delete',
   PackageRunStart = 'package.run.start',
-  PackageRunRevealOutput = 'package.run.reveal_output'
+  PackageRunRevealOutput = 'package.run.reveal_output',
+  SophosPartnerSiteCreate = 'sophos_partner.site.create',
+  DattoSiteCreate = 'datto.site.create',
+  CoveSiteCreate = 'cove.site.create',
+  CoreSiteProvision = 'core.site.provision'
 }
 
 export type ActionLabel = `${ActionLabels}`;
@@ -463,6 +467,22 @@ export const ActionResources = {
   [ActionLabels.PackageRunRevealOutput]: {
     label: ActionLabels.PackageRunRevealOutput,
     name: 'Package run reveal output'
+  },
+  [ActionLabels.SophosPartnerSiteCreate]: {
+    label: ActionLabels.SophosPartnerSiteCreate,
+    name: 'Sophos Partner create site'
+  },
+  [ActionLabels.DattoSiteCreate]: {
+    label: ActionLabels.DattoSiteCreate,
+    name: 'Datto create site'
+  },
+  [ActionLabels.CoveSiteCreate]: {
+    label: ActionLabels.CoveSiteCreate,
+    name: 'Cove create site'
+  },
+  [ActionLabels.CoreSiteProvision]: {
+    label: ActionLabels.CoreSiteProvision,
+    name: 'Provision MSPByte site'
   }
 } satisfies Record<ActionLabel, ActionResource>;
 

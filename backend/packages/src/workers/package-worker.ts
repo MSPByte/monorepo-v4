@@ -9,6 +9,8 @@ import {
   packageRuns,
   packageRunSteps,
   siteProfileFacts,
+  sites,
+  sophosEndpoints,
 } from "@mspbyte/drizzle";
 import type { PackageJobData } from "@mspbyte/pipeline";
 import {
@@ -19,12 +21,14 @@ import {
   type Binding,
   type CapabilityCtx,
   type CapabilityResult,
+  type CreateIntegrationLinkOpts,
   type ErrorClass,
   type FailureAction,
   type M365IdentityRow,
+  type SophosEndpointRow,
   type StepOnFailure,
 } from "@mspbyte/capabilities";
-import type { M365Connector } from "@mspbyte/connectors";
+import { type M365Connector, SophosConnector, DattoConnector, CoveConnector } from "@mspbyte/connectors";
 import { Encryption } from "@mspbyte/encryption";
 import { env, requireEncryptionKey } from "../env.js";
 import { serializeError } from "../errors.js";
@@ -163,6 +167,13 @@ export function createPackageWorker(
         }
       }
 
+      // Per-link Sophos connector cache for site-level endpoint operations.
+      const sophosConnectorCache = new Map<string, SophosConnector>();
+      // Integration-level singletons — loaded once per run, no linkId required.
+      let sophosPartnerConnector: SophosConnector | null = null;
+      let dattoConnectorSingleton: DattoConnector | null = null;
+      let coveConnectorSingleton: { connector: CoveConnector; rootPartnerId: number } | null = null;
+
       const ctxBase: Omit<CapabilityCtx, "packageRunStepId" | "generatedInputs"> = {
         encryptionKey,
         user: {
@@ -175,6 +186,34 @@ export function createPackageWorker(
         loadM365Identity: (id: string) => loadIdentity(db, id),
         getM365Connector: (linkId: string) =>
           getConnector(db, connectorCache, linkId, encryptionKey),
+        loadSophosEndpoint: (endpointId: string) =>
+          loadSophosEndpoint(db, endpointId),
+        getSophosConnector: (linkId: string) =>
+          getSophosConnector(db, sophosConnectorCache, linkId, encryptionKey),
+        getSophosPartnerConnector: async () => {
+          if (!sophosPartnerConnector) {
+            sophosPartnerConnector = await getSophosPartnerConnector(db, encryptionKey);
+          }
+          return sophosPartnerConnector;
+        },
+        getDattoConnector: async () => {
+          if (!dattoConnectorSingleton) {
+            dattoConnectorSingleton = await getDattoConnector(db, encryptionKey);
+          }
+          return dattoConnectorSingleton;
+        },
+        getCoveConnector: async () => {
+          if (!coveConnectorSingleton) {
+            coveConnectorSingleton = await getCoveConnector(db, encryptionKey);
+          }
+          return coveConnectorSingleton;
+        },
+        lookupSite: (siteId: string) =>
+          lookupSite(db, siteId),
+        createSite: (name: string, description?: string) =>
+          createSite(db, name, description),
+        createIntegrationLink: (opts: CreateIntegrationLinkOpts) =>
+          createIntegrationLink(db, opts),
       };
 
       let halted = false;
@@ -621,6 +660,179 @@ async function getConnector(
   const connector = buildM365Connector(row.config, row.tenantId, encryptionKey);
   cache.set(linkId, connector);
   return connector;
+}
+
+async function loadSophosEndpoint(db: any, endpointId: string): Promise<SophosEndpointRow | null> {
+  const rows = await db
+    .select({
+      id: sophosEndpoints.id,
+      linkId: sophosEndpoints.linkId,
+      siteId: sophosEndpoints.siteId,
+      externalId: sophosEndpoints.externalId,
+      hostname: sophosEndpoints.hostname,
+      tamperProtectionEnabled: sophosEndpoints.tamperProtectionEnabled,
+      tenantId: integrationLinks.externalId,
+      apiHost: integrationLinks.meta,
+    })
+    .from(sophosEndpoints)
+    .innerJoin(integrationLinks, eq(sophosEndpoints.linkId, integrationLinks.id))
+    .where(eq(sophosEndpoints.id, endpointId))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  // meta is a jsonb object; extract apiHost from it
+  const meta = row.apiHost;
+  const apiHost =
+    meta && typeof meta === "object" && !Array.isArray(meta)
+      ? (meta as Record<string, unknown>).apiHost as string | null
+      : null;
+  return { ...row, apiHost };
+}
+
+async function getSophosConnector(
+  db: any,
+  cache: Map<string, SophosConnector>,
+  linkId: string,
+  encryptionKey: string,
+): Promise<SophosConnector> {
+  const cached = cache.get(linkId);
+  if (cached) return cached;
+  const [row] = await db
+    .select({ config: integrations.config })
+    .from(integrationLinks)
+    .innerJoin(integrations, eq(integrationLinks.integrationId, integrations.id))
+    .where(eq(integrationLinks.id, linkId))
+    .limit(1);
+  if (!row) throw new Error(`Sophos link ${linkId} not found`);
+  const config = row.config as Record<string, unknown>;
+  const clientId = config.clientId as string | undefined;
+  const encryptedSecret = config.clientSecret as string | undefined;
+  if (!clientId || !encryptedSecret) throw new Error(`Sophos link ${linkId} missing credentials`);
+  const clientSecret = Encryption.decrypt(encryptedSecret, encryptionKey);
+  if (!clientSecret) throw new Error(`Sophos link ${linkId} client secret could not be decrypted`);
+  const connector = new SophosConnector(clientId, clientSecret);
+  cache.set(linkId, connector);
+  return connector;
+}
+
+async function getSophosPartnerConnector(
+  db: any,
+  encryptionKey: string,
+): Promise<SophosConnector> {
+  const [row] = await db
+    .select({ config: integrations.config })
+    .from(integrations)
+    .where(eq(integrations.id, "sophos-partner"))
+    .limit(1);
+  if (!row) throw new Error("Sophos Partner integration not configured");
+  const config = row.config as Record<string, unknown>;
+  const clientId = config.clientId as string | undefined;
+  const encryptedSecret = config.clientSecret as string | undefined;
+  if (!clientId || !encryptedSecret) throw new Error("Sophos Partner integration missing credentials");
+  const clientSecret = Encryption.decrypt(encryptedSecret, encryptionKey);
+  if (!clientSecret) throw new Error("Sophos Partner client secret could not be decrypted");
+  return new SophosConnector(clientId, clientSecret);
+}
+
+async function getDattoConnector(
+  db: any,
+  encryptionKey: string,
+): Promise<DattoConnector> {
+  const [row] = await db
+    .select({ config: integrations.config })
+    .from(integrations)
+    .where(eq(integrations.id, "datto-rmm"))
+    .limit(1);
+  if (!row) throw new Error("Datto RMM integration not configured");
+  const config = row.config as Record<string, unknown>;
+  const url = config.url as string | undefined;
+  const apiKey = config.apiKey as string | undefined;
+  const encryptedSecret = config.apiSecretKey as string | undefined;
+  if (!url || !apiKey || !encryptedSecret) throw new Error("Datto RMM integration missing credentials");
+  const apiSecretKey = Encryption.decrypt(encryptedSecret, encryptionKey);
+  if (!apiSecretKey) throw new Error("Datto RMM apiSecretKey could not be decrypted");
+  return new DattoConnector(url, apiKey, apiSecretKey);
+}
+
+async function getCoveConnector(
+  db: any,
+  encryptionKey: string,
+): Promise<{ connector: CoveConnector; rootPartnerId: number }> {
+  const [row] = await db
+    .select({ config: integrations.config })
+    .from(integrations)
+    .where(eq(integrations.id, "cove"))
+    .limit(1);
+  if (!row) throw new Error("Cove integration not configured");
+  const config = row.config as Record<string, unknown>;
+  const server = config.server as string | undefined;
+  const clientId = config.clientId as string | undefined;
+  const encryptedSecret = config.clientSecret as string | undefined;
+  if (!server || !clientId || !encryptedSecret) throw new Error("Cove integration missing credentials");
+  const clientSecret = Encryption.decrypt(encryptedSecret, encryptionKey);
+  if (!clientSecret) throw new Error("Cove client secret could not be decrypted");
+
+  // The root Cove integration link (no MSPByte site attached) stores the MSP's
+  // own Cove partner ID in its externalId column.
+  const [rootLink] = await db
+    .select({ externalId: integrationLinks.externalId })
+    .from(integrationLinks)
+    .where(
+      and(
+        eq(integrationLinks.integrationId, "cove"),
+        eq(integrationLinks.siteId, null as any),
+      ),
+    )
+    .limit(1);
+  if (!rootLink?.externalId) throw new Error("Cove root integration link not found — ensure the Cove integration is fully set up");
+  const rootPartnerId = Number(rootLink.externalId);
+  if (!Number.isFinite(rootPartnerId)) throw new Error(`Cove root partner ID '${rootLink.externalId}' is not a valid number`);
+
+  return { connector: new CoveConnector(server, clientId, clientSecret), rootPartnerId };
+}
+
+async function lookupSite(
+  db: any,
+  siteId: string,
+): Promise<{ id: string; name: string } | null> {
+  const [row] = await db
+    .select({ id: sites.id, name: sites.name })
+    .from(sites)
+    .where(eq(sites.id, siteId))
+    .limit(1);
+  return row ?? null;
+}
+
+async function createSite(
+  db: any,
+  name: string,
+  description?: string,
+): Promise<{ id: string; name: string }> {
+  const [site] = await db
+    .insert(sites)
+    .values({ name, description })
+    .returning({ id: sites.id, name: sites.name });
+  if (!site) throw new Error(`Failed to create site '${name}'`);
+  return site;
+}
+
+async function createIntegrationLink(
+  db: any,
+  opts: CreateIntegrationLinkOpts,
+): Promise<{ id: string }> {
+  const [link] = await db
+    .insert(integrationLinks)
+    .values({
+      integrationId: opts.integrationId,
+      siteId: opts.siteId,
+      externalId: opts.externalId,
+      name: opts.name,
+      status: opts.status ?? "active",
+      meta: opts.meta ?? null,
+    })
+    .returning({ id: integrationLinks.id });
+  if (!link) throw new Error(`Failed to create integration link for site ${opts.siteId}`);
+  return link;
 }
 
 async function writeAuditLog(

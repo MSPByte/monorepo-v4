@@ -65,6 +65,7 @@ export class CoveConnector {
   readonly partner: {
     children: {
       list: (partnerId: number) => Promise<CoveChildPartner[]>;
+      create: (parentPartnerId: number, name: string) => Promise<CoveChildPartner>;
     };
   };
 
@@ -77,7 +78,8 @@ export class CoveConnector {
 
     this.partner = {
       children: {
-        list: (partnerId) => this.fetchChildPartners(partnerId)
+        list: (partnerId) => this.fetchChildPartners(partnerId),
+        create: (parentPartnerId, name) => this.createChildPartner(parentPartnerId, name),
       }
     };
   }
@@ -89,6 +91,18 @@ export class CoveConnector {
     } catch {
       return false;
     }
+  }
+
+  private async createChildPartner(parentPartnerId: number, name: string): Promise<CoveChildPartner> {
+    const result = await this.client.rpc<{ result: CoveChildPartner }>('AddSubPartner', {
+      parentPartnerId,
+      name,
+      externalCode: name,
+    });
+    if (!result.result) {
+      throw new Error('Cove AddSubPartner returned no result');
+    }
+    return result.result;
   }
 
   private async fetchChildPartners(partnerId: number): Promise<CoveChildPartner[]> {

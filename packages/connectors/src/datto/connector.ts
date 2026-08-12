@@ -41,6 +41,7 @@ export class DattoConnector {
 
   readonly account: {
     sites: () => Promise<DattoSite[]>;
+    createSite: (name: string, description?: string) => Promise<DattoSite>;
   };
 
   constructor(url: string, apiKey: string, apiSecretKey: string) {
@@ -71,8 +72,15 @@ export class DattoConnector {
     };
 
     this.account = {
-      sites: () => this.fetchPaged<DattoSite, 'sites'>('/api/v2/account/sites', 'sites')
+      sites: () => this.fetchPaged<DattoSite, 'sites'>('/api/v2/account/sites', 'sites'),
+      createSite: (name, description) => this.createSite(name, description),
     };
+  }
+
+  private async createSite(name: string, description?: string): Promise<DattoSite> {
+    const body: Record<string, unknown> = { name };
+    if (description) body.description = description;
+    return this.client.put<DattoSite>('/api/v2/account/site', body);
   }
 
   async checkHealth(): Promise<boolean> {
