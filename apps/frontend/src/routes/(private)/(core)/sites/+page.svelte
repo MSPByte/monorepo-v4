@@ -40,13 +40,19 @@
     textColumn<SiteRow>('name', 'Site'),
     numberColumn<SiteRow>('openFindingCount', 'Open Findings'),
     numberColumn<SiteRow>('assetCount', 'Assets'),
-    numberColumn<SiteRow>('peopleCount', 'People'),
-    { key: 'sourceList', title: 'Sources', searchable: true, cell: sourcesCell, width: '260px' },
+    {
+      key: 'sourceList',
+      title: 'Sources',
+      searchable: true,
+      cell: sourcesCell,
+      width: '260px',
+      filter: { label: 'Sources', operators: ['contains'], type: 'text' },
+    },
   ];
 
   async function fetchData(input: PaginationInput) {
     const result = await trpc.sites.tableData.query(
-      toServerTableInput(input, ['name', 'description', 'sourceList']),
+      toServerTableInput(input, ['name', 'description', 'sourceList'])
     );
     return { rows: result.rows as SiteRow[], total: result.total };
   }
@@ -97,7 +103,9 @@
             {openTotal.toLocaleString()}
           </span>
           <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            across {overview.data.sitesWithFindings} site{overview.data.sitesWithFindings === 1 ? '' : 's'}
+            across {overview.data.sitesWithFindings} site{overview.data.sitesWithFindings === 1
+              ? ''
+              : 's'}
           </span>
         </div>
         <div class="pt-1">
@@ -112,11 +120,9 @@
         <div class="mt-0.5 flex items-baseline gap-3">
           <span class="font-mono text-lg font-semibold tabular-nums text-foreground">
             {overview.data.totalAssets.toLocaleString()}
-            <span class="text-[10px] font-normal uppercase tracking-wider text-muted-foreground">assets</span>
-          </span>
-          <span class="font-mono text-lg font-semibold tabular-nums text-foreground">
-            {overview.data.totalPeople.toLocaleString()}
-            <span class="text-[10px] font-normal uppercase tracking-wider text-muted-foreground">people</span>
+            <span class="text-[10px] font-normal uppercase tracking-wider text-muted-foreground"
+              >assets</span
+            >
           </span>
         </div>
         <div class="pt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
