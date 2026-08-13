@@ -118,6 +118,13 @@ export const packageRuns = packagesSchema.table(
       mode: 'string',
     }),
     triggeredByUserId: text('triggered_by_user_id'),
+    // Immutable display label captured at dispatch time. A run may be created
+    // by a person today or an automated finding/schedule tomorrow, so the
+    // list never has to guess who (or what) initiated it from a nullable ID.
+    triggerSourceLabel: text('trigger_source_label'),
+    // Incremented when an operator reruns part of this job. It is also used
+    // to make each BullMQ enqueue id unique while preserving one run record.
+    executionAttempt: integer('execution_attempt').notNull().default(0),
     startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
     finishedAt: timestamp('finished_at', { withTimezone: true, mode: 'string' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })

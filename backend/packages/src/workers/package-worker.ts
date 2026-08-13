@@ -118,13 +118,14 @@ export function createPackageWorker(
       const connectorCache = new Map<string, M365Connector>();
       const stepOutputs = new Map<number, Record<string, unknown>>();
 
-      // Retry-from-step-N: seed prior step outputs from parent run so
-      // downstream steps' priorOutput bindings still resolve.
-      if (run.startStepIndex > 0 && run.parentRunId) {
+      // Retry-from-step-N keeps the same job. Seed its retained prior step
+      // outputs so downstream priorOutput bindings retain full context. The
+      // parent fallback preserves compatibility with historic retry records.
+      if (run.startStepIndex > 0) {
         try {
           await seedPriorOutputs({
             db,
-            parentRunId: run.parentRunId,
+            parentRunId: run.parentRunId ?? packageRunId,
             upToPosition: run.startStepIndex,
             snapshot,
             encryptionKey,

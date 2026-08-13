@@ -98,7 +98,7 @@ async function reconcileStuckQueued(
   const staleBefore = new Date(Date.now() - STUCK_QUEUED_AFTER_MS).toISOString();
 
   const stuck = await db
-    .select({ id: packageRuns.id })
+    .select({ id: packageRuns.id, executionAttempt: packageRuns.executionAttempt })
     .from(packageRuns)
     .where(
       and(
@@ -114,8 +114,8 @@ async function reconcileStuckQueued(
   const queue = getOrCreateQueue(redis, queueName);
   const orphaned: string[] = [];
 
-  for (const row of stuck as Array<{ id: string }>) {
-    const bullmqJobId = packageRunJobId(row.id);
+  for (const row of stuck as Array<{ id: string; executionAttempt: number }>) {
+    const bullmqJobId = packageRunJobId(row.id, row.executionAttempt);
     const job = await queue.getJob(bullmqJobId).catch(() => null);
     if (job) continue;
     orphaned.push(row.id);

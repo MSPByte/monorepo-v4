@@ -13,7 +13,7 @@
   import Loader from '$lib/components/transition/loader.svelte';
   import StepNode, { type StepStatus } from '$lib/components/domain/step-node.svelte';
   import { toast } from 'svelte-sonner';
-  import { ArrowLeft, Clock, DollarSign, RotateCcw, ShieldAlert, Eye } from '@lucide/svelte';
+  import { ArrowLeft, Clock, DollarSign, RotateCcw, ShieldAlert, Eye, UserRound } from '@lucide/svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
@@ -44,13 +44,9 @@
   const retry = createMutation(() => ({
     mutationFn: (args: { runId: string; stepPosition: number }) =>
       trpc.packageRuns.retryFromStep.mutate({ ...args, overrideRuntimeInputs: {} }),
-    onSuccess: (result) => {
-      toast.success('Retry started', {
-        action: {
-          label: 'View',
-          onClick: () => goto(`/automation/runs/${result.packageRunId}`),
-        },
-      });
+    onSuccess: () => {
+      toast.success('Retry queued in this run');
+      void queryClient.invalidateQueries({ queryKey: ['packageRuns.get', runId] });
       void queryClient.invalidateQueries({ queryKey: ['packageRuns.list'] });
     },
     onError: (err) => toast.error(err.message ?? 'Failed to retry'),
@@ -118,6 +114,14 @@
     if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
     return `${(ms / 60_000).toFixed(1)}m`;
   }
+
+  function runSource(run: { triggerSourceLabel: string | null; triggerType: string }): string {
+    if (run.triggerSourceLabel) return run.triggerSourceLabel;
+    if (run.triggerType === 'finding') return 'Finding automation';
+    if (run.triggerType === 'scheduled') return 'Scheduled automation';
+    if (run.triggerType === 'api') return 'API';
+    return 'Manual run';
+  }
 </script>
 
 <div class="flex size-full flex-col overflow-hidden">
@@ -181,6 +185,15 @@
               <DollarSign class="size-3.5" />
               <span class="tabular-nums">${Number(run.billingTotal ?? 0).toFixed(4)}</span>
             </div>
+            <div class="flex items-center gap-1.5">
+              <UserRound class="size-3.5" />
+              <span>{runSource(run)}</span>
+            </div>
+            {#if run.executionAttempt > 0}
+              <span class="rounded-full border px-2 py-0.5 text-xs tabular-nums">
+                Attempt {run.executionAttempt + 1}
+              </span>
+            {/if}
             <div class="flex items-center gap-1.5">
               {#if purged}
                 <ShieldAlert class="size-3.5" />

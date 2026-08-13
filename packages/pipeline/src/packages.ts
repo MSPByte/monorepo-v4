@@ -28,6 +28,7 @@ export type CreatePendingPackageRunParams = {
   triggerType: "manual" | "finding" | "scheduled" | "api";
   triggerRef?: unknown;
   triggeredByUserId?: string;
+  triggerSourceLabel?: string;
   runtimeInputs?: Record<string, unknown>;
   billingSnapshot?: unknown;
   parentRunId?: string | null;
@@ -57,6 +58,7 @@ export async function createPendingPackageRun(
       triggerType: params.triggerType,
       triggerRef: params.triggerRef ?? null,
       triggeredByUserId: params.triggeredByUserId,
+      triggerSourceLabel: params.triggerSourceLabel ?? null,
       runtimeInputs: params.runtimeInputs ?? {},
       billingSnapshot: params.billingSnapshot ?? {},
       parentRunId: params.parentRunId ?? null,
@@ -81,7 +83,14 @@ export async function enqueuePendingPackageRun(
   orgId: string,
   packageRunId: string,
 ): Promise<{ jobId: string } | { skipped: true }> {
-  const bullmqJobId = packageRunJobId(packageRunId);
+  const [current] = await db
+    .select({ executionAttempt: packageRuns.executionAttempt })
+    .from(packageRuns)
+    .where(eq(packageRuns.id, packageRunId))
+    .limit(1);
+  if (!current) return { skipped: true };
+
+  const bullmqJobId = packageRunJobId(packageRunId, current.executionAttempt);
 
   const claimed = await db
     .update(packageRuns)

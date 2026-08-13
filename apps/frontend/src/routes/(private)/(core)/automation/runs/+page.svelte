@@ -1,35 +1,159 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
-  import { createQuery } from '@tanstack/svelte-query';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
-  import { formatRelativeDate } from '$lib/utils/format';
+  import { DataTable } from '$lib/components/data-table';
+  import type { DataTableColumn, PaginationInput } from '$lib/components/data-table/types';
+  import {
+    numberColumn,
+    relativeDateColumn,
+    stateColumn,
+    textColumn,
+  } from '$lib/components/data-table/column-defs';
   import Button from '$lib/components/ui/button/button.svelte';
-  import Loader from '$lib/components/transition/loader.svelte';
   import RunPackageDialog from '$lib/components/domain/run-package-dialog.svelte';
-  import { Play, Workflow, ChevronRight } from '@lucide/svelte';
+  import { Play } from '@lucide/svelte';
+  import { prettyText } from '$lib/utils/format';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
 
-  const runs = createQuery(() => ({
-    queryKey: ['packageRuns.list'],
-    queryFn: () => trpc.packageRuns.list.query({ limit: 100 }),
-    refetchInterval: 5_000,
-  }));
+  type RunRow = {
+    id: string;
+    packageName: string;
+    packageVersion: number;
+    status: string;
+    source: string;
+    triggerType: string;
+    attempt: number;
+    startedAt: string | null;
+    createdAt: string;
+    billingTotal: number;
+    searchBlob: string;
+    [key: string]: unknown;
+  };
 
   let runDialogOpen = $state(false);
+  let refreshKey = $state(0);
 
-  function statusPill(status: string): { dot: string; label: string; text: string } {
-    if (status === 'completed')
-      return { dot: 'bg-emerald-500', label: 'Completed', text: 'text-emerald-600 dark:text-emerald-400' };
-    if (status === 'running')
-      return { dot: 'bg-sky-500 animate-pulse', label: 'Running', text: 'text-sky-600 dark:text-sky-400' };
-    if (status === 'queued' || status === 'pending')
-      return { dot: 'bg-sky-500/50', label: status, text: 'text-sky-600 dark:text-sky-400' };
-    if (status === 'halted' || status === 'partial')
-      return { dot: 'bg-amber-500', label: status, text: 'text-amber-600 dark:text-amber-400' };
-    return { dot: 'bg-rose-500', label: status, text: 'text-rose-600 dark:text-rose-400' };
+  // Active jobs are deliberately fresh without making search/sort state jump.
+  $effect(() => {
+    const interval = window.setInterval(() => refreshKey++, 10_000);
+    return () => window.clearInterval(interval);
+  });
+
+  function sourceLabel(run: {
+    triggerSourceLabel: string | null;
+    triggerType: string;
+  }): string {
+    if (run.triggerSourceLabel) return run.triggerSourceLabel;
+    if (run.triggerType === 'finding') return 'Finding automation';
+    if (run.triggerType === 'scheduled') return 'Scheduled automation';
+    if (run.triggerType === 'api') return 'API';
+    return 'Manual run';
+  }
+
+  function compareValues(a: unknown, b: unknown): number {
+    if (typeof a === 'number' && typeof b === 'number') return a - b;
+    return String(a ?? '').localeCompare(String(b ?? ''));
+  }
+
+  const columns: DataTableColumn<RunRow>[] = [
+    textColumn<RunRow>('packageName', 'Package', 'Search packages', undefined, { width: '260px' }),
+    stateColumn<RunRow>(
+      'status',
+      'Status',
+      {
+        transform: (value) => prettyText(String(value ?? '')),
+        evaluate: (value) => {
+          if (value === 'completed') return 'success';
+          if (value === 'halted' || value === 'partial') return 'warn';
+          if (value === 'failed' || value === 'canceled') return 'destructive';
+          return 'info';
+        },
+      },
+      {
+        filter: {
+          type: 'select',
+          operators: ['eq'],
+          options: [
+            { label: 'Completed', value: 'completed' },
+            { label: 'Running', value: 'running' },
+            { label: 'Queued', value: 'queued' },
+            { label: 'Pending', value: 'pending' },
+            { label: 'Halted', value: 'halted' },
+            { label: 'Partial', value: 'partial' },
+            { label: 'Failed', value: 'failed' },
+            { label: 'Canceled', value: 'canceled' },
+          ],
+        },
+      }
+    ),
+    textColumn<RunRow>('source', 'Run by / source', 'Search people or sources'),
+    textColumn<RunRow>('triggerType', 'Trigger', 'Search trigger', { pretty: true }),
+    numberColumn<RunRow>('attempt', 'Attempt'),
+    relativeDateColumn<RunRow>('startedAt', 'Started'),
+    relativeDateColumn<RunRow>('createdAt', 'Created', { defaultHidden: true }),
+    numberColumn<RunRow>('billingTotal', 'Cost'),
+  ];
+
+  async function fetchRuns(opts: PaginationInput): Promise<{ rows: RunRow[]; total: number }> {
+    const runs = await trpc.packageRuns.list.query({ limit: 200 });
+    const rows: RunRow[] = runs.map((run) => {
+      const packageName = run.packageName ?? 'Unknown package';
+      const source = sourceLabel(run);
+      return {
+        id: run.id,
+        packageName,
+        packageVersion: run.packageVersion,
+        status: run.status,
+        source,
+        triggerType: run.triggerType,
+        attempt: (run.executionAttempt ?? 0) + 1,
+        startedAt: run.startedAt,
+        createdAt: run.createdAt,
+        billingTotal: Number(run.billingTotal ?? 0),
+        searchBlob: [
+          packageName,
+          run.packageVersion,
+          run.status,
+          source,
+          run.triggerType,
+          (run.executionAttempt ?? 0) + 1,
+        ]
+          .join(' ')
+          .toLowerCase(),
+      };
+    });
+
+    const query = opts.globalSearch.trim().toLowerCase();
+    let filtered = query ? rows.filter((row) => row.searchBlob.includes(query)) : rows;
+
+    for (const filter of opts.filters) {
+      filtered = filtered.filter((row) => {
+        const value = row[filter.field];
+        if (filter.operator === 'eq') return value === filter.value;
+        if (filter.operator === 'neq') return value !== filter.value;
+        if (filter.operator === 'contains')
+          return String(value ?? '').toLowerCase().includes(String(filter.value ?? '').toLowerCase());
+        if (filter.operator === 'gt') return Number(value) > Number(filter.value);
+        if (filter.operator === 'gte') return Number(value) >= Number(filter.value);
+        if (filter.operator === 'lt') return Number(value) < Number(filter.value);
+        if (filter.operator === 'lte') return Number(value) <= Number(filter.value);
+        if (filter.operator === 'is_null') return value === null || value === undefined || value === '';
+        if (filter.operator === 'is_not_null') return !(value === null || value === undefined || value === '');
+        return true;
+      });
+    }
+
+    const sorted = opts.sortField
+      ? [...filtered].sort((a, b) => {
+          const comparison = compareValues(a[opts.sortField!], b[opts.sortField!]);
+          return opts.sortDir === 'asc' ? comparison : -comparison;
+        })
+      : filtered;
+    const start = opts.page * opts.pageSize;
+    return { rows: sorted.slice(start, start + opts.pageSize), total: sorted.length };
   }
 </script>
 
@@ -38,7 +162,7 @@
     <div class="space-y-1">
       <h1 class="text-2xl font-semibold tracking-tight">Runs</h1>
       <p class="text-sm text-muted-foreground">
-        Every package execution. Click a run to trace what happened at each step.
+        One job per package execution — including every retry and its retained context.
       </p>
     </div>
     <Button class="gap-2" onclick={() => (runDialogOpen = true)}>
@@ -47,69 +171,21 @@
     </Button>
   </header>
 
-  <RunPackageDialog bind:open={runDialogOpen} onOpenChange={(o) => (runDialogOpen = o)} />
+  <RunPackageDialog bind:open={runDialogOpen} onOpenChange={(open) => (runDialogOpen = open)} />
 
-  <div class="flex-1 overflow-auto">
-    {#if runs.isLoading}
-      <Loader />
-    {:else if runs.error}
-      <div
-        class="rounded-lg border border-rose-500/30 bg-rose-500/5 p-4 text-sm text-rose-600 dark:text-rose-400"
-      >
-        Failed to load runs.
-      </div>
-    {:else if (runs.data ?? []).length === 0}
-      <div class="rounded-lg border border-dashed p-16 text-center">
-        <div class="mx-auto flex size-12 items-center justify-center rounded-full bg-muted">
-          <Workflow class="size-5 text-muted-foreground" />
-        </div>
-        <h2 class="mt-4 text-base font-medium">No runs yet</h2>
-        <p class="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
-          Trigger a package to see execution history here. Runs record every step,
-          every input, every output — with a 48-hour window for anything sensitive.
-        </p>
-        <Button class="mt-6 gap-2" onclick={() => (runDialogOpen = true)}>
-          <Play class="size-4" />
-          Run a package
-        </Button>
-      </div>
-    {:else}
-      <div class="overflow-hidden rounded-lg border">
-        <div class="grid grid-cols-[130px_1fr_auto_auto] gap-4 border-b bg-muted/30 px-5 py-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          <div>Status</div>
-          <div>Package</div>
-          <div class="hidden text-right sm:block">Cost</div>
-          <div class="w-4"></div>
-        </div>
-        <div class="divide-y">
-          {#each runs.data ?? [] as run (run.id)}
-            {@const pill = statusPill(run.status)}
-            <button
-              type="button"
-              class="group grid w-full grid-cols-[130px_1fr_auto_auto] items-center gap-4 px-5 py-4 text-left transition-colors hover:bg-muted/30"
-              onclick={() => goto(`/automation/runs/${run.id}`)}
-            >
-              <div class="flex items-center gap-2">
-                <span class={`size-2 rounded-full ${pill.dot}`}></span>
-                <span class={`text-xs capitalize ${pill.text}`}>{pill.label}</span>
-              </div>
-              <div class="min-w-0">
-                <div class="truncate font-medium">{run.packageName ?? 'Unknown package'}</div>
-                <div class="text-xs text-muted-foreground">
-                  v{run.packageVersion} · <span class="capitalize">{run.triggerType}</span>
-                  {#if run.startedAt}· {formatRelativeDate(run.startedAt)}{/if}
-                </div>
-              </div>
-              <div class="hidden text-right text-sm tabular-nums text-muted-foreground sm:block">
-                ${Number(run.billingTotal ?? 0).toFixed(4)}
-              </div>
-              <ChevronRight
-                class="size-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
-              />
-            </button>
-          {/each}
-        </div>
-      </div>
-    {/if}
-  </div>
+  <DataTable
+    fetchData={fetchRuns}
+    {columns}
+    {refreshKey}
+    enableRowSelection={false}
+    enableGlobalSearch={true}
+    enableFilters={true}
+    enablePagination={true}
+    enableColumnToggle={true}
+    enableExport={true}
+    defaultSort={{ field: 'createdAt', dir: 'desc' }}
+    defaultPageSize={50}
+    globalSearchFields={['packageName', 'source', 'triggerType', 'status']}
+    onrowclick={(row) => goto(`/automation/runs/${row.id}`)}
+  />
 </div>

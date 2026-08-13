@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, gte } from 'drizzle-orm';
 import {
   customerLogs,
   packageRuns,
@@ -54,6 +54,8 @@ export const packageRunsRouter = t.router({
           linkId: packageRuns.linkId,
           triggerType: packageRuns.triggerType,
           triggeredByUserId: packageRuns.triggeredByUserId,
+          triggerSourceLabel: packageRuns.triggerSourceLabel,
+          executionAttempt: packageRuns.executionAttempt,
           startedAt: packageRuns.startedAt,
           finishedAt: packageRuns.finishedAt,
           createdAt: packageRuns.createdAt,
@@ -244,6 +246,7 @@ export const packageRunsRouter = t.router({
         siteId: input.siteId ?? null,
         triggerType: 'manual',
         triggeredByUserId: ctx.user.id,
+        triggerSourceLabel: ctx.user.name || ctx.user.email || ctx.user.id,
         runtimeInputs,
         billingSnapshot,
         startStepIndex: input.startStepIndex
@@ -377,24 +380,74 @@ export const packageRunsRouter = t.router({
       );
       const mergedRuntimeInputs = { ...originalRuntimeInputs, ...encryptedOverrides };
 
-      const billingSnapshot = original.billingSnapshot;
+      const executionAttempt = original.executionAttempt + 1;
+      // A retry is a new execution attempt of this same job, never a new
+      // package_run. Keep earlier successful steps as the run context, clear
+      // the selected step and everything after it, then let the poller queue
+      // this record with a unique attempt-specific BullMQ id. The transaction
+      // prevents a worker from seeing a pending run before its stale steps
+      // have been removed.
+      await ctx.db.transaction(async (tx) => {
+        const [updated] = await tx
+          .update(packageRuns)
+          .set({
+            status: 'pending',
+            startStepIndex: input.stepPosition,
+            runtimeInputs: mergedRuntimeInputs,
+            triggerRef: {
+              ...(typeof original.triggerRef === 'object' && original.triggerRef !== null
+                ? original.triggerRef
+                : {}),
+              retriedFromStep: input.stepPosition,
+              retriedBy: ctx.user.id,
+              retriedAt: new Date().toISOString()
+            },
+            executionAttempt,
+            bullmqJobId: null,
+            startedAt: null,
+            finishedAt: null,
+            billingTotal: '0',
+            // This is a new execution window. For step > 0 we already refused
+            // a retry whose retained sensitive context was purged.
+            outputsExpiresAt: new Date(Date.now() + 48 * 60 * 60 * 1_000).toISOString(),
+            sensitiveOutputsPurgedAt: null
+          })
+          .where(and(eq(packageRuns.id, original.id), eq(packageRuns.status, original.status)))
+          .returning({ id: packageRuns.id });
+        if (!updated) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This run changed before it could be retried. Refresh and try again.'
+          });
+        }
 
-      const result = await createPendingPackageRun(ctx.db, {
-        packageId: original.packageId,
-        packageVersion: original.packageVersion,
-        packageSnapshot: original.packageSnapshot,
-        linkId: original.linkId,
-        siteId: original.siteId,
-        triggerType: 'manual',
-        triggerRef: { retryOf: original.id, retryFromStep: input.stepPosition },
-        triggeredByUserId: ctx.user.id,
-        runtimeInputs: mergedRuntimeInputs,
-        billingSnapshot,
-        parentRunId: original.id,
-        startStepIndex: input.stepPosition
+        await tx
+          .delete(packageRunSteps)
+          .where(
+            and(
+              eq(packageRunSteps.packageRunId, original.id),
+              gte(packageRunSteps.position, input.stepPosition)
+            )
+          );
+
+        await tx.insert(customerLogs).values({
+          siteId: original.siteId,
+          actorType: 'user',
+          actorId: ctx.user.id,
+          actorLabel: ctx.user.name || ctx.user.email || ctx.user.id,
+          action: 'update',
+          actionLabel: ActionLabels.PackageRunStart,
+          targetType: 'package_run',
+          targetId: original.id,
+          targetLabel: 'retry',
+          result: 'success',
+          ipAddress: ctx.ipAddress,
+          userAgent: ctx.userAgent,
+          metadata: { retryFromStep: input.stepPosition, executionAttempt }
+        });
       });
 
-      return result;
+      return { packageRunId: original.id, executionAttempt };
     }),
 
   revealOutput: authProcedure

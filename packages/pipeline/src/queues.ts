@@ -35,6 +35,6 @@ export function nextIngestionJobId(linkId: string, facet: string): string {
   return assertBullMqName(`next_ingest_${linkId}_${facet}`, "BullMQ job id");
 }
 
-export function packageRunJobId(packageRunId: string): string {
-  return assertBullMqName(`package_run_${packageRunId}`, "BullMQ job id");
+export function packageRunJobId(packageRunId: string, executionAttempt = 0): string {
+  return assertBullMqName(`package_run_${packageRunId}_${executionAttempt}`, "BullMQ job id");
 }
