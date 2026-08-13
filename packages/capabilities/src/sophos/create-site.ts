@@ -2,6 +2,24 @@ import { z } from 'zod';
 import { ActionLabels } from '@mspbyte/shared';
 import type { Capability } from '../types.js';
 
+// Maps ISO 3166-1 alpha-2 country codes to the nearest Sophos data geography.
+// Covers the full set of Sophos geography options (US, IE, DE, CA, AU, JP, IN, BR, AE).
+// Used to auto-derive dataGeography when neither dataGeography nor dataRegion is supplied.
+const COUNTRY_TO_GEOGRAPHY: Record<string, 'US' | 'IE' | 'DE' | 'CA' | 'AU' | 'JP' | 'IN' | 'BR' | 'AE'> = {
+  // Direct matches
+  US: 'US', CA: 'CA', AU: 'AU', NZ: 'AU',
+  JP: 'JP', IN: 'IN', BR: 'BR',
+  AE: 'AE', SA: 'AE', OM: 'AE', QA: 'AE', KW: 'AE', BH: 'AE',
+  // Germany (strict GDPR) — DE, Austria, Switzerland
+  DE: 'DE', AT: 'DE', CH: 'DE',
+  // Ireland + remaining EEA/UK
+  IE: 'IE', GB: 'IE',
+  FR: 'IE', ES: 'IE', IT: 'IE', NL: 'IE', BE: 'IE', PL: 'IE',
+  SE: 'IE', DK: 'IE', FI: 'IE', NO: 'IE', PT: 'IE',
+  CZ: 'IE', HU: 'IE', RO: 'IE', SK: 'IE', HR: 'IE', BG: 'IE',
+  LT: 'IE', LV: 'IE', EE: 'IE', SI: 'IE', LU: 'IE', MT: 'IE', CY: 'IE', GR: 'IE',
+};
+
 const DATA_GEOGRAPHY_CHOICES = [
   { value: 'US', label: 'United States' },
   { value: 'IE', label: 'Ireland' },
@@ -63,9 +81,6 @@ const inputs = z.object({
 
   acceptedSampleSubmission: z.boolean().optional(),
 }).refine(
-  (d) => d.dataGeography || d.dataRegion,
-  { message: 'Either dataGeography or dataRegion must be provided', path: ['dataGeography'] }
-).refine(
   (d) => !d.adminEmail || d.adminName,
   { message: 'adminName is required when adminEmail is provided', path: ['adminName'] }
 );
@@ -125,7 +140,7 @@ export const sophosCreateSite: Capability<
       allowedBindings: ['literal', 'runtime'],
       typeHint: 'text',
       label: 'Data geography',
-      description: 'Country/region where Sophos stores this tenant\'s data. Either this or Data region must be set.',
+      description: 'Where Sophos stores this tenant\'s data. Auto-derived from the contact country code when left blank.',
       required: false,
       choices: DATA_GEOGRAPHY_CHOICES as unknown as { value: string; label: string }[],
     },
@@ -260,13 +275,6 @@ export const sophosCreateSite: Capability<
   requiredPermission: 'Vendors.Write',
   defaultUnitPrice: 0,
   async handler(ctx, input) {
-    if (!input.dataGeography && !input.dataRegion) {
-      return {
-        outcome: 'fail',
-        errorClass: 'invalid_input',
-        message: 'Either dataGeography or dataRegion must be provided',
-      };
-    }
     if (input.adminEmail && !input.adminName) {
       return {
         outcome: 'fail',
@@ -275,13 +283,20 @@ export const sophosCreateSite: Capability<
       };
     }
 
+    // Derive dataGeography from the contact country when neither geo field is provided.
+    const resolvedGeography =
+      input.dataGeography ??
+      (!input.dataRegion
+        ? (COUNTRY_TO_GEOGRAPHY[input.contactCountryCode.toUpperCase()] ?? 'US')
+        : undefined);
+
     try {
       const connector = await ctx.getSophosPartnerConnector();
 
       const req = {
         name: input.sophosName,
         billingType: input.billingType,
-        ...(input.dataGeography && { dataGeography: input.dataGeography }),
+        ...(resolvedGeography && { dataGeography: resolvedGeography }),
         ...(input.dataRegion && { dataRegion: input.dataRegion }),
         contact: {
           firstName: input.contactFirstName,

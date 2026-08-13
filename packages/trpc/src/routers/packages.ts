@@ -71,6 +71,7 @@ const bindingSchema = z.discriminatedUnion('kind', [
 const stepSchema = z.object({
   capabilityId: z.string().min(1),
   label: z.string().optional(),
+  optional: z.boolean().default(false),
   inputBindings: z.record(z.string(), bindingSchema),
   onFailure: z.enum(['halt', 'continue']).default('halt'),
   retryAttempts: z.number().int().min(0).max(5).default(0),

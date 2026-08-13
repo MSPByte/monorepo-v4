@@ -53,6 +53,7 @@ type PackageSnapshot = {
   version: number;
   steps: StepDefinition[];
   failureActions?: FailureAction[];
+  skippedStepIndexes?: number[];
 };
 
 export function createPackageWorker(
@@ -220,6 +221,8 @@ export function createPackageWorker(
       let canceled = false;
       let anyStepFailed = false;
 
+      const operatorSkippedPositions = new Set(snapshot.skippedStepIndexes ?? []);
+
       for (let position = run.startStepIndex; position < snapshot.steps.length; position++) {
         // Cancellation window: re-read the run's status between steps so an
         // in-flight cancel from tRPC takes effect at the next boundary. We
@@ -236,6 +239,20 @@ export function createPackageWorker(
         }
 
         const step = snapshot.steps[position]!;
+
+        // Operator chose to skip this step at run time.
+        if (operatorSkippedPositions.has(position)) {
+          await db.insert(packageRunSteps).values({
+            packageRunId,
+            position,
+            capabilityId: step.capabilityId,
+            status: "skip",
+            skipReason: "operator_skipped",
+            startedAt: new Date().toISOString(),
+            finishedAt: new Date().toISOString(),
+          });
+          continue;
+        }
         const capability = getCapability(step.capabilityId);
         if (!capability) {
           await recordStepFailure(db, packageRunId, position, step.capabilityId, {
@@ -741,7 +758,7 @@ async function getDattoConnector(
   const [row] = await db
     .select({ config: integrations.config })
     .from(integrations)
-    .where(eq(integrations.id, "datto-rmm"))
+    .where(eq(integrations.id, "dattormm"))
     .limit(1);
   if (!row) throw new Error("Datto RMM integration not configured");
   const config = row.config as Record<string, unknown>;
@@ -768,25 +785,12 @@ async function getCoveConnector(
   const server = config.server as string | undefined;
   const clientId = config.clientId as string | undefined;
   const encryptedSecret = config.clientSecret as string | undefined;
+  // partnerId is stored directly in the integration config at setup time.
+  const rootPartnerId = Number(config.partnerId);
   if (!server || !clientId || !encryptedSecret) throw new Error("Cove integration missing credentials");
+  if (!Number.isFinite(rootPartnerId)) throw new Error("Cove integration missing partnerId — re-save the Cove integration to populate it");
   const clientSecret = Encryption.decrypt(encryptedSecret, encryptionKey);
   if (!clientSecret) throw new Error("Cove client secret could not be decrypted");
-
-  // The root Cove integration link (no MSPByte site attached) stores the MSP's
-  // own Cove partner ID in its externalId column.
-  const [rootLink] = await db
-    .select({ externalId: integrationLinks.externalId })
-    .from(integrationLinks)
-    .where(
-      and(
-        eq(integrationLinks.integrationId, "cove"),
-        eq(integrationLinks.siteId, null as any),
-      ),
-    )
-    .limit(1);
-  if (!rootLink?.externalId) throw new Error("Cove root integration link not found — ensure the Cove integration is fully set up");
-  const rootPartnerId = Number(rootLink.externalId);
-  if (!Number.isFinite(rootPartnerId)) throw new Error(`Cove root partner ID '${rootLink.externalId}' is not a valid number`);
 
   return { connector: new CoveConnector(server, clientId, clientSecret), rootPartnerId };
 }

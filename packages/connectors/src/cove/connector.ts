@@ -55,6 +55,10 @@ type EnumerateChildPartnersResult = {
   };
 };
 
+type AddPartnerResult = {
+  result: number;
+};
+
 export class CoveConnector {
   private client: CoveHttpClient;
 
@@ -94,15 +98,29 @@ export class CoveConnector {
   }
 
   private async createChildPartner(parentPartnerId: number, name: string): Promise<CoveChildPartner> {
-    const result = await this.client.rpc<{ result: CoveChildPartner }>('AddSubPartner', {
-      parentPartnerId,
-      name,
-      externalCode: name,
+    const raw = await this.client.rpc<AddPartnerResult>('AddPartner', {
+      partnerInfo: {
+        Name: name,
+        ParentId: parentPartnerId,
+        Level: 'Site',
+        State: 'InProduction',
+        ServiceType: 'AllInclusive',
+      },
     });
-    if (!result.result) {
-      throw new Error('Cove AddSubPartner returned no result');
+    const partnerId = raw?.result;
+    if (!partnerId) {
+      throw new Error('Cove AddPartner returned no result');
     }
-    return result.result;
+    return {
+      ActualChildCount: 0,
+      Info: {
+        Id: partnerId,
+        Name: name,
+        Level: 'Site',
+        ParentId: parentPartnerId,
+        State: 'InProduction',
+      },
+    };
   }
 
   private async fetchChildPartners(partnerId: number): Promise<CoveChildPartner[]> {

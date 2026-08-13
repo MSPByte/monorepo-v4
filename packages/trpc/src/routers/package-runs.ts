@@ -96,7 +96,11 @@ export const packageRunsRouter = t.router({
         runtimeInputs: runtimeInputsSchema,
         // Optional partial-execution entry point. Refused if any step >= N has
         // a priorOutput binding referencing step < N (nothing to seed from).
-        startStepIndex: z.number().int().min(0).default(0)
+        startStepIndex: z.number().int().min(0).default(0),
+        // Operator-chosen steps to skip at runtime. Each index must refer to a
+        // step marked optional:true and must not be depended upon by any other
+        // step via a priorOutput binding.
+        skippedStepIndexes: z.array(z.number().int().min(0)).default([])
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -167,6 +171,35 @@ export const packageRunsRouter = t.router({
         }
       }
 
+      // Guard: validate each operator-skipped step.
+      if (input.skippedStepIndexes.length > 0) {
+        // Build a set of positions that are depended upon via priorOutput.
+        const wiredPositions = new Set<number>();
+        for (const step of steps) {
+          for (const binding of Object.values(step.inputBindings)) {
+            if (binding.kind === 'priorOutput') wiredPositions.add(binding.stepPosition);
+          }
+        }
+        for (const idx of input.skippedStepIndexes) {
+          if (idx >= steps.length) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: `Skipped step index ${idx} is out of range` });
+          }
+          const step = steps[idx]!;
+          if (!(step as any).optional) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `Step ${idx + 1} is not marked optional and cannot be skipped`
+            });
+          }
+          if (wiredPositions.has(idx)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `Step ${idx + 1} has downstream dependencies and cannot be skipped`
+            });
+          }
+        }
+      }
+
       const materializedInputs = materializeGeneratedRuntimeInputs(input.runtimeInputs, steps);
 
       // Encrypt sensitive runtime inputs before persisting, using each
@@ -197,7 +230,8 @@ export const packageRunsRouter = t.router({
         name: pkg.name,
         version: pkg.version,
         steps: pkg.steps,
-        failureActions: pkg.failureActions ?? []
+        failureActions: pkg.failureActions ?? [],
+        skippedStepIndexes: input.skippedStepIndexes
       };
 
       // The tRPC caller only creates the pending row — no Redis contact.

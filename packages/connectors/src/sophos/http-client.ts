@@ -120,8 +120,9 @@ export class SophosHttpClient {
       body: JSON.stringify(body)
     });
     if (!res.ok) {
-      const result = await res.json();
-      throw new Error(`Sophos POST error ${res.status}: ${url} ${result.error}`);
+      const result = await res.json().catch(() => ({}));
+      const detail = result.message ?? result.error ?? JSON.stringify(result);
+      throw new Error(`Sophos POST error ${res.status}: ${url} — ${detail}`);
     }
     return res.json() as Promise<T>;
   }

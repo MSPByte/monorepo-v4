@@ -15,6 +15,7 @@
   export type Step = {
     capabilityId: string;
     label?: string;
+    optional?: boolean;
     inputBindings: Record<string, Binding>;
   };
 
@@ -314,10 +315,15 @@
       inputBindings[name] = defaultForInput(name, meta);
     }
     const nextIndex = draft.steps.length;
-    draft.steps = [...draft.steps, { capabilityId: cap.id, label: cap.name, inputBindings }];
+    draft.steps = [...draft.steps, { capabilityId: cap.id, label: cap.name, optional: false, inputBindings }];
     selectedIndex = nextIndex;
     capabilityPickerOpen = false;
     capabilitySearch = '';
+  }
+
+  function setStepOptional(index: number, value: boolean) {
+    draft.steps[index]!.optional = value;
+    draft.steps = [...draft.steps];
   }
 
   function toggleFilter(current: string[], value: string): string[] {
@@ -706,6 +712,14 @@
                           title="Fixed values"
                         >
                           {summary.literals}
+                        </span>
+                      {/if}
+                      {#if step.optional}
+                        <span
+                          class="inline-flex items-center gap-1 rounded-sm bg-sky-500/10 px-1.5 py-0.5 font-mono text-sky-700 dark:text-sky-400"
+                          title="Can be skipped at run time"
+                        >
+                          opt
                         </span>
                       {/if}
                     </div>
@@ -1385,6 +1399,56 @@
             </div>
           {/if}
 
+          <!-- Optional step toggle -->
+          {#if readers.size > 0}
+            <div class="rounded-lg border p-4 space-y-2">
+              <div class="flex items-center justify-between gap-3">
+                <div class="space-y-0.5">
+                  <div class="text-sm font-medium">Optional step</div>
+                  <p class="text-xs text-muted-foreground">
+                    When optional, the operator can choose to skip this step at run time.
+                  </p>
+                </div>
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={!!step.optional}
+                    disabled={true}
+                    onCheckedChange={(c) => setStepOptional(selectedIndex, Boolean(c))}
+                  />
+                  <span class="text-sm text-muted-foreground select-none">
+                    {step.optional ? 'Optional' : 'Required'}
+                  </span>
+                </label>
+              </div>
+              <div class="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500">
+                <AlertTriangle class="size-3.5 shrink-0 mt-0.5" />
+                <span>
+                  This step's outputs are wired to later steps — it cannot be marked optional until those wires are removed.
+                </span>
+              </div>
+            </div>
+          {:else}
+            <div class="rounded-lg border p-4">
+              <div class="flex items-center justify-between gap-3">
+                <div class="space-y-0.5">
+                  <div class="text-sm font-medium">Optional step</div>
+                  <p class="text-xs text-muted-foreground">
+                    When optional, the operator can choose to skip this step at run time.
+                  </p>
+                </div>
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={!!step.optional}
+                    onCheckedChange={(c) => setStepOptional(selectedIndex, Boolean(c))}
+                  />
+                  <span class="text-sm text-muted-foreground select-none">
+                    {step.optional ? 'Optional' : 'Required'}
+                  </span>
+                </label>
+              </div>
+            </div>
+          {/if}
+
           <!-- Outputs -->
           {#if Object.keys(cap.outputMeta).length > 0}
             <div class="space-y-3 pt-2">
@@ -1433,16 +1497,6 @@
               </div>
             </div>
           {/if}
-
-          <div class="flex items-center justify-between gap-3 pt-2 text-xs text-muted-foreground">
-            <div class="inline-flex items-center gap-1.5">
-              <Database class="size-3.5" />
-              Est. cost per run:
-              <span class="font-mono tabular-nums text-foreground">
-                ${cap.defaultUnitPrice.toFixed(4)}
-              </span>
-            </div>
-          </div>
         </div>
       {:else}
         <div class="p-6 text-sm text-rose-500">Unknown capability.</div>

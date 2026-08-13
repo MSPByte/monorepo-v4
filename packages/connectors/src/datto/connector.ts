@@ -37,18 +37,19 @@ export class DattoConnector {
       get: (siteUid: string, variableName: string) => Promise<string | null>;
       set: (siteUid: string, variableName: string, value: string) => Promise<void>;
     };
+    create: (name: string, description?: string) => Promise<DattoSite>;
   };
 
   readonly account: {
     sites: () => Promise<DattoSite[]>;
-    createSite: (name: string, description?: string) => Promise<DattoSite>;
   };
 
   constructor(url: string, apiKey: string, apiSecretKey: string) {
     this.client = new DattoHttpClient(url, apiKey, apiSecretKey);
 
     this.site = {
-      devices: (siteUid) => this.fetchPaged<DattoDevice, 'devices'>(`/api/v2/site/${siteUid}/devices`, 'devices'),
+      devices: (siteUid) =>
+        this.fetchPaged<DattoDevice, 'devices'>(`/api/v2/site/${siteUid}/devices`, 'devices'),
       variables: {
         get: async (siteUid, variableName) => {
           const data = await this.client.getOrNull<{
@@ -63,24 +64,28 @@ export class DattoConnector {
           );
           const variableId = data?.variables.find((v) => v.name === variableName)?.id ?? null;
           if (variableId) {
-            await this.client.post(`/api/v2/site/${siteUid}/variable/${variableId}`, { name: variableName, value });
+            await this.client.post(`/api/v2/site/${siteUid}/variable/${variableId}`, {
+              name: variableName,
+              value
+            });
           } else {
-            await this.client.put(`/api/v2/site/${siteUid}/variable`, { name: variableName, value });
+            await this.client.put(`/api/v2/site/${siteUid}/variable`, {
+              name: variableName,
+              value
+            });
           }
-        },
+        }
       },
+      create: (name, description) => {
+        const body: Record<string, unknown> = { name };
+        if (description) body.description = description;
+        return this.client.put<DattoSite>('/api/v2/site', body);
+      }
     };
 
     this.account = {
-      sites: () => this.fetchPaged<DattoSite, 'sites'>('/api/v2/account/sites', 'sites'),
-      createSite: (name, description) => this.createSite(name, description),
+      sites: () => this.fetchPaged<DattoSite, 'sites'>('/api/v2/account/sites', 'sites')
     };
-  }
-
-  private async createSite(name: string, description?: string): Promise<DattoSite> {
-    const body: Record<string, unknown> = { name };
-    if (description) body.description = description;
-    return this.client.put<DattoSite>('/api/v2/account/site', body);
   }
 
   async checkHealth(): Promise<boolean> {
@@ -92,10 +97,7 @@ export class DattoConnector {
     }
   }
 
-  private async fetchPaged<T, TKey extends string>(
-    path: string,
-    key: TKey
-  ): Promise<T[]> {
+  private async fetchPaged<T, TKey extends string>(path: string, key: TKey): Promise<T[]> {
     const items: T[] = [];
     let nextUrl: string | null = path;
     const seenUrls = new Set<string>();
