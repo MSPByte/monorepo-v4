@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
-  import { Plus, Trash2 } from '@lucide/svelte';
+  import { Copy, Plus, Trash2 } from '@lucide/svelte';
   import { useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
   import type { AppRouter } from '@mspbyte/trpc';
@@ -115,8 +115,32 @@
     return { rows: result.rows as PolicyRow[], total: result.total };
   }
 
+  const canWritePolicies = $derived(authStore.isAllowed('Policies.Write'));
   const canDeletePolicies = $derived(authStore.isAllowed('Assets.Delete'));
   const rowActions: RowAction<PolicyRow>[] = $derived([
+    ...(canWritePolicies
+      ? [
+          {
+            label: 'Duplicate',
+            icon: Copy,
+            onclick: async (rows, fetchData, { setProgress }) => {
+              const ids = rows.map((row) => row.id).filter(Boolean);
+              if (ids.length === 0) return;
+
+              setProgress(`Duplicating ${ids.length} polic${ids.length === 1 ? 'y' : 'ies'}...`);
+              for (const id of ids) {
+                await trpc.policies.duplicate.mutate({ id });
+              }
+              setProgress('Refreshing policies...');
+              await queryClient.invalidateQueries({ queryKey: ['policies.list'] });
+              await fetchData();
+              toast.success(
+                `Duplicated ${ids.length} polic${ids.length === 1 ? 'y' : 'ies'}`
+              );
+            },
+          } satisfies RowAction<PolicyRow>,
+        ]
+      : []),
     ...(canDeletePolicies
       ? [
           {
@@ -176,7 +200,7 @@
   <DataTable
     {fetchData}
     {columns}
-    enableRowSelection={canDeletePolicies}
+    enableRowSelection={canWritePolicies || canDeletePolicies}
     {rowActions}
     defaultPageSize={25}
     defaultSort={{ field: 'openFindingCount', dir: 'desc' }}

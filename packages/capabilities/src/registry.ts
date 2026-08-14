@@ -7,6 +7,7 @@ import { m365IdentityRevokeSessions } from './m365/revoke-sessions.js';
 import { m365GroupAddMember } from './m365/add-group-member.js';
 import { coreSiteProvision } from './core/provision-site.js';
 import { sophosEndpointEnableTamper } from './sophos/enable-tamper.js';
+import { sophosEndpointDisableTamper } from './sophos/disable-tamper.js';
 import { sophosEndpointDelete } from './sophos/delete-endpoint.js';
 import { sophosCreateSite } from './sophos/create-site.js';
 import { dattoCreateSite } from './datto/create-site.js';
@@ -21,6 +22,7 @@ export const CAPABILITIES = {
   [m365IdentityRevokeSessions.id]: m365IdentityRevokeSessions,
   [m365GroupAddMember.id]: m365GroupAddMember,
   [sophosEndpointEnableTamper.id]: sophosEndpointEnableTamper,
+  [sophosEndpointDisableTamper.id]: sophosEndpointDisableTamper,
   [sophosEndpointDelete.id]: sophosEndpointDelete,
   [sophosCreateSite.id]: sophosCreateSite,
   [dattoCreateSite.id]: dattoCreateSite,

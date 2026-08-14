@@ -3,7 +3,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
-  import { Plus, Save, Trash2 } from '@lucide/svelte';
+  import { ArrowLeft, Plus, Save, Trash2 } from '@lucide/svelte';
   import { toast } from 'svelte-sonner';
   import { showErrorToast } from '$lib/utils/errors';
   import type { AppRouter } from '@mspbyte/trpc';
@@ -15,15 +15,14 @@
     type PolicyTableShape,
   } from '@mspbyte/shared';
   import Button from '$lib/components/ui/button/button.svelte';
-  import * as Card from '$lib/components/ui/card/index.js';
   import { Input } from '$lib/components/ui/input/index.js';
   import { Textarea } from '$lib/components/ui/textarea/index.js';
   import { Switch } from '$lib/components/ui/switch/index.js';
   import SingleSelect from '$lib/components/single-select.svelte';
   import MultiSelect from '$lib/components/multi-select.svelte';
   import ReferenceMultiSelect from '$lib/components/reference-multi-select.svelte';
+  import ReferenceSingleSelect from '$lib/components/reference-single-select.svelte';
   import TagInserter from '$lib/components/tag-inserter.svelte';
-  import Separator from '$lib/components/ui/separator/separator.svelte';
 
   type FlatField = {
     label: string;
@@ -427,9 +426,7 @@
 {#snippet conditionEditor(kind: ConditionKind, condition: ConditionDraft)}
   {@const selectedField = fieldFor(condition.field)}
   {@const ops = operatorOptions(selectedField)}
-  <div
-    class="grid gap-2 rounded-md border p-2 md:grid-cols-[minmax(0,1fr)_190px_minmax(0,1fr)_36px]"
-  >
+  <div class="grid gap-2 rounded-lg border bg-card p-3 md:grid-cols-[minmax(0,1fr)_190px_minmax(0,1fr)_36px]">
     <SingleSelect
       options={fieldOptions}
       selected={condition.field}
@@ -456,6 +453,13 @@
           selected={condition.values ?? []}
           placeholder="Select values"
           onchange={(values) => updateCondition(kind, condition.id, { values })}
+        />
+      {:else if !isSetOp(condition.op) && selectedField.field.reference}
+        <ReferenceSingleSelect
+          ref={selectedField.field.reference}
+          selected={condition.value}
+          placeholder="Select value"
+          onchange={(value) => updateCondition(kind, condition.id, { value })}
         />
       {:else if selectedField.field.type === 'boolean'}
         <SingleSelect
@@ -489,194 +493,191 @@
   </div>
 {/snippet}
 
-<div class="size-full overflow-auto p-6">
-  <div class="flex size-full gap-2">
-    <Card.Root class="w-2/3">
-      <Card.Header>
-        <Card.Title>{editing ? 'Edit Policy' : 'New Policy'}</Card.Title>
-        <Card.Description
-          >Build a typed policy definition from canonical and vendor table shapes.</Card.Description
-        >
-      </Card.Header>
-      <Separator />
-      <Card.Content class="grid gap-4 overflow-auto">
-        <div class="grid gap-3 md:grid-cols-2">
-          <label class="grid gap-1 text-sm font-medium"
-            >Name<Input bind:value={name} placeholder="Server assets must have Sophos" /></label
-          >
-          <div class="flex w-full gap-2">
-            <label class="flex flex-col gap-1 w-full">
-              Category
-              <Input bind:value={category} /></label
-            >
-            <div class="flex flex-col w-fit h-fit gap-3">
-              <span class="text-sm font-medium">Enabled</span>
-              <Switch bind:checked={enabled} />
-            </div>
-          </div>
-          <div class="flex col-span-2 gap-4">
-            <label class="flex flex-col gap-1 w-full text-sm font-medium"
-              >Description<Input bind:value={description} /></label
-            >
-            <label class="flex flex-col gap-1 w-48 text-sm font-medium"
-              >Severity
-              <SingleSelect options={severityOptions} bind:selected={severity} />
-            </label>
-          </div>
-        </div>
+<div class="flex size-full flex-col overflow-hidden">
+  <!-- Header bar -->
+  <header class="border-b bg-background">
+    <div class="flex flex-wrap items-center gap-3 px-6 py-3">
+      <button
+        type="button"
+        class="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        onclick={() => goto(editing ? `/policies/${policyId}` : '/policies')}
+      >
+        <ArrowLeft class="size-3.5" />
+        {editing ? 'Back to policy' : 'All policies'}
+      </button>
 
-        <div class="grid gap-3 md:grid-cols-2">
-          <label class="grid gap-1 text-sm font-medium"
-            >Data source
-            <SingleSelect options={tableOptions} bind:selected={table} onchange={resetForTable} />
-          </label>
-          <label class="grid gap-1 text-sm font-medium"
-            >Evaluation
-            <SingleSelect options={modeOptions} bind:selected={mode} />
-          </label>
-        </div>
+      <div class="mx-2 h-5 w-px bg-border"></div>
 
-        <div class="grid gap-3 rounded-md border p-3">
-          <div class="flex items-center justify-between gap-2">
-            <div>
-              <div class="text-sm font-medium">Rows to evaluate</div>
-              <div class="text-xs text-muted-foreground">
-                Filter that narrows which rows are loaded. Pushed to SQL when possible.
-              </div>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              class="gap-2"
-              onclick={() => addCondition('candidates')}
-            >
-              <Plus class="size-4" />
-              Add Filter
-            </Button>
-          </div>
-          {#each candidateConditions as condition (condition.id)}
-            {@render conditionEditor('candidates', condition)}
-          {:else}
-            <div
-              class="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground"
-            >
-              All rows in this scope are included.
-            </div>
-          {/each}
-        </div>
+      <Input
+        placeholder="Policy name"
+        bind:value={name}
+        class="h-9 w-full max-w-sm text-base font-semibold"
+      />
 
-        <div class="grid gap-3 rounded-md border p-3">
-          <div class="flex items-center justify-between gap-2">
-            <div>
-              <div class="text-sm font-medium">
-                {mode === 'tableThreshold'
-                  ? 'Rules a row must satisfy to count'
-                  : 'Rules each row must satisfy'}
-              </div>
-              <div class="text-xs text-muted-foreground">
-                {mode === 'tableThreshold'
-                  ? 'Rows matching all rules count toward the threshold.'
-                  : 'A finding is created when any rule fails.'}
-              </div>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              class="gap-2"
-              onclick={() => addCondition('expectations')}
-            >
-              <Plus class="size-4" />
-              Add Rule
-            </Button>
-          </div>
-          {#each expectationConditions as condition (condition.id)}
-            {@render conditionEditor('expectations', condition)}
-          {:else}
-            <div
-              class="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground"
-            >
-              {mode === 'tableThreshold'
-                ? 'Every scoped row counts toward the threshold.'
-                : 'Add at least one rule.'}
-            </div>
-          {/each}
-        </div>
-
-        {#if mode === 'tableThreshold'}
-          <label class="grid gap-1 text-sm font-medium"
-            >Minimum matching rows
-            <Input bind:value={threshold} type="number" min="0" />
-          </label>
-        {/if}
-
-        <div class="grid gap-3">
-          <div class="grid gap-1 text-sm">
-            <div class="flex items-center justify-between">
-              <span class="font-medium">Finding title template</span>
-              <TagInserter groups={tagGroups} target={titleRef} bind:value={titleTemplate} />
-            </div>
-            <Input bind:ref={titleRef} bind:value={titleTemplate} />
-          </div>
-          <div class="grid gap-1 text-sm">
-            <div class="flex items-center justify-between">
-              <span class="font-medium">Summary</span>
-              <TagInserter groups={tagGroups} target={summaryRef} bind:value={summary} />
-            </div>
-            <Textarea bind:ref={summaryRef} bind:value={summary} />
-          </div>
-          <div class="grid gap-1 text-sm">
-            <div class="flex items-center justify-between">
-              <span class="font-medium">Recommendation</span>
-              <TagInserter
-                groups={tagGroups}
-                target={recommendationRef}
-                bind:value={recommendation}
-              />
-            </div>
-            <Textarea bind:ref={recommendationRef} bind:value={recommendation} />
-          </div>
-          <div class="grid gap-1 text-sm">
-            <span class="font-medium">Linked Wiki articles</span>
-            <MultiSelect
-              options={articleOptions}
-              bind:selected={linkedArticleIds}
-              placeholder="Attach reference articles"
-              searchPlaceholder="Search articles..."
-              maxDisplay={3}
-            />
-            <span class="text-xs text-muted-foreground">
-              Surfaced on findings from this policy for quick tech reference.
-            </span>
-          </div>
-        </div>
-      </Card.Content>
-      <Card.Footer class="mt-auto gap-2">
-        <Button
-          variant="outline"
-          onclick={() => goto(editing ? `/policies/${policyId}` : '/policies')}>Cancel</Button
-        >
+      <div class="ml-auto flex items-center gap-3">
+        <label class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground select-none">
+          <Switch bind:checked={enabled} />
+          {enabled ? 'Enabled' : 'Disabled'}
+        </label>
         <Button
           onclick={savePolicy}
           disabled={saving || (editing && policyQuery.isLoading)}
-          class="gap-2"><Save class="size-4" />{editing ? 'Save Policy' : 'Create Policy'}</Button
+          class="gap-2"
         >
-      </Card.Footer>
-    </Card.Root>
+          <Save class="size-4" />
+          {editing ? 'Save Policy' : 'Create Policy'}
+        </Button>
+      </div>
+    </div>
+  </header>
 
-    <Card.Root class="w-1/3">
-      <Card.Header>
-        <Card.Title>Definition Preview</Card.Title>
-        <Card.Description
-          >The JSON stored on the policy and consumed by the policy worker.</Card.Description
-        >
-      </Card.Header>
-      <Card.Content>
-        <pre class="max-h-[620px] overflow-auto rounded-md bg-muted p-3 text-xs">{JSON.stringify(
-            buildDefinition(),
-            null,
-            2
-          )}</pre>
-      </Card.Content>
-    </Card.Root>
+  <!-- Two-pane body: info left, rules right -->
+  <div class="grid min-h-0 flex-1 grid-cols-[360px_1fr]">
+
+    <!-- Left: policy information -->
+    <aside class="flex min-h-0 flex-col overflow-y-auto border-r">
+
+      <!-- Identity -->
+      <div class="border-b px-4 py-3 bg-muted/30">
+        <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Identity</p>
+      </div>
+      <div class="space-y-4 p-4">
+        <div class="grid grid-cols-2 gap-3">
+          <div class="space-y-1.5">
+            <label class="text-sm font-medium">Category</label>
+            <Input bind:value={category} placeholder="Operational" />
+          </div>
+          <div class="space-y-1.5">
+            <label class="text-sm font-medium">Severity</label>
+            <SingleSelect options={severityOptions} bind:selected={severity} />
+          </div>
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-sm font-medium">Description</label>
+          <Textarea bind:value={description} placeholder="What does this policy enforce?" rows={3} />
+        </div>
+      </div>
+
+      <!-- Finding copy -->
+      <div class="border-b border-t px-4 py-3 bg-muted/30">
+        <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Finding Copy</p>
+        <p class="mt-0.5 text-xs text-muted-foreground">Shown on every finding this policy creates.</p>
+      </div>
+      <div class="space-y-4 p-4">
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <label class="text-sm font-medium">Title template</label>
+            <TagInserter groups={tagGroups} target={titleRef} bind:value={titleTemplate} />
+          </div>
+          <Input bind:ref={titleRef} bind:value={titleTemplate} />
+        </div>
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <label class="text-sm font-medium">Summary</label>
+            <TagInserter groups={tagGroups} target={summaryRef} bind:value={summary} />
+          </div>
+          <Textarea bind:ref={summaryRef} bind:value={summary} rows={3} />
+        </div>
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <label class="text-sm font-medium">Recommendation</label>
+            <TagInserter groups={tagGroups} target={recommendationRef} bind:value={recommendation} />
+          </div>
+          <Textarea bind:ref={recommendationRef} bind:value={recommendation} rows={3} />
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-sm font-medium">Linked Wiki articles</label>
+          <MultiSelect
+            options={articleOptions}
+            bind:selected={linkedArticleIds}
+            placeholder="Attach reference articles"
+            searchPlaceholder="Search articles..."
+            maxDisplay={3}
+          />
+          <p class="text-xs text-muted-foreground">Surfaced on findings for quick tech reference.</p>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Right: rule logic -->
+    <div class="flex min-h-0 flex-col overflow-y-auto">
+
+      <!-- Data source -->
+      <div class="border-b px-4 py-3 bg-muted/30">
+        <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Data Source</p>
+      </div>
+      <div class="grid grid-cols-2 gap-4 p-4 border-b">
+        <div class="space-y-1.5">
+          <label class="text-sm font-medium">Source table</label>
+          <SingleSelect options={tableOptions} bind:selected={table} onchange={resetForTable} />
+          <p class="text-xs text-muted-foreground">Changing this resets all filters and rules.</p>
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-sm font-medium">Evaluation mode</label>
+          <SingleSelect options={modeOptions} bind:selected={mode} />
+          <p class="text-xs text-muted-foreground">
+            {#if mode === 'rowExpectation'}
+              A finding fires for each row that fails any rule.
+            {:else}
+              A finding fires when the matching row count falls below the threshold.
+            {/if}
+          </p>
+        </div>
+      </div>
+
+      <!-- Candidate filter -->
+      <div class="flex items-center justify-between border-b px-4 py-3 bg-muted/30">
+        <div>
+          <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Candidate Filter</p>
+          <p class="mt-0.5 text-xs text-muted-foreground">
+            Narrows which {selectedTable.label} rows are evaluated. Leave empty to include all.
+          </p>
+        </div>
+        <Button variant="outline" size="sm" class="shrink-0 gap-2" onclick={() => addCondition('candidates')}>
+          <Plus class="size-4" /> Add Filter
+        </Button>
+      </div>
+      <div class="space-y-2 p-4 border-b">
+        {#each candidateConditions as condition (condition.id)}
+          {@render conditionEditor('candidates', condition)}
+        {:else}
+          <div class="rounded-lg border border-dashed py-5 text-center text-sm text-muted-foreground">
+            All rows in scope are included.
+          </div>
+        {/each}
+      </div>
+
+      <!-- Rules -->
+      <div class="flex items-center justify-between border-b px-4 py-3 bg-muted/30">
+        <div>
+          <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Rules</p>
+          <p class="mt-0.5 text-xs text-muted-foreground">
+            {mode === 'tableThreshold'
+              ? 'Conditions a row must satisfy to count toward the threshold.'
+              : 'Conditions each row must satisfy. A finding fires for each row that fails.'}
+          </p>
+        </div>
+        <Button variant="outline" size="sm" class="shrink-0 gap-2" onclick={() => addCondition('expectations')}>
+          <Plus class="size-4" /> Add Rule
+        </Button>
+      </div>
+      <div class="space-y-2 p-4">
+        {#each expectationConditions as condition (condition.id)}
+          {@render conditionEditor('expectations', condition)}
+        {:else}
+          <div class="rounded-lg border border-dashed py-5 text-center text-sm text-muted-foreground">
+            {mode === 'tableThreshold' ? 'Every scoped row counts toward the threshold.' : 'Add at least one rule.'}
+          </div>
+        {/each}
+        {#if mode === 'tableThreshold'}
+          <div class="flex items-center gap-3 rounded-lg border bg-muted/20 px-4 py-3 mt-2">
+            <label class="shrink-0 text-sm font-medium">Minimum matching rows</label>
+            <Input bind:value={threshold} type="number" min="0" class="w-28" />
+            <p class="text-xs text-muted-foreground">A finding fires when the count drops below this.</p>
+          </div>
+        {/if}
+      </div>
+
+    </div>
   </div>
 </div>

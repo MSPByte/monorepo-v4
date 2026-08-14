@@ -481,6 +481,55 @@ export const policiesRouter = t.router({
       };
     }),
 
+  duplicate: authProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      requirePoliciesWrite(ctx);
+      const [original] = await ctx.db
+        .select()
+        .from(policies)
+        .where(eq(policies.id, input.id))
+        .limit(1);
+      if (!original) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const newId = randomUUID();
+      const [row] = await ctx.db
+        .insert(policies)
+        .values({
+          id: newId,
+          source: "custom",
+          name: `Copy of ${original.name}`,
+          description: original.description,
+          category: original.category,
+          providerId: original.providerId,
+          targetType: original.targetType,
+          severity: original.severity,
+          enabled: false,
+          recommendation: original.recommendation,
+          definition: original.definition,
+        })
+        .returning();
+      if (!row) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: null,
+        actorType: "user",
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email,
+        action: "create",
+        actionLabel: ActionLabels.PolicyCreate,
+        targetType: "policy",
+        targetId: row.id,
+        targetLabel: row.name,
+        result: "success",
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: { duplicatedFrom: input.id },
+      });
+
+      return row;
+    }),
+
   createAssignment: authProcedure
     .input(assignmentInputSchema)
     .mutation(async ({ ctx, input }) => {

@@ -254,6 +254,11 @@ export const M365PoliciesShape: SchemaFields = {
             trackable: false,
             ingestPath: "conditions.users.excludeRoles",
             required: false,
+            reference: {
+              table: "m365Roles",
+              valueColumn: "templateId",
+              labelColumn: "name",
+            },
           },
         },
       },

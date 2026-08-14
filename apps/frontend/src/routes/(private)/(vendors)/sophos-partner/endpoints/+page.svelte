@@ -23,6 +23,7 @@
   import Badge from '$lib/components/ui/badge/badge.svelte';
   import { formatStringProper } from '$lib/utils/format';
   import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
+  import ShieldOffIcon from '@lucide/svelte/icons/shield-off';
   import Trash2Icon from '@lucide/svelte/icons/trash-2';
   import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
 
@@ -303,6 +304,54 @@
                 fetchData,
                 starting: false,
               };
+            },
+          } satisfies RowAction<EndpointRow>,
+          {
+            label: 'Disable Tamper',
+            icon: ShieldOffIcon,
+            variant: 'destructive',
+            disabled: (rows: EndpointRow[]) =>
+              rows.length === 0 || rows.every((row) => row['tamperProtectionEnabled'] === false),
+            onclick: async (rows, fetchData, { setProgress }) => {
+              const ids = rows.map((row) => String(row['id'])).filter(Boolean);
+              if (ids.length === 0) return;
+
+              setProgress(
+                `Requesting tamper protection disablement for ${ids.length} endpoint${ids.length === 1 ? '' : 's'}...`
+              );
+              const result = await trpc.vendor.disableSophosEndpointTamperProtection.mutate({ ids });
+              setProgress('Refreshing endpoint data...');
+              await queryClient.invalidateQueries({ queryKey: ['vendor.tableData'] });
+              await fetchData();
+
+              const failures = result.results.filter((endpoint) => !endpoint.success);
+              if (failures.length > 0) {
+                console.error('Failed to disable Sophos tamper protection', {
+                  batchId: result.batchId,
+                  failures: failures.map(({ id, hostname, externalId, error }) => ({
+                    id,
+                    hostname,
+                    externalId,
+                    error: error ?? 'Unknown error',
+                  })),
+                });
+              }
+
+              if (result.failed > 0 && result.updated > 0) {
+                toast.warning(
+                  `Disabled tamper protection on ${result.updated} endpoint${result.updated === 1 ? '' : 's'}, ${result.failed} failed`
+                );
+              } else if (result.failed > 0) {
+                toast.error(
+                  `Failed to disable tamper protection on ${result.failed} endpoint${result.failed === 1 ? '' : 's'}`
+                );
+              } else if (result.updated > 0) {
+                toast.success(
+                  `Disabled tamper protection on ${result.updated} endpoint${result.updated === 1 ? '' : 's'}`
+                );
+              } else {
+                toast.info('Selected endpoints already have tamper protection disabled');
+              }
             },
           } satisfies RowAction<EndpointRow>,
           {
