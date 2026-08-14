@@ -11,6 +11,7 @@ import {
   failPolicyStage,
   startPolicyStage,
 } from "../db/policies.js";
+import { evaluateFactRules } from "../db/fact-rules.js";
 
 export function createPolicyWorker(
   redis: RedisConnection,
@@ -46,6 +47,7 @@ export function createPolicyWorker(
 
       try {
         const metrics = await evaluatePolicies(db, data);
+        await evaluateFactRules(db, data);
         await completePolicyStage(db, stageId, data.syncRunId, metrics);
 
         logger.info("Policy job completed", {

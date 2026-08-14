@@ -34,6 +34,7 @@ const ROUTES: Route[] = [
     children: [
       { label: 'Runs', href: '/automation/runs', permission: 'Packages.Read' },
       { label: 'Packages', href: '/automation/packages', permission: 'Packages.Read' },
+      { label: 'Fact Rules', href: '/automation/fact-rules', permission: 'Policies.Read' },
     ],
   },
   {

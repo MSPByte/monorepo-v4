@@ -22,6 +22,7 @@ import { wikiRouter } from './routers/wiki.js';
 import { auditRouter } from './routers/audit.js';
 import { billingRouter } from './routers/billing.js';
 import { entitySourcesRouter } from './routers/entity-sources.js';
+import { factRulesRouter } from './routers/fact-rules.js';
 
 export const appRouter = t.router({
   auth: authRouter,
@@ -46,7 +47,8 @@ export const appRouter = t.router({
   wiki: wikiRouter,
   audit: auditRouter,
   billing: billingRouter,
-  entitySources: entitySourcesRouter
+  entitySources: entitySourcesRouter,
+  factRules: factRulesRouter
 });
 
 export type AppRouter = typeof appRouter;

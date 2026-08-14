@@ -403,3 +403,5 @@ export type PolicyAssignment = typeof policyAssignments.$inferSelect;
 export type PolicySet = typeof policySets.$inferSelect;
 export type PolicyWithStats = typeof policiesWithStats.$inferSelect;
 export type PolicySetWithStats = typeof policySetsWithStats.$inferSelect;
+
+export * from './fact-rules.js';
