@@ -16,7 +16,8 @@
         "CATALOG_DATABASE_URL",
         "PUBLIC_ORIGIN",
         "MICROSOFT_AUTH_CLIENT_ID",
-        "MICROSOFT_AUTH_CLIENT_SECRET"
+        "MICROSOFT_AUTH_CLIENT_SECRET",
+        "PUBLIC_DEV_ORG"
       ]
     },
     "lint": {

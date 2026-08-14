@@ -199,7 +199,7 @@
       },
     },
     "backend/packages": {
-      "name": "packages-worker",
+      "name": "packages",
       "version": "0.0.0",
       "dependencies": {
         "@mspbyte/capabilities": "*",
@@ -1844,7 +1844,7 @@
 
     "orderedmap": ["orderedmap@2.1.1", "", {}, "sha512-TvAWxi0nDe1j/rtMcWcIj94+Ffe6n7zhow33h40SKxmsmozs6dz/e+EajymfoFcHd7sxNn8yHM8839uixMOV6g=="],
 
-    "packages-worker": ["packages-worker@workspace:backend/packages"],
+    "packages": ["packages@workspace:backend/packages"],
 
     "pako": ["pako@1.0.11", "", {}, "sha512-4hLB8Py4zZce5s4yd9XzopqwVv/yGNhV1Bl8NTmCq1763HeK2+EwVTv+leGeL13Dnh2wfbqowVPXCIO0z4taYw=="],
 
