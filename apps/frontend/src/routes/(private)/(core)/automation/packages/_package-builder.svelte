@@ -11,7 +11,8 @@
     | { kind: 'priorOutput'; stepPosition: number; path: string; lane?: 'main' | 'onSuccess' | 'onFailure' }
     | { kind: 'failureContext'; path: 'runId' | 'status' | 'siteId' | 'stepPosition' | 'capabilityId' | 'capabilityName' | 'errorClass' | 'message' }
     | { kind: 'generated'; generator: string; params: Record<string, unknown> }
-    | { kind: 'siteFact'; key: string; required: boolean };
+    | { kind: 'siteFact'; key: string; required: boolean }
+    | { kind: 'template'; template: string };
 
   export type Step = {
     capabilityId: string;
@@ -66,12 +67,15 @@
   import EntityPicker from '$lib/components/domain/entity-picker.svelte';
   import MultiSelect from '$lib/components/multi-select.svelte';
   import SingleSelect from '$lib/components/single-select.svelte';
+  import BindingVariableInserter from '$lib/components/binding-variable-inserter.svelte';
   import { fieldLabel } from '$lib/utils/label';
   import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
   import {
     ArrowLeft,
     ArrowUp,
     ArrowDown,
+    ChevronUp,
+    ChevronDown,
     Plus,
     Trash2,
     ArrowUpRight,
@@ -87,10 +91,18 @@
     Search,
     SlidersHorizontal,
     X,
+    Braces,
+    TriangleAlert,
+    CheckCircle2,
   } from '@lucide/svelte';
 
   type EntityType = 'integration_link' | 'm365_identity' | 'm365_group' | 'm365_license' | 'm365_role';
-  type Source = 'fixed' | 'runtime' | 'row' | 'wire' | 'failure' | 'generated' | 'fact';
+  type Source = 'fixed' | 'runtime' | 'row' | 'wire' | 'failure' | 'template' | 'generated' | 'fact';
+
+  type Selection =
+    | { kind: 'details' }
+    | { kind: 'step'; index: number }
+    | { kind: 'reaction'; lane: 'onSuccess' | 'onFailure'; index: number };
 
   type Props = {
     initial: PackageDraft;
@@ -197,14 +209,14 @@
       draft.allowedIntegrationLinks.length === 0
   );
 
-  // Selection defaults to the first step when the package loads; -1 = meta (details).
-  let selectedIndex = $state<number>(initial.steps.length > 0 ? 0 : -1);
+  // Selection: which panel is shown on the right — package details, a main step, or a reaction step.
+  let selected = $state<Selection>(initial.steps.length > 0 ? { kind: 'step', index: 0 } : { kind: 'details' });
   let capabilityPickerOpen = $state(false);
   let capabilityPickerTarget = $state<'main' | 'onSuccess' | 'onFailure'>('main');
-  let reactionEditor = $state<{ lane: 'onSuccess' | 'onFailure'; index: number } | null>(null);
   let capabilitySearch = $state('');
   let vendorFilters = $state<string[]>([]);
   let categoryFilters = $state<string[]>([]);
+  let activeTemplateRef = $state<HTMLTextAreaElement | null>(null);
 
   const capIndex = $derived(new Map((capabilitiesQuery.data ?? []).map((c) => [c.id, c])));
 
@@ -244,6 +256,7 @@
     if (binding.kind === 'runtime') return 'runtime';
     if (binding.kind === 'priorOutput') return 'wire';
     if (binding.kind === 'failureContext') return 'failure';
+    if (binding.kind === 'template') return 'template';
     if (binding.kind === 'generated') return 'generated';
     if (binding.kind === 'siteFact') return 'fact';
     // entity kind:
@@ -253,10 +266,23 @@
   function allowedSourcesFor(meta: {
     allowedBindings: readonly string[];
     typeHint?: string;
+    entityType?: string;
+    sensitive?: boolean;
   }, allowFailureContext = false): Source[] {
     const set = new Set(meta.allowedBindings);
     const out: Source[] = [];
     if (set.has('literal')) out.push('fixed');
+    // Template: compose a string with {{variable}} placeholders. Only for plain
+    // string inputs — not booleans, arrays, entity pickers, or sensitive fields.
+    if (
+      set.has('literal') &&
+      !meta.entityType &&
+      !meta.sensitive &&
+      meta.typeHint !== 'boolean' &&
+      meta.typeHint !== 'stringArray'
+    ) {
+      out.push('template');
+    }
     if (set.has('runtime') || set.has('entity')) out.push('runtime');
     // Row-trigger execution is not implemented by the worker yet. Do not
     // advertise a source authors cannot successfully run.
@@ -316,6 +342,7 @@
       return { kind: 'siteFact', key: '', required: true };
     }
     if (source === 'failure') return { kind: 'failureContext', path: 'message' };
+    if (source === 'template') return { kind: 'template', template: '' };
     return { kind: 'priorOutput', stepPosition: 0, path: '' };
   }
 
@@ -429,12 +456,15 @@
     if (capabilityPickerTarget === 'main') {
       const nextIndex = draft.steps.length;
       draft.steps = [...draft.steps, step];
-      selectedIndex = nextIndex;
+      selected = { kind: 'step', index: nextIndex };
     } else {
+      const lane = capabilityPickerTarget;
+      const nextIndex = draft.outcomeSteps[lane].length;
       draft.outcomeSteps = {
         ...draft.outcomeSteps,
-        [capabilityPickerTarget]: [...draft.outcomeSteps[capabilityPickerTarget], step],
+        [lane]: [...draft.outcomeSteps[lane], step],
       };
+      selected = { kind: 'reaction', lane, index: nextIndex };
     }
     capabilityPickerOpen = false;
     capabilitySearch = '';
@@ -451,18 +481,32 @@
       [lane]: draft.outcomeSteps[lane].filter((_, position) => position !== index),
     };
     pruneUnusedPrompts();
+    if (selected.kind === 'reaction' && selected.lane === lane && selected.index === index) {
+      selected = { kind: 'details' };
+    }
   }
 
-  function reactionStep(editor = reactionEditor): Step | null {
-    if (!editor) return null;
-    return draft.outcomeSteps[editor.lane][editor.index] ?? null;
+  function moveReactionStep(lane: 'onSuccess' | 'onFailure', index: number, direction: -1 | 1) {
+    const target = index + direction;
+    const steps = draft.outcomeSteps[lane];
+    if (target < 0 || target >= steps.length) return;
+    const next = [...steps];
+    [next[index], next[target]] = [next[target]!, next[index]!];
+    draft.outcomeSteps = { ...draft.outcomeSteps, [lane]: next };
+    if (selected.kind === 'reaction' && selected.lane === lane) {
+      if (selected.index === index) selected = { kind: 'reaction', lane, index: target };
+      else if (selected.index === target) selected = { kind: 'reaction', lane, index: index };
+    }
+  }
+
+  function reactionStep(): Step | null {
+    if (selected.kind !== 'reaction') return null;
+    return draft.outcomeSteps[selected.lane][selected.index] ?? null;
   }
 
   function setReactionBinding(inputName: string, binding: Binding) {
-    if (!reactionEditor) return;
-    const { lane, index } = reactionEditor;
-    const reaction = draft.outcomeSteps[lane][index];
-    if (!reaction) return;
+    if (selected.kind !== 'reaction') return;
+    const { lane, index } = selected;
     draft.outcomeSteps = {
       ...draft.outcomeSteps,
       [lane]: draft.outcomeSteps[lane].map((step, position) =>
@@ -472,6 +516,7 @@
   }
 
   function changeReactionSource(inputName: string, source: Source) {
+    if (selected.kind !== 'reaction') return;
     const reaction = reactionStep();
     if (!reaction) return;
     const cap = capIndex.get(reaction.capabilityId);
@@ -481,13 +526,14 @@
       defaultBindingFor(source, inputName, meta),
       inputName,
       meta,
-      reactionEditor?.lane ?? 'onSuccess',
+      selected.lane,
     );
     setReactionBinding(inputName, binding);
     pruneUnusedPrompts();
   }
 
   function addOptionalReactionInput(inputName: string) {
+    if (selected.kind !== 'reaction') return;
     const reaction = reactionStep();
     if (!reaction) return;
     const cap = capIndex.get(reaction.capabilityId);
@@ -497,14 +543,14 @@
       defaultForInput(inputName, meta),
       inputName,
       meta,
-      reactionEditor?.lane ?? 'onSuccess',
+      selected.lane,
     );
     setReactionBinding(inputName, binding);
   }
 
   function removeOptionalReactionInput(inputName: string) {
-    if (!reactionEditor) return;
-    const { lane, index } = reactionEditor;
+    if (selected.kind !== 'reaction') return;
+    const { lane, index } = selected;
     const reaction = draft.outcomeSteps[lane][index];
     if (!reaction) return;
     const nextBindings = { ...reaction.inputBindings };
@@ -520,9 +566,10 @@
 
   type ReactionWireBinding = Extract<Binding, { kind: 'priorOutput' }>;
 
-  function reactionWireSteps() {
-    if (!reactionEditor) return [] as Array<{ value: string; label: string; lane: 'main' | 'onSuccess' | 'onFailure'; position: number; step: Step }>;
-    const ownLane = reactionEditor.lane;
+  function reactionWireSteps(): Array<{ value: string; label: string; lane: 'main' | 'onSuccess' | 'onFailure'; position: number; step: Step }> {
+    if (selected.kind !== 'reaction') return [];
+    const ownLane = selected.lane;
+    // On-failure reactions cannot wire from main steps (main steps failed).
     const main = ownLane === 'onFailure' ? [] : draft.steps.map((step, position) => ({
       value: `main:${position}`,
       label: `Main · Step ${String(position + 1).padStart(2, '0')}: ${step.label ?? capIndex.get(step.capabilityId)?.name ?? step.capabilityId}`,
@@ -531,7 +578,7 @@
       step,
     }));
     const earlierReactions = draft.outcomeSteps[ownLane]
-      .slice(0, reactionEditor.index)
+      .slice(0, selected.index)
       .map((step, position) => ({
         value: `${ownLane}:${position}`,
         label: `${ownLane === 'onSuccess' ? 'On success' : 'On failure'} · Step ${String(position + 1).padStart(2, '0')}: ${step.label ?? capIndex.get(step.capabilityId)?.name ?? step.capabilityId}`,
@@ -616,7 +663,10 @@
       }
     }
     draft.steps = filtered;
-    if (selectedIndex >= filtered.length) selectedIndex = filtered.length - 1;
+    if (selected.kind === 'step') {
+      if (filtered.length === 0) selected = { kind: 'details' };
+      else if (selected.index >= filtered.length) selected = { kind: 'step', index: filtered.length - 1 };
+    }
     pruneUnusedPrompts();
   }
 
@@ -626,8 +676,10 @@
     const next = [...draft.steps];
     [next[index], next[target]] = [next[target]!, next[index]!];
     draft.steps = next;
-    if (selectedIndex === index) selectedIndex = target;
-    else if (selectedIndex === target) selectedIndex = index;
+    if (selected.kind === 'step') {
+      if (selected.index === index) selected = { kind: 'step', index: target };
+      else if (selected.index === target) selected = { kind: 'step', index: index };
+    }
   }
 
   function changeSource(stepIndex: number, inputName: string, source: Source) {
@@ -683,7 +735,7 @@
         else s.prompts += 1;
       } else if (binding.kind === 'generated') s.generated += 1;
       else if (binding.kind === 'siteFact') s.facts += 1;
-      else s.literals += 1;
+      else s.literals += 1; // covers 'literal' and 'template'
     }
     return s;
   }
@@ -714,6 +766,7 @@
     if (source === 'generated') return 'Generate';
     if (source === 'fact') return 'From site fact';
     if (source === 'failure') return 'From failure';
+    if (source === 'template') return 'Template';
     return 'Wire from step';
   }
 
@@ -731,7 +784,8 @@
     if (source === 'generated') return 'Produced by a generator at run time.';
     if (source === 'fact')
       return "Reads a value from the run's site profile facts — needs a site selected at run time.";
-    if (source === 'failure') return 'Reads the dependable error context created when the main package fails.';
+    if (source === 'failure') return 'Reads a single value from the failure context — for free-form text mixing multiple values, use Template instead.';
+    if (source === 'template') return 'Write free-form text with {{variable}} placeholders — mix failure details, step outputs, and site facts into one string.';
     return 'Reads a specific output from an earlier step in this package.';
   }
 
@@ -742,6 +796,7 @@
     if (source === 'generated') return 'text-emerald-600 dark:text-emerald-400';
     if (source === 'fact') return 'text-fuchsia-600 dark:text-fuchsia-400';
     if (source === 'failure') return 'text-rose-600 dark:text-rose-400';
+    if (source === 'template') return 'text-blue-600 dark:text-blue-400';
     return 'text-cyan-600 dark:text-cyan-400';
   }
 
@@ -752,6 +807,7 @@
     if (source === 'generated') return 'border-l-emerald-500/70';
     if (source === 'fact') return 'border-l-fuchsia-500/70';
     if (source === 'failure') return 'border-l-rose-500/70';
+    if (source === 'template') return 'border-l-blue-500/70';
     return 'border-l-cyan-500/70';
   }
 
@@ -798,13 +854,24 @@
           if (!binding.generator.trim()) return false;
         }
         if (binding.kind === 'siteFact' && !binding.key.trim()) return false;
+        if (binding.kind === 'template' && !binding.template.trim()) return false;
       }
     }
     return true;
   }
 
-  const selectedStep = $derived(selectedIndex >= 0 ? (draft.steps[selectedIndex] ?? null) : null);
-  const selectedCap = $derived(selectedStep ? capIndex.get(selectedStep.capabilityId) : undefined);
+  const selectedStep = $derived(selected.kind === 'step' ? (draft.steps[selected.index] ?? null) : null);
+  const selectedReaction = $derived(selected.kind === 'reaction' ? (draft.outcomeSteps[selected.lane][selected.index] ?? null) : null);
+  const selectedCap = $derived(
+    selectedStep ? capIndex.get(selectedStep.capabilityId) :
+    selectedReaction ? capIndex.get(selectedReaction.capabilityId) : undefined
+  );
+  // Stable string key for per-input UI state (prompt key editor visibility, textarea refs).
+  const selectedKey = $derived(
+    selected.kind === 'step' ? `step-${selected.index}` :
+    selected.kind === 'reaction' ? `reaction-${selected.lane}-${selected.index}` :
+    'details'
+  );
   const publishedPrompts = $derived(
     draft.prompts
       .filter((prompt) => activePromptIds().has(prompt.id))
@@ -926,11 +993,8 @@
       <div class="min-h-0 flex-1 overflow-y-auto">
         <button
           type="button"
-          onclick={() => (selectedIndex = -1)}
-          class="flex w-full items-center gap-2 border-b px-4 py-3 text-left text-sm transition-colors hover:bg-muted/50 {selectedIndex ===
-          -1
-            ? 'bg-muted/60'
-            : ''}"
+          onclick={() => (selected = { kind: 'details' })}
+          class="flex w-full items-center gap-2 border-b px-4 py-3 text-left text-sm transition-colors hover:bg-muted/50 {selected.kind === 'details' ? 'bg-muted/60' : ''}"
         >
           <Info class="size-3.5 text-muted-foreground" />
           <span class="text-muted-foreground">Package details</span>
@@ -945,7 +1009,7 @@
             {#each draft.steps as step, i (i)}
               {@const cap = capIndex.get(step.capabilityId)}
               {@const summary = summarize(step)}
-              {@const isSelected = selectedIndex === i}
+              {@const isSelected = selected.kind === 'step' && selected.index === i}
               {@const isLast = i === draft.steps.length - 1}
               <li class="relative">
                 {#if !isLast}
@@ -956,7 +1020,7 @@
                 {/if}
                 <button
                   type="button"
-                  onclick={() => (selectedIndex = i)}
+                  onclick={() => (selected = { kind: 'step', index: i })}
                   class="group relative mb-1.5 flex w-full items-start gap-3 rounded-md border p-3 text-left transition-all {isSelected
                     ? 'border-primary/50 bg-background shadow-sm ring-1 ring-primary/20'
                     : 'border-transparent hover:border-border hover:bg-background/70'}"
@@ -1066,6 +1130,136 @@
             </span>
           </Button>
         </div>
+
+        <!-- On Failure lane -->
+        <div class="border-t">
+          <div class="flex items-center justify-between px-4 py-2">
+            <div class="flex items-center gap-1.5">
+              <TriangleAlert class="size-3 text-rose-500" />
+              <span class="text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-600 dark:text-rose-500">On Failure</span>
+            </div>
+            <button
+              type="button"
+              class="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              onclick={() => openCapabilityPicker('onFailure')}
+              title="Add failure reaction"
+            >
+              <Plus class="size-3" /> Add
+            </button>
+          </div>
+          {#if draft.outcomeSteps.onFailure.length === 0}
+            <p class="px-4 pb-3 text-[11px] text-muted-foreground">Runs after a halted or partial package. Add a reaction above.</p>
+          {:else}
+            <ol class="space-y-1 px-3 pb-3">
+              {#each draft.outcomeSteps.onFailure as reaction, i (i)}
+                {@const reactionCap = capIndex.get(reaction.capabilityId)}
+                {@const reactionSummary = summarize(reaction)}
+                {@const isSelected = selected.kind === 'reaction' && selected.lane === 'onFailure' && selected.index === i}
+                <li>
+                  <div
+                    role="button"
+                    tabindex="0"
+                    onclick={() => (selected = { kind: 'reaction', lane: 'onFailure', index: i })}
+                    onkeydown={(e) => e.key === 'Enter' && (selected = { kind: 'reaction', lane: 'onFailure', index: i })}
+                    class="group relative flex w-full cursor-pointer items-start gap-3 rounded-md border p-2.5 text-left transition-all {isSelected
+                      ? 'border-rose-500/50 bg-rose-500/5 shadow-sm ring-1 ring-rose-500/20'
+                      : 'border-transparent hover:border-border hover:bg-background/70'}"
+                  >
+                    <span class="flex size-7 shrink-0 items-center justify-center rounded-full border-2 font-mono text-[10px] font-semibold {isSelected ? 'border-rose-500 text-rose-600 dark:text-rose-400' : 'border-muted-foreground/30 text-muted-foreground'}">
+                      F{i + 1}
+                    </span>
+                    <div class="min-w-0 flex-1 space-y-1">
+                      <div class="truncate text-xs font-medium">{reactionCap?.name ?? reaction.capabilityId}</div>
+                      <div class="flex flex-wrap items-center gap-1 text-[10px]">
+                        {#if reactionSummary.wires.length > 0}
+                          <span class="inline-flex items-center gap-0.5 rounded-sm bg-cyan-500/10 px-1 py-0.5 font-mono text-cyan-700 dark:text-cyan-400"><Link2 class="size-2" />{reactionSummary.wires.length}</span>
+                        {/if}
+                        {#if reactionSummary.prompts > 0}
+                          <span class="inline-flex items-center gap-0.5 rounded-sm bg-amber-500/10 px-1 py-0.5 font-mono text-amber-700 dark:text-amber-500"><Keyboard class="size-2" />{reactionSummary.prompts}</span>
+                        {/if}
+                        {#if reactionSummary.facts > 0}
+                          <span class="inline-flex items-center gap-0.5 rounded-sm bg-fuchsia-500/10 px-1 py-0.5 font-mono text-fuchsia-700 dark:text-fuchsia-400"><Database class="size-2" />{reactionSummary.facts}</span>
+                        {/if}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      class="shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-rose-500 group-hover:opacity-100"
+                      onclick={(e) => { e.stopPropagation(); removeOutcomeStep('onFailure', i); }}
+                      aria-label="Remove reaction"
+                    >
+                      <Trash2 class="size-3" />
+                    </button>
+                  </div>
+                </li>
+              {/each}
+            </ol>
+          {/if}
+        </div>
+
+        <!-- On Success lane (secondary) -->
+        <div class="border-t">
+          <div class="flex items-center justify-between px-4 py-2">
+            <div class="flex items-center gap-1.5">
+              <CheckCircle2 class="size-3 text-muted-foreground" />
+              <span class="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">On Success</span>
+            </div>
+            <button
+              type="button"
+              class="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              onclick={() => openCapabilityPicker('onSuccess')}
+              title="Add success reaction"
+            >
+              <Plus class="size-3" /> Add
+            </button>
+          </div>
+          {#if draft.outcomeSteps.onSuccess.length > 0}
+            <ol class="space-y-1 px-3 pb-3">
+              {#each draft.outcomeSteps.onSuccess as reaction, i (i)}
+                {@const reactionCap = capIndex.get(reaction.capabilityId)}
+                {@const reactionSummary = summarize(reaction)}
+                {@const isSelected = selected.kind === 'reaction' && selected.lane === 'onSuccess' && selected.index === i}
+                <li>
+                  <div
+                    role="button"
+                    tabindex="0"
+                    onclick={() => (selected = { kind: 'reaction', lane: 'onSuccess', index: i })}
+                    onkeydown={(e) => e.key === 'Enter' && (selected = { kind: 'reaction', lane: 'onSuccess', index: i })}
+                    class="group relative flex w-full cursor-pointer items-start gap-3 rounded-md border p-2.5 text-left transition-all {isSelected
+                      ? 'border-emerald-500/50 bg-emerald-500/5 shadow-sm ring-1 ring-emerald-500/20'
+                      : 'border-transparent hover:border-border hover:bg-background/70'}"
+                  >
+                    <span class="flex size-7 shrink-0 items-center justify-center rounded-full border-2 font-mono text-[10px] font-semibold {isSelected ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'border-muted-foreground/30 text-muted-foreground'}">
+                      S{i + 1}
+                    </span>
+                    <div class="min-w-0 flex-1 space-y-1">
+                      <div class="truncate text-xs font-medium">{reactionCap?.name ?? reaction.capabilityId}</div>
+                      <div class="flex flex-wrap items-center gap-1 text-[10px]">
+                        {#if reactionSummary.wires.length > 0}
+                          <span class="inline-flex items-center gap-0.5 rounded-sm bg-cyan-500/10 px-1 py-0.5 font-mono text-cyan-700 dark:text-cyan-400"><Link2 class="size-2" />{reactionSummary.wires.length}</span>
+                        {/if}
+                        {#if reactionSummary.prompts > 0}
+                          <span class="inline-flex items-center gap-0.5 rounded-sm bg-amber-500/10 px-1 py-0.5 font-mono text-amber-700 dark:text-amber-500"><Keyboard class="size-2" />{reactionSummary.prompts}</span>
+                        {/if}
+                        {#if reactionSummary.facts > 0}
+                          <span class="inline-flex items-center gap-0.5 rounded-sm bg-fuchsia-500/10 px-1 py-0.5 font-mono text-fuchsia-700 dark:text-fuchsia-400"><Database class="size-2" />{reactionSummary.facts}</span>
+                        {/if}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      class="shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-rose-500 group-hover:opacity-100"
+                      onclick={(e) => { e.stopPropagation(); removeOutcomeStep('onSuccess', i); }}
+                      aria-label="Remove reaction"
+                    >
+                      <Trash2 class="size-3" />
+                    </button>
+                  </div>
+                </li>
+              {/each}
+            </ol>
+          {/if}
+        </div>
       </div>
 
       <!-- Legend anchor -->
@@ -1076,6 +1270,9 @@
           </span>
           <span class="inline-flex items-center gap-1">
             <Link2 class="size-2.5 text-cyan-600 dark:text-cyan-400" /> wired
+          </span>
+          <span class="inline-flex items-center gap-1">
+            <Braces class="size-2.5 text-blue-600 dark:text-blue-400" /> template
           </span>
           <span class="inline-flex items-center gap-1">
             <Pin class="size-2.5 text-violet-600 dark:text-violet-400" /> row
@@ -1095,7 +1292,7 @@
 
     <!-- Inspector -->
     <section class="flex min-h-0 flex-col overflow-y-auto">
-      {#if selectedIndex === -1}
+      {#if selected.kind === 'details'}
         <!-- Package meta panel -->
         <div class="mx-auto w-full max-w-2xl space-y-6 p-6">
           <div>
@@ -1270,59 +1467,15 @@
             </div>
           {/if}
 
-          <div class="space-y-3 rounded-lg border p-4">
-            <div>
-              <h3 class="text-sm font-medium">After the package finishes</h3>
-              <p class="mt-0.5 text-xs text-muted-foreground">
-                Add one-way reactions for completion or failure. These run after the main path and cannot branch back into it.
-              </p>
-            </div>
-            <div class="grid gap-3 lg:grid-cols-2">
-              {#each [
-                { id: 'onSuccess' as const, title: 'On success', description: 'Run only when every main step completes.', tone: 'border-emerald-500/30 bg-emerald-500/5' },
-                { id: 'onFailure' as const, title: 'On failure', description: 'Run after a halted or partial package.', tone: 'border-rose-500/30 bg-rose-500/5' },
-              ] as lane}
-                <section class="rounded-md border p-3 {lane.tone}">
-                  <div class="flex items-start justify-between gap-3">
-                    <div>
-                      <h4 class="text-sm font-medium">{lane.title}</h4>
-                      <p class="mt-0.5 text-xs text-muted-foreground">{lane.description}</p>
-                    </div>
-                    <Button variant="outline" size="sm" class="h-7 gap-1 px-2 text-xs" onclick={() => openCapabilityPicker(lane.id)}>
-                      <Plus class="size-3" /> Add reaction
-                    </Button>
-                  </div>
-                  {#if draft.outcomeSteps[lane.id].length === 0}
-                    <p class="mt-3 border-t border-current/10 pt-3 text-xs text-muted-foreground">No reaction configured.</p>
-                  {:else}
-                    <ol class="mt-3 space-y-1.5 border-t border-current/10 pt-3">
-                      {#each draft.outcomeSteps[lane.id] as reaction, reactionIndex (reactionIndex)}
-                        {@const reactionCap = capIndex.get(reaction.capabilityId)}
-                        <li class="flex items-center gap-2 rounded border bg-background/80 px-2.5 py-2 text-xs">
-                          <span class="font-mono text-muted-foreground">{String(reactionIndex + 1).padStart(2, '0')}</span>
-                          <button
-                            type="button"
-                            class="min-w-0 flex-1 truncate text-left font-medium transition-colors hover:text-primary"
-                            onclick={() => (reactionEditor = { lane: lane.id, index: reactionIndex })}
-                          >
-                            {reactionCap?.name ?? reaction.capabilityId}
-                          </button>
-                          <button
-                            type="button"
-                            class="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                            onclick={() => (reactionEditor = { lane: lane.id, index: reactionIndex })}
-                          >
-                            Configure
-                          </button>
-                          <button type="button" class="text-muted-foreground hover:text-rose-500" onclick={() => removeOutcomeStep(lane.id, reactionIndex)} aria-label={`Remove ${reactionCap?.name ?? reaction.capabilityId}`}>
-                            <Trash2 class="size-3.5" />
-                          </button>
-                        </li>
-                      {/each}
-                    </ol>
-                  {/if}
-                </section>
-              {/each}
+          <div class="rounded-lg border bg-muted/10 p-4">
+            <div class="flex items-start gap-3">
+              <Info class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+              <div class="space-y-1">
+                <p class="text-sm font-medium">Reactions live in the sidebar</p>
+                <p class="text-xs text-muted-foreground">
+                  Use the <strong>On Failure</strong> and <strong>On Success</strong> sections in the left panel to add capabilities that run after the main package finishes. Click any reaction to configure it here.
+                </p>
+              </div>
             </div>
           </div>
 
@@ -1338,9 +1491,10 @@
             </div>
           {/if}
         </div>
-      {:else if selectedStep && selectedCap}
+      {:else if selectedStep && selectedCap && selected.kind === 'step'}
         {@const cap = selectedCap}
         {@const step = selectedStep}
+        {@const stepIndex = selected.index}
         {@const boundInputNames = Object.keys(step.inputBindings).sort((a, b) => {
           const aGroup = inputGroupFor(cap, a);
           const bGroup = inputGroupFor(cap, b);
@@ -1352,14 +1506,14 @@
             value: name,
             label: fieldLabel(name, (meta as { label?: string }).label),
           }))}
-        {@const readers = downstreamReaders(selectedIndex)}
+        {@const readers = downstreamReaders(stepIndex)}
         <!-- Step header -->
         <div class="border-b bg-muted/20 px-6 py-4">
           <div class="flex items-start gap-4">
             <div
               class="flex size-11 shrink-0 items-center justify-center rounded-lg border bg-background font-mono text-sm font-semibold tabular-nums text-muted-foreground"
             >
-              {String(selectedIndex + 1).padStart(2, '0')}
+              {String(stepIndex + 1).padStart(2, '0')}
             </div>
             <div class="min-w-0 flex-1 space-y-1">
               <div class="flex flex-wrap items-center gap-2">
@@ -1382,8 +1536,8 @@
                 variant="ghost"
                 size="sm"
                 class="size-8 p-0"
-                onclick={() => moveStep(selectedIndex, -1)}
-                disabled={selectedIndex === 0}
+                onclick={() => moveStep(stepIndex, -1)}
+                disabled={stepIndex === 0}
                 aria-label="Move step up"
               >
                 <ArrowUp class="size-4" />
@@ -1392,8 +1546,8 @@
                 variant="ghost"
                 size="sm"
                 class="size-8 p-0"
-                onclick={() => moveStep(selectedIndex, 1)}
-                disabled={selectedIndex === draft.steps.length - 1}
+                onclick={() => moveStep(stepIndex, 1)}
+                disabled={stepIndex === draft.steps.length - 1}
                 aria-label="Move step down"
               >
                 <ArrowDown class="size-4" />
@@ -1402,7 +1556,7 @@
                 variant="ghost"
                 size="sm"
                 class="size-8 p-0 text-muted-foreground hover:text-rose-500"
-                onclick={() => removeStep(selectedIndex)}
+                onclick={() => removeStep(stepIndex)}
                 aria-label="Remove step"
               >
                 <Trash2 class="size-4" />
@@ -1490,7 +1644,7 @@
                         type="button"
                         class="text-muted-foreground transition-colors hover:text-rose-500"
                         aria-label={`Remove ${label}`}
-                        onclick={() => removeOptionalInput(selectedIndex, inputName)}
+                        onclick={() => removeOptionalInput(stepIndex, inputName)}
                       >
                         <Trash2 class="size-3.5" />
                       </button>
@@ -1505,7 +1659,7 @@
                       {@const isActive = currentSource === src}
                       <button
                         type="button"
-                        onclick={() => changeSource(selectedIndex, inputName, src)}
+                        onclick={() => changeSource(stepIndex, inputName, src)}
                         class="group relative flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-all {isActive
                           ? 'bg-background text-foreground shadow-sm ring-1 ring-border'
                           : 'text-muted-foreground hover:bg-background/60 hover:text-foreground'}"
@@ -1535,72 +1689,65 @@
                       {sourceHint(currentSource, meta)}
                     </p>
 
-                    {#if binding?.kind === 'literal'}
+                    {#if binding?.kind === 'template'}
+                      <div class="flex items-center justify-between">
+                        <span class="text-[11px] text-muted-foreground font-mono">Use <code>{'{{variable}}'}</code> to insert values.</span>
+                        <BindingVariableInserter
+                          lane="main"
+                          mainSteps={draft.steps.slice(0, stepIndex)}
+                          prompts={draft.prompts}
+                          siteFactFields={siteFactFieldsQuery.data ?? []}
+                          {capIndex}
+                          target={activeTemplateRef}
+                          value={binding.template}
+                          oninsert={(v) => setBinding(stepIndex, inputName, { kind: 'template', template: v })}
+                        />
+                      </div>
+                      <Textarea
+                        placeholder="e.g. step 1 hostname, failure message…"
+                        value={binding.template}
+                        rows={4}
+                        onfocus={(e) => (activeTemplateRef = e.currentTarget as HTMLTextAreaElement)}
+                        oninput={(e) => setBinding(stepIndex, inputName, { kind: 'template', template: (e.target as HTMLTextAreaElement).value })}
+                      />
+                    {:else if binding?.kind === 'literal'}
                       {#if meta.entityType}
                         <EntityPicker
                           entityType={meta.entityType as EntityType}
                           multiple={meta.typeHint === 'stringArray'}
                           value={binding.value as string | string[] | null}
-                          onValueChange={(v) =>
-                            setBinding(selectedIndex, inputName, {
-                              kind: 'literal',
-                              value: v,
-                            })}
+                          onValueChange={(v) => setBinding(stepIndex, inputName, { kind: 'literal', value: v })}
                         />
                       {:else if meta.typeHint === 'boolean'}
                         <label class="flex items-center gap-2 text-sm">
                           <Checkbox
                             checked={Boolean(binding.value)}
-                            onCheckedChange={(c) =>
-                              setBinding(selectedIndex, inputName, {
-                                kind: 'literal',
-                                value: Boolean(c),
-                              })}
+                            onCheckedChange={(c) => setBinding(stepIndex, inputName, { kind: 'literal', value: Boolean(c) })}
                           />
-                          <span class="text-muted-foreground">
-                            {binding.value ? 'true' : 'false'}
-                          </span>
+                          <span class="text-muted-foreground">{binding.value ? 'true' : 'false'}</span>
                         </label>
                       {:else if meta.typeHint === 'stringArray'}
                         <Input
                           placeholder="value1, value2"
-                          value={Array.isArray(binding.value)
-                            ? (binding.value as string[]).join(', ')
-                            : ''}
+                          value={Array.isArray(binding.value) ? (binding.value as string[]).join(', ') : ''}
                           oninput={(e) => {
-                            const raw = (e.target as HTMLInputElement).value;
-                            const arr = raw
-                              .split(',')
-                              .map((v) => v.trim())
-                              .filter(Boolean);
-                            setBinding(selectedIndex, inputName, {
-                              kind: 'literal',
-                              value: arr,
-                            });
+                            const arr = (e.target as HTMLInputElement).value.split(',').map((v) => v.trim()).filter(Boolean);
+                            setBinding(stepIndex, inputName, { kind: 'literal', value: arr });
                           }}
                         />
                       {:else}
                         <Input
                           type={meta.sensitive ? 'password' : 'text'}
                           value={typeof binding.value === 'string' ? binding.value : ''}
-                          oninput={(e) =>
-                            setBinding(selectedIndex, inputName, {
-                              kind: 'literal',
-                              value: (e.target as HTMLInputElement).value,
-                            })}
+                          oninput={(e) => setBinding(stepIndex, inputName, { kind: 'literal', value: (e.target as HTMLInputElement).value })}
                         />
                       {/if}
                     {:else if binding?.kind === 'runtime'}
-                      <div
-                        class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
-                      >
+                      <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                         {#if meta.entityType}
-                          A picker for
-                          <span class="font-mono">{meta.entityType.replace('_', ' ')}</span>
-                          will appear when this runs.
+                          A picker for <span class="font-mono">{meta.entityType.replace('_', ' ')}</span> will appear when this runs.
                         {:else if meta.typeHint === 'password'}
-                          A password field will appear. Operators can generate a strong random
-                          password or set a specific one.
+                          A password field will appear. Operators can generate a strong random password or set a specific one.
                         {:else}
                           A text input will appear when this runs.
                         {/if}
@@ -1608,247 +1755,104 @@
                       <button
                         type="button"
                         class="text-xs text-muted-foreground hover:text-foreground"
-                        onclick={() =>
-                          (showPromptKeyEditor[`${selectedIndex}:${inputName}`] =
-                            !showPromptKeyEditor[`${selectedIndex}:${inputName}`])}
+                        onclick={() => (showPromptKeyEditor[`${selectedKey}:${inputName}`] = !showPromptKeyEditor[`${selectedKey}:${inputName}`])}
                       >
-                        {showPromptKeyEditor[`${selectedIndex}:${inputName}`] ? 'Hide' : 'Show'} prompt
-                        key
-                        <span class="ml-1 font-mono opacity-60">
-                          ({binding.promptKey})
-                        </span>
+                        {showPromptKeyEditor[`${selectedKey}:${inputName}`] ? 'Hide' : 'Show'} prompt key
+                        <span class="ml-1 font-mono opacity-60">({binding.promptKey})</span>
                       </button>
-                      {#if showPromptKeyEditor[`${selectedIndex}:${inputName}`]}
+                      {#if showPromptKeyEditor[`${selectedKey}:${inputName}`]}
                         <div class="grid gap-2 pt-1 sm:grid-cols-[1fr_auto]">
                           <Input
                             placeholder="Prompt key"
                             value={binding.promptKey}
-                            oninput={(e) =>
-                              setBinding(selectedIndex, inputName, {
-                                ...binding,
-                                promptKey: (e.target as HTMLInputElement).value,
-                              })}
+                            oninput={(e) => setBinding(stepIndex, inputName, { ...binding, promptKey: (e.target as HTMLInputElement).value })}
                           />
-                          <label
-                            class="flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground"
-                          >
+                          <label class="flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
                             <Checkbox
                               checked={binding.required}
-                              onCheckedChange={(c) =>
-                                setBinding(selectedIndex, inputName, {
-                                  ...binding,
-                                  required: Boolean(c),
-                                })}
+                              onCheckedChange={(c) => setBinding(stepIndex, inputName, { ...binding, required: Boolean(c) })}
                             />
                             Required at run time
                           </label>
                         </div>
-                        <p class="text-[11px] text-muted-foreground">
-                          Steps that share a prompt key answer the same question once.
-                        </p>
+                        <p class="text-[11px] text-muted-foreground">Steps that share a prompt key answer the same question once.</p>
                       {/if}
                     {:else if binding?.kind === 'entity' && binding.source === 'picker'}
-                      <!-- Legacy shape: entity+picker. Renders same UX as runtime. -->
-                      <div
-                        class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
-                      >
-                        A picker will appear when this runs.
-                      </div>
+                      <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">A picker will appear when this runs.</div>
                     {:else if binding?.kind === 'entity' && binding.source === 'row-context'}
                       <div class="grid gap-2 sm:grid-cols-[auto_1fr] sm:items-center">
                         <span class="text-xs text-muted-foreground">Context key</span>
                         <Input
                           placeholder="e.g. identityId"
                           value={binding.contextKey ?? ''}
-                          oninput={(e) =>
-                            setBinding(selectedIndex, inputName, {
-                              ...binding,
-                              contextKey: (e.target as HTMLInputElement).value,
-                            })}
+                          oninput={(e) => setBinding(stepIndex, inputName, { ...binding, contextKey: (e.target as HTMLInputElement).value })}
                         />
                       </div>
-                      <p class="text-[11px] text-muted-foreground">
-                        Leave empty to use the input name — usually what you want.
-                      </p>
+                      <p class="text-[11px] text-muted-foreground">Leave empty to use the input name — usually what you want.</p>
                     {:else if binding?.kind === 'generated'}
-                      {@const gen = (generatorsQuery.data ?? []).find(
-                        (g) => g.id === binding.generator
-                      )}
+                      {@const gen = (generatorsQuery.data ?? []).find((g) => g.id === binding.generator)}
                       {#if !gen}
-                        <div
-                          class="rounded-md border border-dashed border-rose-500/40 bg-rose-500/5 px-3 py-2 text-xs text-rose-700 dark:text-rose-500"
-                        >
+                        <div class="rounded-md border border-dashed border-rose-500/40 bg-rose-500/5 px-3 py-2 text-xs text-rose-700 dark:text-rose-500">
                           Generator "{binding.generator}" not found. Pick another source.
                         </div>
                       {:else if binding.generator === 'password'}
-                        {@const pwParams = binding.params as {
-                          length?: number;
-                          symbols?: boolean;
-                          excludeAmbiguous?: boolean;
-                        }}
+                        {@const pwParams = binding.params as { length?: number; symbols?: boolean; excludeAmbiguous?: boolean }}
                         <div class="space-y-3">
                           <div class="grid gap-2 sm:grid-cols-[auto_1fr_auto] sm:items-center">
                             <span class="text-xs text-muted-foreground">Length</span>
                             <Input
-                              type="number"
-                              min={8}
-                              max={128}
-                              value={pwParams.length ?? 20}
-                              oninput={(e) => {
-                                const n = Number((e.target as HTMLInputElement).value);
-                                setBinding(selectedIndex, inputName, {
-                                  ...binding,
-                                  params: {
-                                    ...binding.params,
-                                    length: Number.isFinite(n) ? n : 20,
-                                  },
-                                });
-                              }}
+                              type="number" min={8} max={128} value={pwParams.length ?? 20}
+                              oninput={(e) => { const n = Number((e.target as HTMLInputElement).value); setBinding(stepIndex, inputName, { ...binding, params: { ...binding.params, length: Number.isFinite(n) ? n : 20 } }); }}
                               class="max-w-32"
                             />
                             <span class="font-mono text-[11px] text-muted-foreground"> chars </span>
                           </div>
                           <label class="flex items-center gap-2 text-xs">
-                            <Checkbox
-                              checked={pwParams.symbols ?? true}
-                              onCheckedChange={(c) =>
-                                setBinding(selectedIndex, inputName, {
-                                  ...binding,
-                                  params: { ...binding.params, symbols: Boolean(c) },
-                                })}
-                            />
-                            <span class="text-muted-foreground">
-                              Include symbols
-                              <span class="ml-1 font-mono opacity-60">(!@#$%…)</span>
-                            </span>
+                            <Checkbox checked={pwParams.symbols ?? true} onCheckedChange={(c) => setBinding(stepIndex, inputName, { ...binding, params: { ...binding.params, symbols: Boolean(c) } })} />
+                            <span class="text-muted-foreground">Include symbols <span class="ml-1 font-mono opacity-60">(!@#$%…)</span></span>
                           </label>
                           <label class="flex items-center gap-2 text-xs">
-                            <Checkbox
-                              checked={pwParams.excludeAmbiguous ?? false}
-                              onCheckedChange={(c) =>
-                                setBinding(selectedIndex, inputName, {
-                                  ...binding,
-                                  params: {
-                                    ...binding.params,
-                                    excludeAmbiguous: Boolean(c),
-                                  },
-                                })}
-                            />
-                            <span class="text-muted-foreground">
-                              Exclude ambiguous characters
-                              <span class="ml-1 font-mono opacity-60">(0/O, 1/l/I…)</span>
-                            </span>
+                            <Checkbox checked={pwParams.excludeAmbiguous ?? false} onCheckedChange={(c) => setBinding(stepIndex, inputName, { ...binding, params: { ...binding.params, excludeAmbiguous: Boolean(c) } })} />
+                            <span class="text-muted-foreground">Exclude ambiguous characters <span class="ml-1 font-mono opacity-60">(0/O, 1/l/I…)</span></span>
                           </label>
-                          <p class="text-[11px] text-muted-foreground">
-                            A fresh password is generated for every run. If it needs to be captured,
-                            wire the step's <span class="font-mono">temporaryPassword</span>
-                            output downstream.
-                          </p>
+                          <p class="text-[11px] text-muted-foreground">A fresh password is generated for every run. Wire the step's <span class="font-mono">temporaryPassword</span> output to capture it.</p>
                         </div>
                       {:else}
-                        <div
-                          class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
-                        >
-                          {gen.description}
-                        </div>
+                        <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">{gen.description}</div>
                       {/if}
                     {:else if binding?.kind === 'siteFact'}
-                      {@const factOpts = factFieldsFor(meta.typeHint).map((f) => ({
-                        value: f.key,
-                        label: f.label,
-                        subLabel: `${f.fieldTypeLabel ?? f.type} · ${f.section}`,
-                      }))}
+                      {@const factOpts = factFieldsFor(meta.typeHint).map((f) => ({ value: f.key, label: f.label, subLabel: `${f.fieldTypeLabel ?? f.type} · ${f.section}` }))}
                       <div class="space-y-3">
                         {#if factOpts.length === 0}
-                          <div
-                            class="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500"
-                          >
-                            No declared site profile fields match this input's type. Add one under
-                            Sites → Profile fields, then come back.
+                          <div class="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500">
+                            No declared site profile fields match this input's type. Add one under Sites → Profile fields, then come back.
                           </div>
                         {:else}
-                          <SingleSelect
-                            options={factOpts}
-                            selected={binding.key}
-                            placeholder="Pick a site fact…"
-                            onchange={(v) =>
-                              setBinding(selectedIndex, inputName, { ...binding, key: v })}
-                          />
+                          <SingleSelect options={factOpts} selected={binding.key} placeholder="Pick a site fact…" onchange={(v) => setBinding(stepIndex, inputName, { ...binding, key: v })} />
                         {/if}
                         <label class="flex items-center gap-2 text-xs">
-                          <Checkbox
-                            checked={binding.required}
-                            onCheckedChange={(c) =>
-                              setBinding(selectedIndex, inputName, {
-                                ...binding,
-                                required: Boolean(c),
-                              })}
-                          />
-                          <span class="text-muted-foreground">
-                            Required
-                            <span class="ml-1 opacity-60">
-                              (fail the step if the site has no value)
-                            </span>
-                          </span>
+                          <Checkbox checked={binding.required} onCheckedChange={(c) => setBinding(stepIndex, inputName, { ...binding, required: Boolean(c) })} />
+                          <span class="text-muted-foreground">Required <span class="ml-1 opacity-60">(fail the step if the site has no value)</span></span>
                         </label>
                       </div>
                     {:else if binding?.kind === 'priorOutput'}
-                      {@const upstreamSteps = draft.steps.slice(0, selectedIndex)}
-                      {@const upstreamCap = capIndex.get(
-                        upstreamSteps[binding.stepPosition]?.capabilityId ?? ''
-                      )}
-                      {@const stepOpts = upstreamSteps.map((s, i) => ({
-                        value: String(i),
-                        label: `Step ${String(i + 1).padStart(2, '0')}: ${s.label ?? capIndex.get(s.capabilityId)?.name ?? s.capabilityId}`,
-                      }))}
+                      {@const upstreamSteps = draft.steps.slice(0, stepIndex)}
+                      {@const upstreamCap = capIndex.get(upstreamSteps[binding.stepPosition]?.capabilityId ?? '')}
+                      {@const stepOpts = upstreamSteps.map((s, i) => ({ value: String(i), label: `Step ${String(i + 1).padStart(2, '0')}: ${s.label ?? capIndex.get(s.capabilityId)?.name ?? s.capabilityId}` }))}
                       {@const compatTypes = (meta as { priorOutputCompat?: string[] }).priorOutputCompat}
-                      {@const outputOpts = upstreamCap
-                        ? Object.entries(upstreamCap.outputMeta)
-                            .filter(([, m]) => {
-                              if (!compatTypes || compatTypes.length === 0) return true;
-                              const t = (m as { outputType?: string }).outputType;
-                              return t ? compatTypes.includes(t) : false;
-                            })
-                            .map(([k, m]) => ({
-                              value: k,
-                              label: fieldLabel(k, (m as { label?: string }).label),
-                            }))
-                        : []}
+                      {@const outputOpts = upstreamCap ? Object.entries(upstreamCap.outputMeta).filter(([, m]) => { if (!compatTypes || compatTypes.length === 0) return true; const t = (m as { outputType?: string }).outputType; return t ? compatTypes.includes(t) : false; }).map(([k, m]) => ({ value: k, label: fieldLabel(k, (m as { label?: string }).label) })) : []}
                       {#if upstreamSteps.length === 0}
-                        <div
-                          class="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500"
-                        >
-                          No earlier steps to wire from. Add one before this step or pick a
-                          different source.
+                        <div class="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500">
+                          No earlier steps to wire from. Add one before this step or pick a different source.
                         </div>
                       {:else}
                         <div class="grid gap-2 sm:grid-cols-2">
-                          <SingleSelect
-                            options={stepOpts}
-                            selected={String(binding.stepPosition)}
-                            placeholder="Prior step…"
-                            disableSort
-                            onchange={(v: string) =>
-                              setBinding(selectedIndex, inputName, {
-                                ...binding,
-                                stepPosition: Number(v),
-                                path: '',
-                              })}
-                          />
-                          <SingleSelect
-                            options={outputOpts}
-                            selected={binding.path}
-                            placeholder="Output field…"
-                            onchange={(v: string) =>
-                              setBinding(selectedIndex, inputName, { ...binding, path: v })}
-                          />
+                          <SingleSelect options={stepOpts} selected={String(binding.stepPosition)} placeholder="Prior step…" disableSort onchange={(v: string) => setBinding(stepIndex, inputName, { ...binding, stepPosition: Number(v), path: '' })} />
+                          <SingleSelect options={outputOpts} selected={binding.path} placeholder="Output field…" onchange={(v: string) => setBinding(stepIndex, inputName, { ...binding, path: v })} />
                         </div>
                         {#if upstreamCap && outputOpts.length === 0}
-                          <div
-                            class="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500"
-                          >
-                            The selected step has no compatible outputs for this input. Try a
-                            different step.
+                          <div class="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500">
+                            The selected step has no compatible outputs for this input. Try a different step.
                           </div>
                         {/if}
                       {/if}
@@ -1867,7 +1871,7 @@
                     options={availableOptional}
                     selected=""
                     placeholder="Add an optional field…"
-                    onchange={(v: string) => v && addOptionalInput(selectedIndex, v)}
+                    onchange={(v: string) => v && addOptionalInput(stepIndex, v)}
                   />
                 </div>
                 <span class="whitespace-nowrap text-xs text-muted-foreground">
@@ -1891,7 +1895,7 @@
                   <Checkbox
                     checked={!!step.optional}
                     disabled={true}
-                    onCheckedChange={(c) => setStepOptional(selectedIndex, Boolean(c))}
+                    onCheckedChange={(c) => setStepOptional(stepIndex, Boolean(c))}
                   />
                   <span class="text-sm text-muted-foreground select-none">
                     {step.optional ? 'Optional' : 'Required'}
@@ -1917,7 +1921,7 @@
                 <label class="flex items-center gap-2 cursor-pointer">
                   <Checkbox
                     checked={!!step.optional}
-                    onCheckedChange={(c) => setStepOptional(selectedIndex, Boolean(c))}
+                    onCheckedChange={(c) => setStepOptional(stepIndex, Boolean(c))}
                   />
                   <span class="text-sm text-muted-foreground select-none">
                     {step.optional ? 'Optional' : 'Required'}
@@ -1952,7 +1956,7 @@
                               {#each usedBy as u (u.toStep + ':' + u.toInput)}
                                 <button
                                   type="button"
-                                  onclick={() => (selectedIndex = u.toStep)}
+                                  onclick={() => (selected = { kind: 'step', index: u.toStep })}
                                   class="inline-flex items-center gap-1.5 self-start rounded-sm bg-cyan-500/10 px-2 py-0.5 text-cyan-700 hover:bg-cyan-500/20 dark:text-cyan-400"
                                 >
                                   <CornerDownRight class="size-3" />
@@ -1973,6 +1977,264 @@
                   </tbody>
                 </table>
               </div>
+            </div>
+          {/if}
+        </div>
+      {:else if selected.kind === 'reaction' && selectedReaction && selectedCap}
+        {@const reaction = selectedReaction}
+        {@const reactionCap = selectedCap}
+        {@const lane = selected.lane}
+        {@const reactionIndex = selected.index}
+        {@const boundInputNames = Object.keys(reaction.inputBindings).sort((a, b) => {
+          const aGroup = inputGroupFor(reactionCap, a);
+          const bGroup = inputGroupFor(reactionCap, b);
+          return aGroup.order - bGroup.order || aGroup.inputOrder - bGroup.inputOrder || a.localeCompare(b);
+        })}
+        {@const availableOptionalReaction = Object.entries(reactionCap.inputMeta)
+          .filter(([name, meta]) => !isRequiredInput(meta) && !(name in reaction.inputBindings))
+          .map(([name, meta]) => ({ value: name, label: fieldLabel(name, (meta as { label?: string }).label) }))}
+
+        <!-- Reaction header -->
+        <div class="border-b bg-muted/20 px-6 py-4">
+          <div class="flex items-start gap-4">
+            <div class="flex size-11 shrink-0 items-center justify-center rounded-lg border font-mono text-sm font-semibold tabular-nums text-muted-foreground
+              {lane === 'onFailure' ? 'border-rose-500/30 bg-rose-500/5 text-rose-700 dark:text-rose-400' : 'border-border bg-background'}">
+              {lane === 'onFailure' ? 'F' : 'S'}{String(reactionIndex + 1).padStart(2, '0')}
+            </div>
+            <div class="min-w-0 flex-1 space-y-1">
+              <div class="flex flex-wrap items-center gap-2">
+                <h2 class="truncate text-lg font-semibold">{reactionCap.name}</h2>
+                <span class="rounded-sm px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider
+                  {lane === 'onFailure' ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400' : 'bg-muted text-muted-foreground'}">
+                  {lane === 'onFailure' ? 'On Failure' : 'On Success'}
+                </span>
+              </div>
+              <div class="flex items-center gap-1">
+                <input
+                  class="min-w-0 flex-1 bg-transparent text-sm text-muted-foreground outline-none placeholder:text-muted-foreground/50 focus:text-foreground"
+                  placeholder="Custom label (optional)"
+                  value={reaction.label ?? ''}
+                  oninput={(e) => {
+                    const steps = [...draft.outcomeSteps[lane]];
+                    steps[reactionIndex] = { ...reaction, label: (e.target as HTMLInputElement).value || undefined };
+                    draft = { ...draft, outcomeSteps: { ...draft.outcomeSteps, [lane]: steps } };
+                  }}
+                />
+              </div>
+            </div>
+            <div class="flex items-center gap-1">
+              <Button
+                variant="ghost" size="icon" class="h-8 w-8"
+                disabled={reactionIndex === 0}
+                onclick={() => moveReactionStep(lane, reactionIndex, -1)}
+                title="Move up"
+              >
+                <ChevronUp class="size-4" />
+              </Button>
+              <Button
+                variant="ghost" size="icon" class="h-8 w-8"
+                disabled={reactionIndex === draft.outcomeSteps[lane].length - 1}
+                onclick={() => moveReactionStep(lane, reactionIndex, 1)}
+                title="Move down"
+              >
+                <ChevronDown class="size-4" />
+              </Button>
+              <Button
+                variant="ghost" size="icon" class="h-8 w-8 text-muted-foreground hover:text-rose-500"
+                onclick={() => removeOutcomeStep(lane, reactionIndex)}
+                title="Remove step"
+              >
+                <Trash2 class="size-4" />
+              </Button>
+            </div>
+          </div>
+          {#if reactionCap.description}
+            <p class="mt-3 text-sm text-muted-foreground">{reactionCap.description}</p>
+          {/if}
+        </div>
+
+        <!-- Reaction inputs -->
+        <div class="mx-auto w-full max-w-2xl space-y-4 p-6">
+          {#each boundInputNames as inputName (inputName)}
+            {@const meta = reactionCap.inputMeta[inputName]}
+            {@const binding = reaction.inputBindings[inputName]}
+            {#if meta && binding}
+              {@const currentSource = sourceOf(binding)}
+              {@const allowedSrcs = allowedSourcesFor(meta, lane === 'onFailure').filter(
+                (s) => s !== 'wire' || reactionWireSteps().length > 0
+              )}
+              <section class="rounded-lg border bg-card">
+                <div class="flex items-start justify-between gap-3 border-b px-4 py-3">
+                  <div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <h3 class="text-sm font-medium">{fieldLabel(inputName, meta.label)}</h3>
+                      <span class="rounded-sm border bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">{inputTypeLabel(meta)}</span>
+                    </div>
+                    {#if meta.description}<p class="mt-0.5 text-xs text-muted-foreground">{meta.description}</p>{/if}
+                  </div>
+                  <span class="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {meta.required === false ? 'Optional' : 'Required'}
+                  </span>
+                  {#if meta.required === false}
+                    <button
+                      type="button"
+                      class="text-muted-foreground transition-colors hover:text-rose-500"
+                      onclick={() => removeOptionalReactionInput(inputName)}
+                    >
+                      <Trash2 class="size-3.5" />
+                    </button>
+                  {/if}
+                </div>
+
+                <!-- Source picker -->
+                <div class="border-b px-4 py-3">
+                  <div class="flex flex-wrap gap-1.5">
+                    {#each allowedSrcs as src (src)}
+                      <button
+                        type="button"
+                        class="flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors
+                          {currentSource === src ? sourceBorderClass(src) + ' ' + sourceIconColor(src) : 'border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground'}"
+                        onclick={() => changeReactionSource(inputName, src as Source)}
+                      >
+                        {sourceLabel(src)}
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+
+                <!-- Reaction binding editor -->
+                <div class="space-y-2 p-4">
+                  <p class="text-xs text-muted-foreground">{sourceHint(currentSource, meta)}</p>
+
+                  {#if binding.kind === 'template'}
+                    <div class="flex items-center justify-between">
+                      <span class="text-[11px] text-muted-foreground font-mono">Use <code>{'{{variable}}'}</code> to insert values.</span>
+                      <BindingVariableInserter
+                        {lane}
+                        mainSteps={draft.steps}
+                        laneSteps={draft.outcomeSteps[lane].slice(0, reactionIndex)}
+                        prompts={draft.prompts}
+                        siteFactFields={siteFactFieldsQuery.data ?? []}
+                        {capIndex}
+                        target={activeTemplateRef}
+                        value={binding.template}
+                        oninsert={(v) => setReactionBinding(inputName, { kind: 'template', template: v })}
+                      />
+                    </div>
+                    <Textarea
+                      placeholder="e.g. failure message, step 1 hostname…"
+                      value={binding.template}
+                      rows={4}
+                      onfocus={(e) => (activeTemplateRef = e.currentTarget as HTMLTextAreaElement)}
+                      oninput={(e) => setReactionBinding(inputName, { kind: 'template', template: (e.target as HTMLTextAreaElement).value })}
+                    />
+                  {:else if binding.kind === 'literal'}
+                    {#if meta.entityType}
+                      <EntityPicker
+                        entityType={meta.entityType as EntityType}
+                        multiple={meta.typeHint === 'stringArray'}
+                        value={binding.value as string | string[] | null}
+                        onValueChange={(v) => setReactionBinding(inputName, { kind: 'literal', value: v })}
+                      />
+                    {:else if meta.typeHint === 'boolean'}
+                      <label class="flex items-center gap-2 text-sm">
+                        <Checkbox checked={Boolean(binding.value)} onCheckedChange={(c) => setReactionBinding(inputName, { kind: 'literal', value: Boolean(c) })} />
+                        <span class="text-muted-foreground">{binding.value ? 'true' : 'false'}</span>
+                      </label>
+                    {:else if meta.choices && meta.choices.length > 0}
+                      <SingleSelect
+                        options={meta.choices as { value: string; label: string }[]}
+                        selected={typeof binding.value === 'string' ? binding.value : ''}
+                        onchange={(v) => setReactionBinding(inputName, { kind: 'literal', value: v })}
+                      />
+                    {:else if meta.typeHint === 'stringArray'}
+                      <Input
+                        placeholder="value1, value2"
+                        value={Array.isArray(binding.value) ? (binding.value as string[]).join(', ') : ''}
+                        oninput={(e) => { const arr = (e.target as HTMLInputElement).value.split(',').map((v) => v.trim()).filter(Boolean); setReactionBinding(inputName, { kind: 'literal', value: arr }); }}
+                      />
+                    {:else}
+                      <Input
+                        type={meta.sensitive ? 'password' : 'text'}
+                        value={typeof binding.value === 'string' ? binding.value : ''}
+                        oninput={(e) => setReactionBinding(inputName, { kind: 'literal', value: (e.target as HTMLInputElement).value })}
+                      />
+                    {/if}
+                  {:else if binding.kind === 'runtime'}
+                    <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                      The operator will answer this before the package starts.
+                    </div>
+                  {:else if binding.kind === 'siteFact'}
+                    <SingleSelect
+                      options={factFieldsFor(meta.typeHint).map((f) => ({ value: f.key, label: f.label, subLabel: `${f.fieldTypeLabel ?? f.type} · ${f.section}` }))}
+                      selected={binding.key}
+                      placeholder="Choose a site profile field…"
+                      onchange={(k) => setReactionBinding(inputName, { ...binding, key: k })}
+                    />
+                  {:else if binding.kind === 'failureContext'}
+                    <SingleSelect
+                      options={[
+                        { value: 'message', label: 'Error message' },
+                        { value: 'capabilityName', label: 'Failed capability' },
+                        { value: 'errorClass', label: 'Error class' },
+                        { value: 'stepPosition', label: 'Failed step number' },
+                        { value: 'status', label: 'Run status' },
+                        { value: 'runId', label: 'Run ID' },
+                        { value: 'siteId', label: 'Site ID' },
+                      ]}
+                      selected={binding.path}
+                      disableSort
+                      onchange={(p) => setReactionBinding(inputName, { ...binding, path: p as typeof binding.path })}
+                    />
+                  {:else if binding.kind === 'generated'}
+                    <p class="text-xs text-muted-foreground">{sourceHint('generated', meta)}</p>
+                  {:else if binding.kind === 'priorOutput'}
+                    {@const wireSteps = reactionWireSteps()}
+                    {@const srcLane = binding.lane ?? 'main'}
+                    {@const selectedWireStep = `${srcLane}:${binding.stepPosition}`}
+                    {@const outputOptions = reactionWireOutputs(binding, meta)}
+                    {#if wireSteps.length === 0}
+                      <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                        Add a main step or an earlier reaction before wiring this input.
+                      </div>
+                    {:else}
+                      <div class="grid gap-2 sm:grid-cols-2">
+                        <SingleSelect
+                          options={wireSteps.map(({ value, label }) => ({ value, label }))}
+                          selected={selectedWireStep}
+                          placeholder="Source step…"
+                          disableSort
+                          onchange={(v) => {
+                            const src = wireSteps.find((w) => w.value === v);
+                            if (!src) return;
+                            setReactionBinding(inputName, { ...binding, lane: src.lane, stepPosition: src.position, path: '' });
+                          }}
+                        />
+                        <SingleSelect
+                          options={outputOptions}
+                          selected={binding.path}
+                          placeholder="Output field…"
+                          onchange={(p) => setReactionBinding(inputName, { ...binding, path: p })}
+                        />
+                      </div>
+                      {#if outputOptions.length === 0}
+                        <p class="text-xs text-amber-700 dark:text-amber-400">The selected step has no compatible outputs for this input.</p>
+                      {/if}
+                    {/if}
+                  {/if}
+                </div>
+              </section>
+            {/if}
+          {/each}
+
+          {#if availableOptionalReaction.length > 0}
+            <div class="rounded-md border border-dashed p-3">
+              <SingleSelect
+                options={availableOptionalReaction}
+                selected=""
+                placeholder="Add an optional input…"
+                onchange={(v) => v && addOptionalReactionInput(v)}
+              />
             </div>
           {/if}
         </div>
@@ -2201,201 +2463,5 @@
         </ScrollArea.Root>
       </div>
     </div>
-  </Dialog.Content>
-</Dialog.Root>
-
-<Dialog.Root
-  open={!!reactionEditor}
-  onOpenChange={(open) => {
-    if (!open) reactionEditor = null;
-  }}
->
-  <Dialog.Content class="max-h-[85vh] overflow-y-auto sm:max-w-[680px]">
-    {#if reactionEditor && reactionStep()}
-      {@const reaction = reactionStep()!}
-      {@const reactionCap = capIndex.get(reaction.capabilityId)}
-      {#if reactionCap}
-        {@const availableOptionalInputs = Object.entries(reactionCap.inputMeta)
-          .filter(([name, meta]) => meta.required === false && !(name in reaction.inputBindings))
-          .map(([name, meta]) => ({ value: name, label: fieldLabel(name, meta.label) }))}
-        <Dialog.Header>
-          <Dialog.Title>Configure {reactionCap.name}</Dialog.Title>
-          <Dialog.Description>
-            This reaction runs only {reactionEditor.lane === 'onSuccess' ? 'after a successful package' : 'after a halted or partial package'}.
-          </Dialog.Description>
-        </Dialog.Header>
-        <div class="space-y-4 py-3">
-          {#each Object.keys(reaction.inputBindings).sort((a, b) => {
-            const aGroup = inputGroupFor(reactionCap, a);
-            const bGroup = inputGroupFor(reactionCap, b);
-            return aGroup.order - bGroup.order || aGroup.inputOrder - bGroup.inputOrder;
-          }) as inputName (inputName)}
-            {@const meta = reactionCap.inputMeta[inputName]}
-            {@const binding = reaction.inputBindings[inputName]}
-            {#if meta && binding}
-              {@const source = sourceOf(binding)}
-              {@const reactionSources = allowedSourcesFor(meta, reactionEditor?.lane === 'onFailure').filter(
-                (candidate) => candidate !== 'wire' || reactionWireSteps().length > 0,
-              )}
-              <section class="rounded-lg border bg-card">
-                <div class="flex items-start justify-between gap-3 border-b px-4 py-3">
-                  <div>
-                    <div class="flex flex-wrap items-center gap-2">
-                      <h3 class="text-sm font-medium">{fieldLabel(inputName, meta.label)}</h3>
-                      <span class="rounded-sm border bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                        {inputTypeLabel(meta)}
-                      </span>
-                    </div>
-                    {#if meta.description}<p class="mt-0.5 text-xs text-muted-foreground">{meta.description}</p>{/if}
-                  </div>
-                  <span class="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                    {meta.required === false ? 'Optional' : 'Required'}
-                  </span>
-                  {#if meta.required === false}
-                    <button
-                      type="button"
-                      class="text-muted-foreground transition-colors hover:text-rose-500"
-                      onclick={() => removeOptionalReactionInput(inputName)}
-                      aria-label={`Remove ${fieldLabel(inputName, meta.label)}`}
-                    >
-                      <Trash2 class="size-3.5" />
-                    </button>
-                  {/if}
-                </div>
-                <div class="space-y-3 p-4">
-                  <SingleSelect
-                    options={reactionSources.map((value) => ({ value, label: sourceLabel(value) }))}
-                    selected={source}
-                    disableSort
-                    onchange={(value) => changeReactionSource(inputName, value as Source)}
-                  />
-
-                  {#if binding.kind === 'literal'}
-                    {#if meta.entityType}
-                      <EntityPicker
-                        entityType={meta.entityType as EntityType}
-                        multiple={meta.typeHint === 'stringArray'}
-                        value={binding.value as string | string[] | null}
-                        onValueChange={(value) => setReactionBinding(inputName, { kind: 'literal', value })}
-                      />
-                    {:else if meta.typeHint === 'boolean'}
-                      <label class="flex items-center gap-2 text-sm">
-                        <Checkbox
-                          checked={Boolean(binding.value)}
-                          onCheckedChange={(checked) => setReactionBinding(inputName, { kind: 'literal', value: Boolean(checked) })}
-                        />
-                        <span>{binding.value ? 'Yes' : 'No'}</span>
-                      </label>
-                    {:else if meta.choices && meta.choices.length > 0}
-                      <SingleSelect
-                        options={meta.choices as { value: string; label: string }[]}
-                        selected={typeof binding.value === 'string' ? binding.value : ''}
-                        onchange={(value) => setReactionBinding(inputName, { kind: 'literal', value })}
-                      />
-                    {:else if meta.typeHint === 'stringArray'}
-                      <Input
-                        placeholder="Comma-separated values"
-                        value={Array.isArray(binding.value) ? binding.value.join(', ') : ''}
-                        oninput={(event) => setReactionBinding(inputName, {
-                          kind: 'literal',
-                          value: (event.target as HTMLInputElement).value.split(',').map((value) => value.trim()).filter(Boolean),
-                        })}
-                      />
-                    {:else}
-                      <Input
-                        type={meta.sensitive ? 'password' : 'text'}
-                        value={typeof binding.value === 'string' || typeof binding.value === 'number' ? String(binding.value) : ''}
-                        oninput={(event) => setReactionBinding(inputName, { kind: 'literal', value: (event.target as HTMLInputElement).value })}
-                      />
-                    {/if}
-                  {:else if binding.kind === 'runtime'}
-                    <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                      The operator will answer this before the package starts. Edit its wording and required state in Run experience.
-                    </div>
-                  {:else if binding.kind === 'siteFact'}
-                    <SingleSelect
-                      options={factFieldsFor(meta.typeHint).map((field) => ({ value: field.key, label: field.label, subLabel: `${field.fieldTypeLabel ?? field.type} · ${field.section}` }))}
-                      selected={binding.key}
-                      placeholder="Choose a site profile field…"
-                      onchange={(key) => setReactionBinding(inputName, { ...binding, key })}
-                    />
-                  {:else if binding.kind === 'failureContext'}
-                    <SingleSelect
-                      options={[
-                        { value: 'message', label: 'Error message' },
-                        { value: 'capabilityName', label: 'Failed capability' },
-                        { value: 'errorClass', label: 'Error class' },
-                        { value: 'stepPosition', label: 'Failed step number' },
-                        { value: 'status', label: 'Run status' },
-                        { value: 'runId', label: 'Run ID' },
-                        { value: 'siteId', label: 'Site ID' },
-                      ]}
-                      selected={binding.path}
-                      disableSort
-                      onchange={(path) => setReactionBinding(inputName, { ...binding, path: path as typeof binding.path })}
-                    />
-                  {:else if binding.kind === 'generated'}
-                    <p class="text-xs text-muted-foreground">{sourceHint('generated', meta)}</p>
-                  {:else if binding.kind === 'priorOutput'}
-                    {@const wireSteps = reactionWireSteps()}
-                    {@const sourceLane = binding.lane ?? 'main'}
-                    {@const selectedWireStep = `${sourceLane}:${binding.stepPosition}`}
-                    {@const outputOptions = reactionWireOutputs(binding, meta)}
-                    {#if wireSteps.length === 0}
-                      <div class="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-                        Add a main step or an earlier reaction before wiring this input.
-                      </div>
-                    {:else}
-                      <div class="grid gap-2 sm:grid-cols-2">
-                        <SingleSelect
-                          options={wireSteps.map(({ value, label }) => ({ value, label }))}
-                          selected={selectedWireStep}
-                          placeholder="Source step…"
-                          disableSort
-                          onchange={(value) => {
-                            const source = wireSteps.find((candidate) => candidate.value === value);
-                            if (!source) return;
-                            setReactionBinding(inputName, {
-                              ...binding,
-                              lane: source.lane,
-                              stepPosition: source.position,
-                              path: '',
-                            });
-                          }}
-                        />
-                        <SingleSelect
-                          options={outputOptions}
-                          selected={binding.path}
-                          placeholder="Output field…"
-                          onchange={(path) => setReactionBinding(inputName, { ...binding, path })}
-                        />
-                      </div>
-                      {#if outputOptions.length === 0}
-                        <p class="text-xs text-amber-700 dark:text-amber-400">
-                          The selected step has no compatible outputs for this input.
-                        </p>
-                      {/if}
-                    {/if}
-                  {:else}
-                    <p class="text-xs text-muted-foreground">This source will be supplied by the run context.</p>
-                  {/if}
-                </div>
-              </section>
-            {/if}
-          {/each}
-          {#if availableOptionalInputs.length > 0}
-            <SingleSelect
-              options={availableOptionalInputs}
-              selected=""
-              placeholder="Add an optional input…"
-              onchange={(inputName) => inputName && addOptionalReactionInput(inputName)}
-            />
-          {/if}
-        </div>
-        <Dialog.Footer>
-          <Button onclick={() => (reactionEditor = null)}>Done</Button>
-        </Dialog.Footer>
-      {/if}
-    {/if}
   </Dialog.Content>
 </Dialog.Root>
