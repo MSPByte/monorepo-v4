@@ -57,17 +57,25 @@
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import * as Select from '$lib/components/ui/select/index.js';
-  import * as Dialog from '$lib/components/ui/dialog/index.js';
-  import * as ScrollArea from '$lib/components/ui/scroll-area/index.js';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
   import Button from '$lib/components/ui/button/button.svelte';
   import { Input } from '$lib/components/ui/input';
   import { Textarea } from '$lib/components/ui/textarea';
   import { Checkbox } from '$lib/components/ui/checkbox';
   import EntityPicker from '$lib/components/domain/entity-picker.svelte';
-  import MultiSelect from '$lib/components/multi-select.svelte';
   import SingleSelect from '$lib/components/single-select.svelte';
   import BindingVariableInserter from '$lib/components/binding-variable-inserter.svelte';
+  import CapabilityPicker from './_capability-picker.svelte';
+  import PackageDetails from './_package-details.svelte';
+  import {
+    inputTypeLabel,
+    sourceBorderClass,
+    sourceHint,
+    sourceIconColor,
+    sourceLabel,
+    sourceOf,
+    type Source,
+  } from './_binding-presentation';
   import { fieldLabel } from '$lib/utils/label';
   import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
   import {
@@ -88,17 +96,13 @@
     Circle,
     AlertTriangle,
     Info,
-    Search,
     SlidersHorizontal,
-    X,
     Braces,
     TriangleAlert,
     CheckCircle2,
   } from '@lucide/svelte';
 
   type EntityType = 'integration_link' | 'm365_identity' | 'm365_group' | 'm365_license' | 'm365_role';
-  type Source = 'fixed' | 'runtime' | 'row' | 'wire' | 'failure' | 'template' | 'generated' | 'fact';
-
   type Selection =
     | { kind: 'details' }
     | { kind: 'step'; index: number }
@@ -132,9 +136,7 @@
     staleTime: 5 * 60_000,
   }));
 
-  // Which declared fact fields are compatible with a given input typeHint.
-  // Mapping is intentionally loose — a string fact can drive text/password/upn
-  // inputs; number → number; boolean → boolean; multi-value → stringArray.
+  // Matches declared site facts to an input's loose type hint.
   function factFieldsFor(typeHint: string | undefined) {
     const all = siteFactFieldsQuery.data ?? [];
     if (!typeHint) return all;
@@ -147,7 +149,6 @@
     });
   }
 
-  // Sites, groups, and tenant links feed the scope pickers in the details panel.
   const sitesQuery = createQuery(() => ({
     queryKey: ['sites.list.scopePicker'],
     queryFn: () => trpc.sites.list.query(),
@@ -181,8 +182,7 @@
       }))
   );
 
-  // Pick the first generator that supports a given input's typeHint. Today
-  // that's password ↔ 'password'; more generators plug in the same way.
+  // Finds the first runtime generator that supports this input type.
   function generatorFor(
     typeHint: string | undefined
   ): { id: string; defaults: Record<string, unknown> } | undefined {
@@ -203,65 +203,14 @@
     allowedIntegrationLinks: [...(initial.allowedIntegrationLinks ?? [])],
   });
 
-  const isGlobalScope = $derived(
-    draft.allowedSites.length === 0 &&
-      draft.allowedSiteGroups.length === 0 &&
-      draft.allowedIntegrationLinks.length === 0
-  );
-
-  // Selection: which panel is shown on the right — package details, a main step, or a reaction step.
+  // The inspector selection can target package details, a main step, or a terminal reaction.
   let selected = $state<Selection>(initial.steps.length > 0 ? { kind: 'step', index: 0 } : { kind: 'details' });
   let capabilityPickerOpen = $state(false);
   let capabilityPickerTarget = $state<'main' | 'onSuccess' | 'onFailure'>('main');
-  let capabilitySearch = $state('');
-  let vendorFilters = $state<string[]>([]);
-  let categoryFilters = $state<string[]>([]);
   let activeTemplateRef = $state<HTMLTextAreaElement | null>(null);
 
   const capIndex = $derived(new Map((capabilitiesQuery.data ?? []).map((c) => [c.id, c])));
 
-  const capabilityCatalog = $derived(
-    (capabilitiesQuery.data ?? []).map((c) => ({
-      ...c,
-      searchText: [c.name, c.vendor, c.category, c.description, c.id]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase(),
-    }))
-  );
-  const capabilityVendors = $derived(
-    [...new Set(capabilityCatalog.map((c) => c.vendor))].sort((a, b) => a.localeCompare(b))
-  );
-  const capabilityCategories = $derived(
-    [...new Set(capabilityCatalog.map((c) => c.category).filter(Boolean))].sort((a, b) =>
-      a.localeCompare(b)
-    )
-  );
-  const filteredCapabilities = $derived.by(() => {
-    const query = capabilitySearch.trim().toLowerCase();
-    return capabilityCatalog.filter((c) => {
-      if (vendorFilters.length > 0 && !vendorFilters.includes(c.vendor)) return false;
-      if (categoryFilters.length > 0 && !categoryFilters.includes(c.category)) return false;
-      if (query && !c.searchText.includes(query)) return false;
-      return true;
-    });
-  });
-
-  // Map an underlying binding to a UX-facing source. `entity+picker` collapses
-  // into `runtime` visually — they behave identically at run time (a picker
-  // shows) and the two shapes existed only for legacy reasons.
-  function sourceOf(binding: Binding | undefined): Source {
-    if (!binding) return 'fixed';
-    if (binding.kind === 'literal') return 'fixed';
-    if (binding.kind === 'runtime') return 'runtime';
-    if (binding.kind === 'priorOutput') return 'wire';
-    if (binding.kind === 'failureContext') return 'failure';
-    if (binding.kind === 'template') return 'template';
-    if (binding.kind === 'generated') return 'generated';
-    if (binding.kind === 'siteFact') return 'fact';
-    // entity kind:
-    return binding.source === 'row-context' ? 'row' : 'runtime';
-  }
 
   function allowedSourcesFor(meta: {
     allowedBindings: readonly string[];
@@ -272,8 +221,7 @@
     const set = new Set(meta.allowedBindings);
     const out: Source[] = [];
     if (set.has('literal')) out.push('fixed');
-    // Template: compose a string with {{variable}} placeholders. Only for plain
-    // string inputs — not booleans, arrays, entity pickers, or sensitive fields.
+    // Templates only apply to non-sensitive scalar text inputs.
     if (
       set.has('literal') &&
       !meta.entityType &&
@@ -284,12 +232,9 @@
       out.push('template');
     }
     if (set.has('runtime') || set.has('entity')) out.push('runtime');
-    // Row-trigger execution is not implemented by the worker yet. Do not
-    // advertise a source authors cannot successfully run.
     if (set.has('priorOutput')) out.push('wire');
     if (allowFailureContext && set.has('failureContext')) out.push('failure');
-    // Only show `generated` if a registered generator applies to this typeHint,
-    // otherwise it's dead UI.
+    // Avoid presenting generator UI when no registered generator can fulfill it.
     if (set.has('generated') && generatorFor(meta.typeHint)) out.push('generated');
     if (set.has('siteFact')) out.push('fact');
     return out;
@@ -316,8 +261,7 @@
       return { kind: 'literal', value: initialValue };
     }
     if (source === 'runtime') {
-      // If the underlying schema only allows entity+picker (no true runtime),
-      // fall back to that shape so the mutation validates server-side.
+      // Entity-only schemas must retain their server-valid picker shape.
       if (!meta.allowedBindings.includes('runtime') && meta.allowedBindings.includes('entity')) {
         return { kind: 'entity', source: 'picker', entityType: meta.entityType ?? '' };
       }
@@ -328,9 +272,6 @@
     }
     if (source === 'generated') {
       const gen = generatorFor(meta.typeHint);
-      // Fall back to a fixed literal if no generator applies — shouldn't
-      // happen since allowedSourcesFor filters this out, but keeps the type
-      // exhaustive.
       if (!gen) return { kind: 'literal', value: '' };
       return {
         kind: 'generated',
@@ -467,7 +408,6 @@
       selected = { kind: 'reaction', lane, index: nextIndex };
     }
     capabilityPickerOpen = false;
-    capabilitySearch = '';
   }
 
   function openCapabilityPicker(target: 'main' | 'onSuccess' | 'onFailure' = 'main') {
@@ -610,25 +550,6 @@
     draft.steps = [...draft.steps];
   }
 
-  function toggleFilter(current: string[], value: string): string[] {
-    return current.includes(value)
-      ? current.filter((entry) => entry !== value)
-      : [...current, value];
-  }
-
-  function clearCapabilityFilters() {
-    capabilitySearch = '';
-    vendorFilters = [];
-    categoryFilters = [];
-  }
-
-  function formatVendorLabel(value: string): string {
-    return value.replace(/[_-]+/g, ' ').toUpperCase();
-  }
-
-  function formatCategoryLabel(value: string): string {
-    return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
-  }
 
   function addOptionalInput(stepIndex: number, inputName: string) {
     const step = draft.steps[stepIndex]!;
@@ -706,9 +627,7 @@
     return 'border-amber-500/40 text-amber-700 dark:text-amber-500 bg-amber-500/10';
   });
 
-  // Per-step summary chips used on the canvas. Encodes the shape of the
-  // step's data sources at a glance: how many prompts, whether it's wired
-  // from prior steps, whether it reads from row context.
+  // Canvas chips summarize each step's configured data sources.
   type StepSummary = {
     prompts: number;
     wires: Array<{ from: number; path: string }>;
@@ -740,8 +659,7 @@
     return s;
   }
 
-  // Outputs of a step that at least one downstream step reads. Rendered in
-  // the inspector so the user can see wiring in both directions.
+  // Shows which downstream main-step inputs consume each output.
   function downstreamReaders(
     stepIndex: number
   ): Map<string, Array<{ toStep: number; toInput: string }>> {
@@ -757,62 +675,6 @@
       }
     }
     return map;
-  }
-
-  function sourceLabel(source: Source): string {
-    if (source === 'fixed') return 'Fixed value';
-    if (source === 'runtime') return 'Ask when run';
-    if (source === 'row') return 'From triggering row';
-    if (source === 'generated') return 'Generate';
-    if (source === 'fact') return 'From site fact';
-    if (source === 'failure') return 'From failure';
-    if (source === 'template') return 'Template';
-    return 'Wire from step';
-  }
-
-  function sourceHint(
-    source: Source,
-    meta: { entityType?: string; typeHint?: string } | undefined
-  ): string {
-    if (source === 'fixed') return 'Same value every run.';
-    if (source === 'runtime')
-      return meta?.entityType
-        ? 'The operator picks from a live list when they start the run.'
-        : 'The operator enters this when they start the run.';
-    if (source === 'row')
-      return 'Auto-filled from the row that triggered this package (from a table row-action).';
-    if (source === 'generated') return 'Produced by a generator at run time.';
-    if (source === 'fact')
-      return "Reads a value from the run's site profile facts — needs a site selected at run time.";
-    if (source === 'failure') return 'Reads a single value from the failure context — for free-form text mixing multiple values, use Template instead.';
-    if (source === 'template') return 'Write free-form text with {{variable}} placeholders — mix failure details, step outputs, and site facts into one string.';
-    return 'Reads a specific output from an earlier step in this package.';
-  }
-
-  function sourceIconColor(source: Source): string {
-    if (source === 'fixed') return 'text-stone-500 dark:text-stone-400';
-    if (source === 'runtime') return 'text-amber-600 dark:text-amber-400';
-    if (source === 'row') return 'text-violet-600 dark:text-violet-400';
-    if (source === 'generated') return 'text-emerald-600 dark:text-emerald-400';
-    if (source === 'fact') return 'text-fuchsia-600 dark:text-fuchsia-400';
-    if (source === 'failure') return 'text-rose-600 dark:text-rose-400';
-    if (source === 'template') return 'text-blue-600 dark:text-blue-400';
-    return 'text-cyan-600 dark:text-cyan-400';
-  }
-
-  function sourceBorderClass(source: Source): string {
-    if (source === 'fixed') return 'border-l-stone-400/60 dark:border-l-stone-500/60';
-    if (source === 'runtime') return 'border-l-amber-500/70';
-    if (source === 'row') return 'border-l-violet-500/70';
-    if (source === 'generated') return 'border-l-emerald-500/70';
-    if (source === 'fact') return 'border-l-fuchsia-500/70';
-    if (source === 'failure') return 'border-l-rose-500/70';
-    if (source === 'template') return 'border-l-blue-500/70';
-    return 'border-l-cyan-500/70';
-  }
-
-  function inputTypeLabel(meta: { fieldTypeLabel?: string }): string {
-    return meta.fieldTypeLabel ?? 'Text';
   }
 
   function inputGroupFor(
@@ -913,9 +775,7 @@
     };
   }
 
-  // Inspector: prompt-key hint. When the promptKey differs from the input
-  // name the user is doing something intentional (dedup across steps) — we
-  // surface it. Otherwise we keep it collapsed.
+  // Tracks per-input visibility for advanced prompt-key editing.
   let showPromptKeyEditor = $state<Record<string, boolean>>({});
 </script>
 
@@ -1293,204 +1153,16 @@
     <!-- Inspector -->
     <section class="flex min-h-0 flex-col overflow-y-auto">
       {#if selected.kind === 'details'}
-        <!-- Package meta panel -->
-        <div class="mx-auto w-full max-w-2xl space-y-6 p-6">
-          <div>
-            <h2 class="text-lg font-semibold">Package details</h2>
-            <p class="mt-1 text-sm text-muted-foreground">
-              Give the package a name your team will recognize and describe what it does. This copy
-              shows up in the runner and in audit logs.
-            </p>
-          </div>
-          <div class="space-y-2">
-            <label class="text-sm font-medium" for="pkg-name-inspector">Name</label>
-            <Input
-              id="pkg-name-inspector"
-              placeholder="e.g. Onboard new M365 user"
-              value={draft.name}
-              oninput={(e) => (draft.name = (e.target as HTMLInputElement).value)}
-            />
-          </div>
-          <div class="space-y-2">
-            <label class="text-sm font-medium" for="pkg-desc-inspector">Description</label>
-            <Textarea
-              id="pkg-desc-inspector"
-              placeholder="Describe when and why this package should be run."
-              value={draft.description}
-              oninput={(e) => (draft.description = (e.target as HTMLTextAreaElement).value)}
-              rows={4}
-            />
-          </div>
-
-          <div class="space-y-3 rounded-lg border p-4">
-            <div class="flex items-baseline justify-between gap-3">
-              <div>
-                <h3 class="text-sm font-medium">Scope</h3>
-                <p class="mt-0.5 text-xs text-muted-foreground">
-                  Restrict where this package can run. Leave both empty to make it global.
-                </p>
-              </div>
-              <span
-                class="rounded-sm px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider {isGlobalScope
-                  ? 'bg-sky-500/10 text-sky-700 dark:text-sky-400'
-                  : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'}"
-              >
-                {isGlobalScope
-                  ? 'Global'
-                  : `${draft.allowedSites.length} sites · ${draft.allowedSiteGroups.length} groups · ${draft.allowedIntegrationLinks.length} tenants`}
-              </span>
-            </div>
-            <div class="space-y-2">
-              <div class="text-xs text-muted-foreground">Allowed sites</div>
-              <MultiSelect
-                options={siteOptions}
-                selected={draft.allowedSites}
-                placeholder="Any site (global)"
-                onchange={(v) => (draft.allowedSites = v)}
-              />
-            </div>
-            <div class="space-y-2">
-              <div class="text-xs text-muted-foreground">Allowed site groups</div>
-              <MultiSelect
-                options={siteGroupOptions}
-                selected={draft.allowedSiteGroups}
-                placeholder="No group restriction"
-                onchange={(v) => (draft.allowedSiteGroups = v)}
-              />
-            </div>
-            <div class="space-y-2">
-              <div class="text-xs text-muted-foreground">Allowed tenant links</div>
-              <MultiSelect
-                options={tenantLinkOptions}
-                selected={draft.allowedIntegrationLinks}
-                placeholder="No tenant restriction"
-                onchange={(v) => (draft.allowedIntegrationLinks = v)}
-              />
-            </div>
-          </div>
-
-          <div class="space-y-3 rounded-lg border bg-muted/10 p-4">
-            <div class="flex items-baseline justify-between gap-3">
-              <div>
-                <h3 class="text-sm font-medium">Run experience</h3>
-                <p class="mt-0.5 text-xs text-muted-foreground">
-                  These are the only questions an operator sees when they run this preset.
-                </p>
-              </div>
-              <span class="font-mono text-[11px] text-muted-foreground">
-                {normalPublishedPrompts.length} {normalPublishedPrompts.length === 1 ? 'prompt' : 'prompts'}
-              </span>
-            </div>
-            {#if normalPublishedPrompts.length === 0}
-              <p class="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-                This package runs with its preset values. Add a capability input as “Ask when run” to publish a question.
-              </p>
-            {:else}
-              <div class="space-y-2">
-                {#each normalPublishedPrompts as prompt (prompt.id)}
-                  <div class="grid gap-2 rounded-md border bg-background p-3 sm:grid-cols-[1fr_auto] sm:items-start">
-                    <div class="min-w-0 space-y-1">
-                      <Input
-                        value={prompt.label}
-                        aria-label={`Prompt label for ${prompt.id}`}
-                        oninput={(event) => updatePrompt(prompt.id, { label: (event.target as HTMLInputElement).value })}
-                        class="h-8 text-sm font-medium"
-                      />
-                      <Input
-                        value={prompt.description ?? ''}
-                        placeholder="Help the operator understand this choice"
-                        aria-label={`Prompt help for ${prompt.id}`}
-                        oninput={(event) => updatePrompt(prompt.id, { description: (event.target as HTMLInputElement).value })}
-                        class="h-8 text-xs"
-                      />
-                    </div>
-                    <label class="flex items-center gap-2 whitespace-nowrap pt-1 text-xs text-muted-foreground">
-                      <Checkbox
-                        checked={prompt.required}
-                        onCheckedChange={(checked) => setPromptRequired(prompt.id, Boolean(checked))}
-                      />
-                      Required
-                    </label>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          </div>
-
-          {#if draft.outcomeSteps.onFailure.length > 0}
-            <div class="space-y-3 rounded-lg border border-rose-500/30 bg-rose-500/5 p-4">
-              <div class="flex items-baseline justify-between gap-3">
-                <div>
-                  <h3 class="text-sm font-medium">On failure run experience</h3>
-                  <p class="mt-0.5 text-xs text-muted-foreground">
-                    These questions are only used if this package reaches its failure lane. They stay separate from normal-run inputs.
-                  </p>
-                </div>
-                <span class="font-mono text-[11px] text-muted-foreground">
-                  {failurePublishedPrompts.length} {failurePublishedPrompts.length === 1 ? 'prompt' : 'prompts'}
-                </span>
-              </div>
-              {#if failurePublishedPrompts.length === 0}
-                <p class="rounded-md border border-dashed border-rose-500/30 px-3 py-2 text-xs text-muted-foreground">
-                  This failure lane uses preset values and site facts only.
-                </p>
-              {:else}
-                <div class="space-y-2">
-                  {#each failurePublishedPrompts as prompt (prompt.id)}
-                    <div class="grid gap-2 rounded-md border bg-background p-3 sm:grid-cols-[1fr_auto] sm:items-start">
-                      <div class="min-w-0 space-y-1">
-                        <Input
-                          value={prompt.label}
-                          aria-label={`Failure prompt label for ${prompt.id}`}
-                          oninput={(event) => updatePrompt(prompt.id, { label: (event.target as HTMLInputElement).value })}
-                          class="h-8 text-sm font-medium"
-                        />
-                        <Input
-                          value={prompt.description ?? ''}
-                          placeholder="Help the operator understand this failure input"
-                          aria-label={`Failure prompt help for ${prompt.id}`}
-                          oninput={(event) => updatePrompt(prompt.id, { description: (event.target as HTMLInputElement).value })}
-                          class="h-8 text-xs"
-                        />
-                      </div>
-                      <label class="flex items-center gap-2 whitespace-nowrap pt-1 text-xs text-muted-foreground">
-                        <Checkbox
-                          checked={prompt.required}
-                          onCheckedChange={(checked) => setPromptRequired(prompt.id, Boolean(checked))}
-                        />
-                        Required
-                      </label>
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {/if}
-
-          <div class="rounded-lg border bg-muted/10 p-4">
-            <div class="flex items-start gap-3">
-              <Info class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              <div class="space-y-1">
-                <p class="text-sm font-medium">Reactions live in the sidebar</p>
-                <p class="text-xs text-muted-foreground">
-                  Use the <strong>On Failure</strong> and <strong>On Success</strong> sections in the left panel to add capabilities that run after the main package finishes. Click any reaction to configure it here.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {#if draft.steps.length === 0}
-            <div class="rounded-lg border border-dashed p-8 text-center">
-              <div class="mx-auto flex size-10 items-center justify-center rounded-full bg-muted">
-                <Sparkles class="size-4 text-muted-foreground" />
-              </div>
-              <p class="mt-3 text-sm font-medium">Add your first step</p>
-              <p class="mx-auto mt-1 max-w-xs text-xs text-muted-foreground">
-                Pick a capability from the left panel to start composing.
-              </p>
-            </div>
-          {/if}
-        </div>
+        <PackageDetails
+          bind:draft
+          {siteOptions}
+          {siteGroupOptions}
+          {tenantLinkOptions}
+          {normalPublishedPrompts}
+          {failurePublishedPrompts}
+          onUpdatePrompt={updatePrompt}
+          onSetPromptRequired={setPromptRequired}
+        />
       {:else if selectedStep && selectedCap && selected.kind === 'step'}
         {@const cap = selectedCap}
         {@const step = selectedStep}
@@ -2245,223 +1917,9 @@
   </div>
 </div>
 
-<Dialog.Root bind:open={capabilityPickerOpen}>
-  <Dialog.Content
-    class="flex h-[min(88vh,820px)] w-[min(96vw,1320px)] max-w-[min(96vw,1320px)] flex-col overflow-hidden p-0 sm:max-w-[min(96vw,1320px)]"
-  >
-    <Dialog.Header class="border-b bg-muted/20 px-6 py-5">
-      <Dialog.Title class="text-xl font-semibold tracking-tight">
-        {capabilityPickerTarget === 'main'
-          ? 'Add capability'
-          : capabilityPickerTarget === 'onSuccess'
-            ? 'Add success reaction'
-            : 'Add failure reaction'}
-      </Dialog.Title>
-      <Dialog.Description>
-        {capabilityPickerTarget === 'main'
-          ? 'Search the catalog, narrow the list, then insert the next step.'
-          : 'Choose the next one-way reaction for this terminal lane.'}
-      </Dialog.Description>
-    </Dialog.Header>
-
-    <div class="border-b bg-background px-6 py-4">
-      <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div class="relative max-w-2xl flex-1">
-          <Search
-            class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-          />
-          <Input
-            value={capabilitySearch}
-            oninput={(e) => (capabilitySearch = (e.target as HTMLInputElement).value)}
-            placeholder="Search capability, vendor, category, or id"
-            class="h-11 rounded-lg border-border/70 pl-9 text-sm"
-          />
-        </div>
-        <div class="flex items-center gap-2 text-xs text-muted-foreground">
-          <span class="rounded-full border border-border bg-muted/30 px-2.5 py-1 font-mono">
-            {filteredCapabilities.length} shown
-          </span>
-          <span class="rounded-full border border-border bg-muted/30 px-2.5 py-1 font-mono">
-            {capabilityCatalog.length} total
-          </span>
-        </div>
-      </div>
-    </div>
-
-    <div class="grid min-h-0 flex-1 lg:grid-cols-[280px_1fr]">
-      <aside class="flex min-h-0 flex-col border-r bg-muted/[0.18]">
-        <div class="flex items-center justify-between border-b px-5 py-4">
-          <div>
-            <div
-              class="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground"
-            >
-              Filters
-            </div>
-            <div class="mt-1 text-xs text-muted-foreground">
-              {vendorFilters.length + categoryFilters.length} active
-            </div>
-          </div>
-          <button
-            type="button"
-            class="rounded-full px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
-            onclick={clearCapabilityFilters}
-            disabled={!capabilitySearch &&
-              vendorFilters.length === 0 &&
-              categoryFilters.length === 0}
-          >
-            Clear
-          </button>
-        </div>
-
-        <ScrollArea.Root class="min-h-0 flex-1">
-          <div class="space-y-6 p-5">
-            <div class="space-y-3">
-              <div
-                class="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
-              >
-                Vendors
-              </div>
-              <div class="flex flex-wrap gap-2">
-                {#each capabilityVendors as vendor}
-                  <button
-                    type="button"
-                    class="rounded-full border px-3 py-1.5 text-[11px] font-semibold tracking-[0.08em] transition-colors {vendorFilters.includes(
-                      vendor
-                    )
-                      ? 'border-primary/40 bg-primary text-primary-foreground'
-                      : 'border-border bg-background text-foreground/80 hover:border-foreground/20 hover:bg-background'}"
-                    onclick={() => (vendorFilters = toggleFilter(vendorFilters, vendor))}
-                  >
-                    {formatVendorLabel(vendor)}
-                  </button>
-                {/each}
-              </div>
-            </div>
-
-            <div class="space-y-3">
-              <div
-                class="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
-              >
-                Categories
-              </div>
-              <div class="flex flex-wrap gap-2">
-                {#each capabilityCategories as category}
-                  <button
-                    type="button"
-                    class="rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors {categoryFilters.includes(
-                      category
-                    )
-                      ? 'border-primary/20 bg-primary/12 text-primary'
-                      : 'border-border bg-background text-foreground/80 hover:border-foreground/20 hover:bg-background'}"
-                    onclick={() => (categoryFilters = toggleFilter(categoryFilters, category))}
-                  >
-                    {formatCategoryLabel(category)}
-                  </button>
-                {/each}
-              </div>
-            </div>
-          </div>
-        </ScrollArea.Root>
-      </aside>
-
-      <div class="flex min-h-0 flex-col">
-        <div
-          class="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/[0.08] px-6 py-3"
-        >
-          <div class="text-sm font-medium text-foreground">Capability results</div>
-          {#if capabilitySearch || vendorFilters.length > 0 || categoryFilters.length > 0}
-            <div class="flex flex-wrap items-center gap-2">
-              {#each vendorFilters as vendor}
-                <span
-                  class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-[11px] font-semibold tracking-[0.08em] text-primary"
-                >
-                  {formatVendorLabel(vendor)}
-                  <button
-                    type="button"
-                    class="text-primary/70 hover:text-primary"
-                    onclick={() => (vendorFilters = vendorFilters.filter((v) => v !== vendor))}
-                    aria-label={`Remove ${vendor} vendor filter`}
-                  >
-                    <X class="size-3" />
-                  </button>
-                </span>
-              {/each}
-              {#each categoryFilters as category}
-                <span
-                  class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-[11px] text-primary"
-                >
-                  {formatCategoryLabel(category)}
-                  <button
-                    type="button"
-                    class="text-primary/70 hover:text-primary"
-                    onclick={() =>
-                      (categoryFilters = categoryFilters.filter((c) => c !== category))}
-                    aria-label={`Remove ${category} category filter`}
-                  >
-                    <X class="size-3" />
-                  </button>
-                </span>
-              {/each}
-            </div>
-          {/if}
-        </div>
-
-        <ScrollArea.Root class="min-h-0 flex-1">
-          <div class="p-4 md:p-5">
-            {#if filteredCapabilities.length === 0}
-              <div class="rounded-xl border border-dashed p-10 text-center">
-                <p class="text-sm font-medium">No matching capabilities</p>
-                <p class="mt-1 text-xs text-muted-foreground">
-                  Adjust the search or clear some filters to see more results.
-                </p>
-              </div>
-            {:else}
-              <div class="grid gap-3 xl:grid-cols-2">
-                {#each filteredCapabilities as capability (capability.id)}
-                  <button
-                    type="button"
-                    class="w-full rounded-xl border border-border/80 bg-background p-4 text-left transition-colors hover:border-primary/30 hover:bg-muted/20"
-                    onclick={() => addStep(capability.id)}
-                  >
-                    <div class="flex h-full items-start justify-between gap-4">
-                      <div class="min-w-0 flex-1">
-                        <div class="flex flex-wrap items-center gap-2">
-                          <span class="text-sm font-semibold text-foreground">
-                            {capability.name}
-                          </span>
-                          <span
-                            class="rounded-full bg-foreground px-2.5 py-1 text-[10px] font-semibold tracking-[0.12em] text-background"
-                          >
-                            {formatVendorLabel(capability.vendor)}
-                          </span>
-                          <span
-                            class="rounded-full border border-border px-2.5 py-1 text-[10px] font-medium text-muted-foreground"
-                          >
-                            {formatCategoryLabel(capability.category)}
-                          </span>
-                        </div>
-                        {#if capability.description}
-                          <p class="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
-                            {capability.description}
-                          </p>
-                        {/if}
-                        <div class="mt-3 font-mono text-[11px] text-muted-foreground/80">
-                          {capability.id}
-                        </div>
-                      </div>
-                      <span
-                        class="shrink-0 rounded-full border border-primary/20 bg-primary/8 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-primary"
-                      >
-                        Add
-                      </span>
-                    </div>
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          </div>
-        </ScrollArea.Root>
-      </div>
-    </div>
-  </Dialog.Content>
-</Dialog.Root>
+<CapabilityPicker
+  bind:open={capabilityPickerOpen}
+  target={capabilityPickerTarget}
+  capabilities={capabilitiesQuery.data ?? []}
+  onAdd={addStep}
+/>
