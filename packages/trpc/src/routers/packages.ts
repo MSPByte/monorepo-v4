@@ -8,6 +8,7 @@ import {
   m365Licenses,
   m365Roles,
   packageRuns,
+  packageSchedules,
   packages,
   sites,
   sophosEndpoints,
@@ -518,6 +519,18 @@ export const packagesRouter = t.router({
         throw new TRPCError({
           code: 'PRECONDITION_FAILED',
           message: `Cannot delete — this package has ${count} run${count === 1 ? '' : 's'} in history. Archive it instead.`,
+        });
+      }
+
+      const [scheduleRow] = await ctx.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(packageSchedules)
+        .where(eq(packageSchedules.packageId, input.id));
+      const scheduleCount = scheduleRow?.count ?? 0;
+      if (scheduleCount > 0) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: `Cannot delete — this package has ${scheduleCount} scheduled run${scheduleCount === 1 ? '' : 's'} in history. Archive it instead.`,
         });
       }
 

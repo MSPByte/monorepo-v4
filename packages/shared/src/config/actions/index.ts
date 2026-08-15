@@ -94,6 +94,10 @@ export enum ActionLabels {
   PackageDelete = 'package.delete',
   PackageRunStart = 'package.run.start',
   PackageRunRevealOutput = 'package.run.reveal_output',
+  PackageScheduleCreate = 'package.schedule.create',
+  PackageScheduleUpdate = 'package.schedule.update',
+  PackageScheduleCancel = 'package.schedule.cancel',
+  PackageScheduleDelete = 'package.schedule.delete',
   SophosPartnerSiteCreate = 'sophos_partner.site.create',
   DattoSiteCreate = 'datto.site.create',
   CoveSiteCreate = 'cove.site.create',
@@ -488,6 +492,22 @@ export const ActionResources = {
   [ActionLabels.PackageRunRevealOutput]: {
     label: ActionLabels.PackageRunRevealOutput,
     name: 'Package run reveal output'
+  },
+  [ActionLabels.PackageScheduleCreate]: {
+    label: ActionLabels.PackageScheduleCreate,
+    name: 'Package schedule create'
+  },
+  [ActionLabels.PackageScheduleUpdate]: {
+    label: ActionLabels.PackageScheduleUpdate,
+    name: 'Package schedule update'
+  },
+  [ActionLabels.PackageScheduleCancel]: {
+    label: ActionLabels.PackageScheduleCancel,
+    name: 'Package schedule cancel'
+  },
+  [ActionLabels.PackageScheduleDelete]: {
+    label: ActionLabels.PackageScheduleDelete,
+    name: 'Package schedule delete'
   },
   [ActionLabels.SophosPartnerSiteCreate]: {
     label: ActionLabels.SophosPartnerSiteCreate,

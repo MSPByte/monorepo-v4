@@ -64,6 +64,48 @@ export const packages = packagesSchema.table(
   ],
 );
 
+// A one-time, durable launch request. The complete package snapshot and its
+// resolved operator answers are captured here so a later package edit cannot
+// silently change work that has already been scheduled.
+export const packageSchedules = packagesSchema.table(
+  'package_schedules',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    packageId: uuid('package_id')
+      .notNull()
+      .references(() => packages.id, { onDelete: 'restrict' }),
+    packageVersion: integer('package_version').notNull(),
+    packageSnapshot: jsonb('package_snapshot').notNull(),
+    linkId: uuid('link_id').references(() => integrationLinks.id, { onDelete: 'set null' }),
+    siteId: uuid('site_id').references(() => sites.id, { onDelete: 'set null' }),
+    runtimeInputs: jsonb('runtime_inputs').notNull().default(sql`'{}'::jsonb`),
+    billingSnapshot: jsonb('billing_snapshot').notNull().default(sql`'{}'::jsonb`),
+    // The operator's requested local wall-clock time and IANA zone are kept
+    // alongside the absolute instant for a human-readable audit trail.
+    scheduledLocalTime: text('scheduled_local_time').notNull(),
+    timeZone: text('time_zone').notNull(),
+    scheduledFor: timestamp('scheduled_for', { withTimezone: true, mode: 'string' }).notNull(),
+    status: text('status', { enum: ['scheduled', 'dispatching', 'dispatched', 'canceled'] })
+      .notNull()
+      .default('scheduled'),
+    createdByUserId: text('created_by_user_id').notNull(),
+    canceledByUserId: text('canceled_by_user_id'),
+    canceledAt: timestamp('canceled_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('package_schedules_due_idx').on(t.status, t.scheduledFor),
+    index('package_schedules_package_idx').on(t.packageId, t.scheduledFor),
+    index('package_schedules_site_idx').on(t.siteId, t.scheduledFor),
+    authoredRls,
+  ],
+);
+
 export const packageRuns = packagesSchema.table(
   'package_runs',
   {
@@ -75,6 +117,11 @@ export const packageRuns = packagesSchema.table(
     // Frozen copy of the package definition (name + steps + bindings) at run
     // time so retries and audits stay reproducible after the package is edited.
     packageSnapshot: jsonb('package_snapshot').notNull(),
+    // At most one run can be dispatched from a one-time schedule. The unique
+    // constraint is the durable duplicate guard when scheduler replicas race.
+    scheduleId: uuid('schedule_id').references(() => packageSchedules.id, {
+      onDelete: 'set null',
+    }),
     parentRunId: uuid('parent_run_id').references((): AnyPgColumn => packageRuns.id, {
       onDelete: 'set null',
     }),
@@ -146,6 +193,7 @@ export const packageRuns = packagesSchema.table(
     index('package_runs_site_created_idx').on(t.siteId, t.createdAt),
     index('package_runs_parent_idx').on(t.parentRunId),
     index('package_runs_fanout_parent_idx').on(t.fanoutParentId),
+    unique('package_runs_schedule_unique').on(t.scheduleId),
     index('package_runs_ttl_idx')
       .on(t.outputsExpiresAt)
       .where(sql`sensitive_outputs_purged_at is null`),

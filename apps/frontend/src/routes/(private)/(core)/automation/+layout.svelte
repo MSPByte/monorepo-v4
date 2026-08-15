@@ -5,6 +5,7 @@
   const tabs = [
     { href: '/automation/packages', label: 'Packages' },
     { href: '/automation/runs', label: 'Package Runs' },
+    { href: '/automation/schedules', label: 'Schedules' },
     { href: '/automation/fact-rules', label: 'Fact Rules' },
   ];
 </script>

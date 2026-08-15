@@ -1,10 +1,14 @@
 import { z } from 'zod';
-import { and, desc, eq, gte } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray } from 'drizzle-orm';
 import {
   customerLogs,
+  integrationLinks,
   packageRuns,
   packageRunSteps,
+  packageSchedules,
   packages as packagesTable,
+  sites,
+  users,
 } from '@mspbyte/drizzle';
 import { TRPCError } from '@trpc/server';
 import { generatePassword, getCapability } from '@mspbyte/capabilities';
@@ -15,6 +19,12 @@ import { t, authProcedure } from '../trpc.js';
 import { loadMatchingGroupIds, packageMatchesScope, readPackageScope } from './package-scope.js';
 
 const runtimeInputsSchema = z.record(z.string(), z.unknown()).default({});
+const scheduleRunInputStateSchema = z.object({
+  // These are UI choices which alter how runtime values are interpreted. They
+  // belong in the schedule snapshot alongside the values themselves.
+  siteModes: z.record(z.string(), z.enum(['select', 'create'])).default({}),
+  skippedStepIndexes: z.array(z.number().int().min(0)).default([]),
+}).default({ siteModes: {}, skippedStepIndexes: [] });
 
 // Client sends this from the run dialog when the operator picks "generate a
 // password" mode on a runtime-bound password field. Server swaps it for a
@@ -22,7 +32,406 @@ const runtimeInputsSchema = z.record(z.string(), z.unknown()).default({});
 // audit) never see the sentinel.
 const GENERATE_PASSWORD_SENTINEL = '__generate__';
 
+const scheduleLocalTimeSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/, 'Use a date and time');
+
+function localTimeParts(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const [year, month, day, hour, minute] = match.slice(1).map(Number);
+  if (!year || !month || !day || hour === undefined || minute === undefined) return null;
+  return { year, month, day, hour, minute };
+}
+
+function formatPartsInZone(at: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(at);
+  const number = (type: string) => Number(parts.find((part) => part.type === type)?.value);
+  return { year: number('year'), month: number('month'), day: number('day'), hour: number('hour'), minute: number('minute') };
+}
+
+// Converts the local wall-clock time the operator chose into one instant.
+// The round-trip catches nonexistent times during DST's spring transition;
+// ambiguous autumn times resolve to the first valid occurrence.
+function scheduledInstant(localTime: string, timeZone: string): string {
+  const target = localTimeParts(localTime);
+  if (!target) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid scheduled date and time.' });
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone });
+  } catch {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Choose a valid IANA time zone.' });
+  }
+  let guess = Date.UTC(target.year, target.month - 1, target.day, target.hour, target.minute);
+  const targetAsUtc = Date.UTC(target.year, target.month - 1, target.day, target.hour, target.minute);
+  for (let i = 0; i < 4; i++) {
+    const actual = formatPartsInZone(new Date(guess), timeZone);
+    const actualAsUtc = Date.UTC(actual.year, actual.month - 1, actual.day, actual.hour, actual.minute);
+    if (actualAsUtc === targetAsUtc) break;
+    guess += targetAsUtc - actualAsUtc;
+  }
+  const roundTrip = formatPartsInZone(new Date(guess), timeZone);
+  if (
+    roundTrip.year !== target.year || roundTrip.month !== target.month || roundTrip.day !== target.day ||
+    roundTrip.hour !== target.hour || roundTrip.minute !== target.minute
+  ) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'That local time does not exist in the selected time zone. Choose another time.',
+    });
+  }
+  return new Date(guess).toISOString();
+}
+
+function validateSkippedScheduleSteps(
+  steps: Array<{ inputBindings?: Record<string, { kind?: string; stepPosition?: number }>; optional?: boolean }>,
+  skippedStepIndexes: number[],
+) {
+  const wiredPositions = new Set<number>();
+  for (const step of steps) {
+    for (const binding of Object.values(step.inputBindings ?? {})) {
+      if (binding.kind === 'priorOutput' && typeof binding.stepPosition === 'number') {
+        wiredPositions.add(binding.stepPosition);
+      }
+    }
+  }
+  for (const index of skippedStepIndexes) {
+    if (index >= steps.length) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: `Skipped step index ${index} is out of range.` });
+    }
+    const step = steps[index]!;
+    if (!step.optional) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: `Step ${index + 1} is not optional and cannot be skipped.` });
+    }
+    if (wiredPositions.has(index)) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: `Step ${index + 1} has downstream dependencies and cannot be skipped.` });
+    }
+  }
+}
+
 export const packageRunsRouter = t.router({
+  schedules: authProcedure
+    .input(z.object({ packageId: z.uuid().optional(), limit: z.number().int().min(1).max(200).default(100) }).default({ limit: 100 }))
+    .query(async ({ ctx, input }) => {
+      if (!ctx.can('Packages.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Read required' });
+      }
+      const filters = input.packageId ? [eq(packageSchedules.packageId, input.packageId)] : [];
+      const schedules = await ctx.db
+        .select({
+          id: packageSchedules.id,
+          packageId: packageSchedules.packageId,
+          packageName: packagesTable.name,
+          packageRunId: packageRuns.id,
+          packageVersion: packageSchedules.packageVersion,
+          packageSnapshot: packageSchedules.packageSnapshot,
+          runtimeInputs: packageSchedules.runtimeInputs,
+          siteId: packageSchedules.siteId,
+          siteName: sites.name,
+          linkId: packageSchedules.linkId,
+          linkName: integrationLinks.name,
+          scheduledFor: packageSchedules.scheduledFor,
+          scheduledLocalTime: packageSchedules.scheduledLocalTime,
+          timeZone: packageSchedules.timeZone,
+          status: packageSchedules.status,
+          createdByUserId: packageSchedules.createdByUserId,
+          createdAt: packageSchedules.createdAt,
+        })
+        .from(packageSchedules)
+        .leftJoin(packagesTable, eq(packageSchedules.packageId, packagesTable.id))
+        .leftJoin(packageRuns, eq(packageRuns.scheduleId, packageSchedules.id))
+        .leftJoin(sites, eq(packageSchedules.siteId, sites.id))
+        .leftJoin(integrationLinks, eq(packageSchedules.linkId, integrationLinks.id))
+        .where(filters.length ? and(...filters) : undefined)
+        .orderBy(desc(packageSchedules.scheduledFor))
+        .limit(input.limit);
+      const creatorIds = [...new Set(schedules.map((schedule) => schedule.createdByUserId))];
+      const creators = creatorIds.length
+        ? await ctx.db
+            .select({ id: users.id, name: users.name, email: users.email })
+            .from(users)
+            .where(inArray(users.id, creatorIds))
+        : [];
+      const creatorLabels = new Map(
+        creators.map((creator) => [creator.id, creator.name || creator.email]),
+      );
+      return schedules.map((schedule) => ({
+        ...schedule,
+        scheduledBy: creatorLabels.get(schedule.createdByUserId) ?? null,
+      }));
+    }),
+
+  schedule: authProcedure
+    .input(z.object({
+      packageId: z.uuid(),
+      siteId: z.uuid().nullable().optional(),
+      linkId: z.uuid().nullable().optional(),
+      runtimeInputs: runtimeInputsSchema,
+      runInputState: scheduleRunInputStateSchema,
+      scheduledLocalTime: scheduleLocalTimeSchema,
+      timeZone: z.string().min(1).max(100),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Packages.Run')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Run required' });
+      }
+      const [pkg] = await ctx.db.select().from(packagesTable).where(eq(packagesTable.id, input.packageId)).limit(1);
+      if (!pkg) throw new TRPCError({ code: 'NOT_FOUND', message: 'Package not found' });
+      if (pkg.status !== 'active') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Only active packages can be scheduled.' });
+      }
+      const target = { siteId: input.siteId ?? undefined, linkId: input.linkId ?? undefined };
+      const scope = readPackageScope(pkg);
+      if (!target.siteId && !target.linkId && !packageMatchesScope(scope, target, new Set())) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Choose a target permitted by this package scope.' });
+      }
+      if (target.siteId || target.linkId) {
+        const matchingGroupIds = await loadMatchingGroupIds(ctx.db, target);
+        if (!packageMatchesScope(scope, target, matchingGroupIds)) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'This package is not permitted for the selected target.' });
+        }
+      }
+
+      const scheduledFor = scheduledInstant(input.scheduledLocalTime, input.timeZone);
+      if (new Date(scheduledFor).getTime() <= Date.now()) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Choose a time in the future.' });
+      }
+      const steps = (pkg.steps as Array<{ capabilityId: string; inputBindings?: Record<string, unknown> }> | null) ?? [];
+      validateSkippedScheduleSteps(steps as Array<{ inputBindings?: Record<string, { kind?: string; stepPosition?: number }>; optional?: boolean }>, input.runInputState.skippedStepIndexes);
+      const outcomeSteps = (pkg.outcomeSteps as {
+        onSuccess?: Array<{ capabilityId: string; inputBindings?: Record<string, unknown> }>;
+        onFailure?: Array<{ capabilityId: string; inputBindings?: Record<string, unknown> }>;
+      } | null) ?? {};
+      // A schedule is a launch snapshot. Generate password choices now, when
+      // the operator approves the snapshot, instead of leaving a sentinel for
+      // the future worker to interpret.
+      const runtimeInputs = materializeGeneratedRuntimeInputs(input.runtimeInputs, [
+        ...steps,
+        ...(outcomeSteps.onSuccess ?? []),
+        ...(outcomeSteps.onFailure ?? []),
+      ]);
+      const billingSnapshot = {
+        currency: 'USD',
+        steps: steps.map((step, position) => ({
+          position,
+          capabilityId: step.capabilityId,
+          unitPrice: getCapability(step.capabilityId)?.defaultUnitPrice ?? 0,
+          billable: true,
+          priceSource: 'default',
+        })),
+        capturedAt: new Date().toISOString(),
+      };
+      const packageSnapshot = {
+        id: pkg.id,
+        name: pkg.name,
+        version: pkg.version,
+        steps: pkg.steps,
+        prompts: pkg.prompts ?? [],
+        outcomeSteps: pkg.outcomeSteps ?? { onSuccess: [], onFailure: [] },
+        failureActions: pkg.failureActions ?? [],
+        skippedStepIndexes: input.runInputState.skippedStepIndexes,
+        runInputState: input.runInputState,
+        scheduledBy: ctx.user.name || ctx.user.email || ctx.user.id,
+      };
+      const [schedule] = await ctx.db
+        .insert(packageSchedules)
+        .values({
+          packageId: pkg.id,
+          packageVersion: pkg.version,
+          packageSnapshot,
+          siteId: input.siteId ?? null,
+          linkId: input.linkId ?? null,
+          runtimeInputs,
+          billingSnapshot,
+          scheduledLocalTime: input.scheduledLocalTime,
+          timeZone: input.timeZone,
+          scheduledFor,
+          createdByUserId: ctx.user.id,
+        })
+        .returning({ id: packageSchedules.id, scheduledFor: packageSchedules.scheduledFor });
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: input.siteId ?? null,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email || ctx.user.id,
+        action: 'create',
+        actionLabel: ActionLabels.PackageScheduleCreate,
+        targetType: 'package_schedule',
+        targetId: schedule!.id,
+        targetLabel: pkg.name,
+        result: 'success',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: { packageId: pkg.id, packageVersion: pkg.version, scheduledFor, timeZone: input.timeZone },
+      });
+      return schedule!;
+    }),
+
+  updateSchedule: authProcedure
+    .input(z.object({
+      id: z.uuid(),
+      siteId: z.uuid().nullable().optional(),
+      linkId: z.uuid().nullable().optional(),
+      runtimeInputs: runtimeInputsSchema,
+      runInputState: scheduleRunInputStateSchema,
+      scheduledLocalTime: scheduleLocalTimeSchema,
+      timeZone: z.string().min(1).max(100),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Packages.Run')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Run required' });
+      }
+      const [schedule] = await ctx.db.select().from(packageSchedules).where(eq(packageSchedules.id, input.id)).limit(1);
+      if (!schedule) throw new TRPCError({ code: 'NOT_FOUND', message: 'Schedule not found' });
+      if (schedule.status !== 'scheduled') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Schedule is ${schedule.status} and can no longer be changed.` });
+      }
+      const [pkg] = await ctx.db.select().from(packagesTable).where(eq(packagesTable.id, schedule.packageId)).limit(1);
+      if (pkg) {
+        const target = { siteId: input.siteId ?? undefined, linkId: input.linkId ?? undefined };
+        const scope = readPackageScope(pkg);
+        if (!target.siteId && !target.linkId && !packageMatchesScope(scope, target, new Set())) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Choose a target permitted by this package scope.' });
+        }
+        if (target.siteId || target.linkId) {
+          const matchingGroupIds = await loadMatchingGroupIds(ctx.db, target);
+          if (!packageMatchesScope(scope, target, matchingGroupIds)) {
+            throw new TRPCError({ code: 'FORBIDDEN', message: 'This package is not permitted for the selected target.' });
+          }
+        }
+      }
+      const scheduledFor = scheduledInstant(input.scheduledLocalTime, input.timeZone);
+      if (new Date(scheduledFor).getTime() <= Date.now()) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Choose a time in the future.' });
+      }
+      const snapshotSteps = [
+        ...(((schedule.packageSnapshot as { steps?: Array<{ capabilityId: string; inputBindings?: Record<string, unknown> }> })?.steps) ?? []),
+        ...(((schedule.packageSnapshot as { outcomeSteps?: { onSuccess?: Array<{ capabilityId: string; inputBindings?: Record<string, unknown> }> } })?.outcomeSteps?.onSuccess) ?? []),
+        ...(((schedule.packageSnapshot as { outcomeSteps?: { onFailure?: Array<{ capabilityId: string; inputBindings?: Record<string, unknown> }> } })?.outcomeSteps?.onFailure) ?? []),
+      ];
+      validateSkippedScheduleSteps(
+        ((schedule.packageSnapshot as { steps?: Array<{ inputBindings?: Record<string, { kind?: string; stepPosition?: number }>; optional?: boolean }> })?.steps) ?? [],
+        input.runInputState.skippedStepIndexes,
+      );
+      const runtimeInputs = materializeGeneratedRuntimeInputs(input.runtimeInputs, snapshotSteps);
+      const packageSnapshot = {
+        ...(schedule.packageSnapshot as Record<string, unknown>),
+        skippedStepIndexes: input.runInputState.skippedStepIndexes,
+        runInputState: input.runInputState,
+      };
+      const [updated] = await ctx.db
+        .update(packageSchedules)
+        .set({
+          siteId: input.siteId ?? null,
+          linkId: input.linkId ?? null,
+          runtimeInputs,
+          packageSnapshot,
+          scheduledLocalTime: input.scheduledLocalTime,
+          timeZone: input.timeZone,
+          scheduledFor,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(and(eq(packageSchedules.id, input.id), eq(packageSchedules.status, 'scheduled')))
+        .returning({ id: packageSchedules.id });
+      if (!updated) throw new TRPCError({ code: 'CONFLICT', message: 'This schedule is being dispatched.' });
+      await ctx.db.insert(customerLogs).values({
+        siteId: input.siteId ?? null,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email || ctx.user.id,
+        action: 'update',
+        actionLabel: ActionLabels.PackageScheduleUpdate,
+        targetType: 'package_schedule',
+        targetId: schedule.id,
+        targetLabel: pkg?.name ?? String(schedule.packageId),
+        result: 'success',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: { scheduledFor, timeZone: input.timeZone },
+      });
+      return updated;
+    }),
+
+  cancelSchedule: authProcedure
+    .input(z.object({ id: z.uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Packages.Run')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Run required' });
+      }
+      const [schedule] = await ctx.db.select().from(packageSchedules).where(eq(packageSchedules.id, input.id)).limit(1);
+      if (!schedule) throw new TRPCError({ code: 'NOT_FOUND', message: 'Schedule not found' });
+      if (schedule.status !== 'scheduled') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Schedule is ${schedule.status} and can no longer be canceled.` });
+      }
+      const [canceled] = await ctx.db
+        .update(packageSchedules)
+        .set({ status: 'canceled', canceledByUserId: ctx.user.id, canceledAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+        .where(and(eq(packageSchedules.id, input.id), eq(packageSchedules.status, 'scheduled')))
+        .returning({ id: packageSchedules.id });
+      if (!canceled) throw new TRPCError({ code: 'CONFLICT', message: 'This schedule is being dispatched.' });
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: schedule.siteId,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email || ctx.user.id,
+        action: 'update',
+        actionLabel: ActionLabels.PackageScheduleCancel,
+        targetType: 'package_schedule',
+        targetId: schedule.id,
+        targetLabel: String(schedule.packageId),
+        result: 'success',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+      });
+      return canceled;
+    }),
+
+  deleteSchedule: authProcedure
+    .input(z.object({ id: z.uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Packages.Run')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Run required' });
+      }
+      const [schedule] = await ctx.db.select().from(packageSchedules).where(eq(packageSchedules.id, input.id)).limit(1);
+      if (!schedule) throw new TRPCError({ code: 'NOT_FOUND', message: 'Schedule not found' });
+      if (schedule.status !== 'scheduled' && schedule.status !== 'canceled') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Only schedules that have not dispatched can be deleted. Dispatched schedules remain with their run history.',
+        });
+      }
+      const [deleted] = await ctx.db
+        .delete(packageSchedules)
+        .where(and(eq(packageSchedules.id, input.id), eq(packageSchedules.status, schedule.status)))
+        .returning({ id: packageSchedules.id });
+      if (!deleted) throw new TRPCError({ code: 'CONFLICT', message: 'This schedule is being dispatched.' });
+
+      await ctx.db.insert(customerLogs).values({
+        siteId: schedule.siteId,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        actorLabel: ctx.user.name || ctx.user.email || ctx.user.id,
+        action: 'delete',
+        actionLabel: ActionLabels.PackageScheduleDelete,
+        targetType: 'package_schedule',
+        targetId: schedule.id,
+        targetLabel: String(schedule.packageId),
+        result: 'success',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+      });
+      return deleted;
+    }),
+
   list: authProcedure
     .input(
       z

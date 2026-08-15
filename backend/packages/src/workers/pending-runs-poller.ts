@@ -1,8 +1,9 @@
-import { and, eq, inArray, lt } from "drizzle-orm";
+import { and, eq, inArray, lt, lte } from "drizzle-orm";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
-import { packageRuns } from "@mspbyte/drizzle";
+import { packageRuns, packageSchedules } from "@mspbyte/drizzle";
 import {
   enqueuePendingPackageRun,
+  createPendingScheduledPackageRun,
   getOrCreateQueue,
   orgQueueName,
   packageRunJobId,
@@ -16,6 +17,7 @@ import type { RedisConnection } from "../redis.js";
 // How stale a "queued" row must be before we consider it orphaned. Real
 // BullMQ pickup is sub-second; 30s is well beyond any healthy delay.
 const STUCK_QUEUED_AFTER_MS = 30_000;
+const STUCK_SCHEDULE_DISPATCH_AFTER_MS = 60_000;
 
 // Interval-driven polling — the frontend can't reach Redis in production, so
 // tRPC only inserts a pending row. This poller (running inside backend/packages
@@ -60,6 +62,7 @@ export function createPendingRunsPoller(
         }
       }
 
+      await dispatchDueSchedules(db, orgId);
       await reconcileStuckQueued(redis, db, orgId);
     } catch (err) {
       logger.error("Pending-runs poller tick failed", {
@@ -85,6 +88,124 @@ export function createPendingRunsPoller(
       clearInterval(interval);
     },
   };
+}
+
+// Schedules deliberately create an ordinary pending run instead of a delayed
+// BullMQ job. The database is the source of truth, so a deploy or Redis loss
+// cannot make a promised customer change disappear.
+async function dispatchDueSchedules(db: any, orgId: string): Promise<void> {
+  // Compatibility cleanup for schedules dispatched by the first scheduler
+  // implementation, which retained a now-redundant "dispatched" record.
+  await db.delete(packageSchedules).where(eq(packageSchedules.status, 'dispatched'));
+  await reconcileStuckScheduleClaims(db, orgId);
+  const now = new Date().toISOString();
+  const due = await db
+    .select({ id: packageSchedules.id })
+    .from(packageSchedules)
+    .where(
+      and(
+        eq(packageSchedules.status, 'scheduled'),
+        lte(packageSchedules.scheduledFor, now),
+      ),
+    )
+    .limit(50);
+
+  for (const candidate of due as Array<{ id: string }>) {
+    // Claim first so cancellation and another poller cannot race dispatch.
+    const [schedule] = await db
+      .update(packageSchedules)
+      .set({ status: 'dispatching', updatedAt: new Date().toISOString() })
+      .where(
+        and(
+          eq(packageSchedules.id, candidate.id),
+          eq(packageSchedules.status, 'scheduled'),
+        ),
+      )
+      .returning();
+    if (!schedule) continue;
+
+    try {
+      const created = await createPendingScheduledPackageRun(db, {
+        packageId: schedule.packageId,
+        packageVersion: schedule.packageVersion,
+        packageSnapshot: schedule.packageSnapshot,
+        linkId: schedule.linkId,
+        siteId: schedule.siteId,
+        triggerType: 'scheduled',
+        triggerRef: {
+          packageScheduleId: schedule.id,
+          scheduledFor: schedule.scheduledFor,
+          scheduledLocalTime: schedule.scheduledLocalTime,
+          timeZone: schedule.timeZone,
+        },
+        triggeredByUserId: schedule.createdByUserId,
+        triggerSourceLabel: `Scheduled package run · ${schedule.scheduledLocalTime} ${schedule.timeZone}`,
+        runtimeInputs: schedule.runtimeInputs as Record<string, unknown>,
+        billingSnapshot: schedule.billingSnapshot,
+        scheduleId: schedule.id,
+      });
+
+      // The ordinary package run is now the durable execution history. Once
+      // the hand-off succeeds, remove this one-time launch request so the
+      // schedule workspace contains only work that can still be changed.
+      await db.delete(packageSchedules).where(eq(packageSchedules.id, schedule.id));
+      logger.info('Dispatched scheduled package run', {
+        orgId,
+        packageScheduleId: schedule.id,
+        packageRunId: created?.packageRunId ?? null,
+      });
+    } catch (err) {
+      // Returning to scheduled is safe: schedule_id's unique run constraint
+      // prevents a duplicate if the insert actually committed before a later
+      // failure. The next poll will finish the state transition.
+      await db
+        .update(packageSchedules)
+        .set({ status: 'scheduled', updatedAt: new Date().toISOString() })
+        .where(eq(packageSchedules.id, schedule.id));
+      logger.error('Failed to dispatch scheduled package run', {
+        orgId,
+        packageScheduleId: schedule.id,
+        error: serializeError(err),
+      });
+    }
+  }
+}
+
+async function reconcileStuckScheduleClaims(db: any, orgId: string): Promise<void> {
+  const staleBefore = new Date(Date.now() - STUCK_SCHEDULE_DISPATCH_AFTER_MS).toISOString();
+  const stuck = await db
+    .select({ id: packageSchedules.id })
+    .from(packageSchedules)
+    .where(
+      and(
+        eq(packageSchedules.status, 'dispatching'),
+        lt(packageSchedules.updatedAt, staleBefore),
+      ),
+    )
+    .limit(50);
+
+  for (const schedule of stuck as Array<{ id: string }>) {
+    const [run] = await db
+      .select({ id: packageRuns.id })
+      .from(packageRuns)
+      .where(eq(packageRuns.scheduleId, schedule.id))
+      .limit(1);
+    if (run) {
+      // A prior worker created the package run but died before removing the
+      // one-time request. Keep the run as history and clear the schedule.
+      await db.delete(packageSchedules).where(eq(packageSchedules.id, schedule.id));
+    } else {
+      await db
+        .update(packageSchedules)
+        .set({ status: 'scheduled', updatedAt: new Date().toISOString() })
+        .where(eq(packageSchedules.id, schedule.id));
+    }
+    logger.warn('Reconciled interrupted package schedule dispatch', {
+      orgId,
+      packageScheduleId: schedule.id,
+      packageRunId: run?.id ?? null,
+    });
+  }
 }
 
 // Reconciles queued rows whose BullMQ job vanished — the worker crashed

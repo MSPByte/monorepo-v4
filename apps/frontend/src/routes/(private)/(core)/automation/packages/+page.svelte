@@ -23,7 +23,7 @@
   import Button from '$lib/components/ui/button/button.svelte';
   import RunPackageDialog from '$lib/components/domain/run-package-dialog.svelte';
   import { toUserMessage } from '$lib/utils/errors';
-  import { Play, Pencil, Archive, Plus, Copy, Trash2, MoreHorizontal } from '@lucide/svelte';
+  import { Play, Pencil, Archive, Plus, Copy, Trash2, MoreHorizontal, CalendarClock } from '@lucide/svelte';
   import { prettyText } from '$lib/utils/format';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
@@ -58,6 +58,7 @@
   let refreshKey = $state(0);
   let runDialogOpen = $state(false);
   let runDialogPackageId = $state<string | undefined>(undefined);
+  let scheduleDialogTarget = $state<PackageRow | null>(null);
   let deleteTarget = $state<PackageRow | null>(null);
 
   const invalidate = () => {
@@ -154,6 +155,15 @@
           if (!r) return;
           runDialogPackageId = r.id;
           runDialogOpen = true;
+        },
+      });
+      actions.push({
+        label: 'Schedule',
+        icon: CalendarClock,
+        disabled: (rows) => rows.length !== 1 || rows[0]!.status !== 'active',
+        onclick: (rows) => {
+          const row = rows[0];
+          if (row) scheduleDialogTarget = row;
         },
       });
     }
@@ -333,6 +343,9 @@
           >
             <Play class="size-3.5" /> Run
           </DropdownMenu.Item>
+          <DropdownMenu.Item class="gap-2" onclick={() => (scheduleDialogTarget = row)}>
+            <CalendarClock class="size-3.5" /> Schedule
+          </DropdownMenu.Item>
         {/if}
         {#if canWrite}
           <DropdownMenu.Item class="gap-2" onclick={() => goto(`/automation/packages/${row.id}`)}>
@@ -369,18 +382,29 @@
         Compose managed capabilities into runs you can execute against any tenant.
       </p>
     </div>
-    {#if canWrite}
-      <Button class="gap-2" onclick={() => goto('/automation/packages/new')}>
-        <Plus class="size-4" />
-        New package
-      </Button>
-    {/if}
+    <div class="flex items-center gap-2">
+      {#if canWrite}
+        <Button class="gap-2" onclick={() => goto('/automation/packages/new')}>
+          <Plus class="size-4" />
+          New package
+        </Button>
+      {/if}
+    </div>
   </div>
 
   <RunPackageDialog
     bind:open={runDialogOpen}
     onOpenChange={(o) => (runDialogOpen = o)}
     packageId={runDialogPackageId}
+  />
+  <RunPackageDialog
+    open={scheduleDialogTarget !== null}
+    onOpenChange={(open) => {
+      if (!open) scheduleDialogTarget = null;
+    }}
+    packageId={scheduleDialogTarget?.id}
+    scheduleMode
+    onScheduled={() => void queryClient.invalidateQueries({ queryKey: ['packageRuns.schedules'] })}
   />
 
   <DataTable

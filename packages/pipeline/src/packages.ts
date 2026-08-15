@@ -33,6 +33,7 @@ export type CreatePendingPackageRunParams = {
   billingSnapshot?: unknown;
   parentRunId?: string | null;
   fanoutParentId?: string | null;
+  scheduleId?: string | null;
   startStepIndex?: number;
 };
 
@@ -63,12 +64,46 @@ export async function createPendingPackageRun(
       billingSnapshot: params.billingSnapshot ?? {},
       parentRunId: params.parentRunId ?? null,
       fanoutParentId: params.fanoutParentId ?? null,
+      scheduleId: params.scheduleId ?? null,
       startStepIndex: params.startStepIndex ?? 0,
       status: "pending",
     })
     .returning({ id: packageRuns.id });
 
   return { packageRunId: run.id };
+}
+
+// A one-time schedule must only ever create one run, even if two scheduler
+// replicas observe it as due at the same moment. `schedule_id` has a unique
+// constraint; a conflict simply means another replica already dispatched it.
+export async function createPendingScheduledPackageRun(
+  db: Db,
+  params: CreatePendingPackageRunParams & { scheduleId: string },
+): Promise<CreatePendingPackageRunResult | null> {
+  const [run] = await db
+    .insert(packageRuns)
+    .values({
+      packageId: params.packageId,
+      packageVersion: params.packageVersion,
+      packageSnapshot: params.packageSnapshot,
+      linkId: params.linkId ?? null,
+      siteId: params.siteId ?? null,
+      triggerType: params.triggerType,
+      triggerRef: params.triggerRef ?? null,
+      triggeredByUserId: params.triggeredByUserId,
+      triggerSourceLabel: params.triggerSourceLabel ?? null,
+      runtimeInputs: params.runtimeInputs ?? {},
+      billingSnapshot: params.billingSnapshot ?? {},
+      parentRunId: params.parentRunId ?? null,
+      fanoutParentId: params.fanoutParentId ?? null,
+      scheduleId: params.scheduleId,
+      startStepIndex: params.startStepIndex ?? 0,
+      status: 'pending',
+    })
+    .onConflictDoNothing({ target: packageRuns.scheduleId })
+    .returning({ id: packageRuns.id });
+
+  return run ? { packageRunId: run.id } : null;
 }
 
 // Called by the backend/packages pending-runs poller. Atomically transitions

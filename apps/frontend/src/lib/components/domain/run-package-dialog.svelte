@@ -14,6 +14,7 @@
   import SingleSelect from '$lib/components/single-select.svelte';
   import EntityPicker from './entity-picker.svelte';
   import { fieldLabel } from '$lib/utils/label';
+  import Loader from '$lib/components/transition/loader.svelte';
 
   const GENERATE_PASSWORD_SENTINEL = '__generate__';
 
@@ -33,9 +34,47 @@
     packageId?: string;
     linkId?: string | null;
     siteId?: string | null;
+    /** Use the normal run-input surface to prepare a future one-time run. */
+    scheduleMode?: boolean;
+    scheduleId?: string;
+    scheduleSnapshot?: {
+      id: string;
+      name: string;
+      version?: number;
+      steps: unknown;
+      prompts?: unknown;
+      outcomeSteps?: unknown;
+    };
+    initialRuntimeInputs?: Record<string, unknown>;
+    initialRunInputState?: {
+      siteModes?: Record<string, 'select' | 'create'>;
+      skippedStepIndexes?: number[];
+    };
+    initialSchedule?: {
+      siteId?: string | null;
+      linkId?: string | null;
+      scheduledLocalTime: string;
+      timeZone: string;
+    };
+    onScheduled?: () => void;
+    onRequestDeleteSchedule?: () => void;
   };
 
-  let { open = $bindable(), onOpenChange, packageId, linkId, siteId }: Props = $props();
+  let {
+    open = $bindable(),
+    onOpenChange,
+    packageId,
+    linkId,
+    siteId,
+    scheduleMode = false,
+    scheduleId,
+    scheduleSnapshot,
+    initialRuntimeInputs,
+    initialRunInputState,
+    initialSchedule,
+    onScheduled,
+    onRequestDeleteSchedule,
+  }: Props = $props();
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
 
@@ -57,6 +96,10 @@
     staleTime: 5 * 60_000,
   }));
 
+  const isDialogLoading = $derived(
+    capabilitiesQuery.isLoading || (!scheduleSnapshot && packagesQuery.isLoading),
+  );
+
   const sitesQuery = createQuery(() => ({
     queryKey: ['sites.list'],
     queryFn: () => trpc.sites.list.query(),
@@ -70,24 +113,34 @@
 
   let selectedPackageId = $state<string>('');
   let values = $state<Record<string, string | boolean | string[]>>({});
-  let passwordModes = $state<Record<string, 'generate' | 'custom'>>({});
+  let passwordModes = $state<Record<string, 'preserve' | 'generate' | 'custom'>>({});
   let siteModes = $state<Record<string, 'select' | 'create'>>({});
   let postalLookupStatus = $state<Record<string, 'idle' | 'loading' | 'done' | 'error'>>({});
   let postalLookupTimer: ReturnType<typeof setTimeout> | null = null;
   let selectedTargetSiteId = $state('');
+  let scheduledLocalTime = $state('');
+  let scheduleTimeZone = $state(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
   let startStepIndex = $state(0);
   let skippedSteps = $state<Set<number>>(new Set());
+
+  function defaultLocalTime() {
+    const future = new Date(Date.now() + 60 * 60 * 1000);
+    const pad = (value: number) => String(value).padStart(2, '0');
+    return `${future.getFullYear()}-${pad(future.getMonth() + 1)}-${pad(future.getDate())}T${pad(future.getHours())}:${pad(future.getMinutes())}`;
+  }
 
   $effect(() => {
     if (open) {
       selectedPackageId = packageId ?? '';
       startStepIndex = 0;
-      values = {};
+      values = { ...(initialRuntimeInputs ?? {}) } as Record<string, string | boolean | string[]>;
       passwordModes = {};
-      siteModes = {};
+      siteModes = { ...(initialRunInputState?.siteModes ?? {}) };
       postalLookupStatus = {};
-      selectedTargetSiteId = '';
-      skippedSteps = new Set();
+      selectedTargetSiteId = initialSchedule?.siteId ?? '';
+      scheduledLocalTime = initialSchedule?.scheduledLocalTime ?? defaultLocalTime();
+      scheduleTimeZone = initialSchedule?.timeZone ?? (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+      skippedSteps = new Set(initialRunInputState?.skippedStepIndexes ?? []);
     }
   });
 
@@ -136,7 +189,7 @@
   }
 
   const selectedPackage = $derived(
-    (packagesQuery.data ?? []).find((p) => p.id === selectedPackageId),
+    scheduleSnapshot ?? (packagesQuery.data ?? []).find((p) => p.id === selectedPackageId),
   );
 
   type Binding =
@@ -295,6 +348,7 @@
     runtimeFields.some((field) => field.entityType === 'sophos_endpoint'),
   );
   const effectiveSiteId = $derived(siteId ?? (selectedTargetSiteId || undefined));
+  const effectiveLinkId = $derived(linkId ?? undefined);
 
   function controllingValue(inputName: string): unknown {
     if (!selectedPackage) return undefined;
@@ -326,7 +380,7 @@
       const raw = values[field.promptKey];
       if (typeof raw === 'string' && raw.length > 0) return raw;
     }
-    return undefined;
+    return effectiveLinkId;
   });
 
   const hasCovePartnerField = $derived(
@@ -381,7 +435,7 @@
     }) =>
       trpc.packageRuns.start.mutate({
         packageId: args.packageId,
-        linkId: linkId ?? null,
+        linkId: effectiveLinkId ?? null,
         siteId: args.siteId ?? null,
         runtimeInputs: args.runtimeInputs,
         startStepIndex: args.startStepIndex,
@@ -399,8 +453,42 @@
     onError: (err) => toast.error(err.message ?? 'Failed to start run'),
   }));
 
-  function passwordMode(field: RuntimeField): 'generate' | 'custom' {
-    return passwordModes[field.promptKey] ?? 'generate';
+  const saveSchedule = createMutation(() => ({
+    mutationFn: (args: {
+      packageId: string;
+      runtimeInputs: Record<string, unknown>;
+      siteId?: string;
+      linkId?: string;
+    }) => {
+      const payload = {
+        siteId: args.siteId ?? null,
+        linkId: args.linkId ?? null,
+        runtimeInputs: args.runtimeInputs,
+        runInputState: {
+          siteModes,
+          skippedStepIndexes: [...skippedSteps],
+        },
+        scheduledLocalTime,
+        timeZone: scheduleTimeZone,
+      };
+      return scheduleId
+        ? trpc.packageRuns.updateSchedule.mutate({ id: scheduleId, ...payload })
+        : trpc.packageRuns.schedule.mutate({ packageId: args.packageId, ...payload });
+    },
+    onSuccess: () => {
+      onOpenChange(false);
+      toast.success(scheduleId ? 'Schedule updated' : 'Package scheduled');
+      onScheduled?.();
+    },
+    onError: (err) => toast.error(err.message ?? 'Unable to save schedule'),
+  }));
+
+  function passwordMode(field: RuntimeField): 'preserve' | 'generate' | 'custom' {
+    if (passwordModes[field.promptKey]) return passwordModes[field.promptKey];
+    // Do not quietly replace a previously approved password when a tech opens
+    // a scheduled run just to check its other inputs.
+    if (scheduleMode && !!scheduleId && values[field.promptKey] !== undefined) return 'preserve';
+    return 'generate';
   }
 
   function siteMode(field: RuntimeField): 'select' | 'create' {
@@ -428,6 +516,7 @@
   function coerce(field: RuntimeField, raw: string | boolean | string[] | undefined): unknown {
     if (field.typeHint === 'boolean') return Boolean(raw);
     if (field.typeHint === 'password') {
+      if (passwordMode(field) === 'preserve') return raw;
       if (passwordMode(field) === 'generate') return GENERATE_PASSWORD_SENTINEL;
       return typeof raw === 'string' ? raw : '';
     }
@@ -441,6 +530,7 @@
 
   function canSubmit(): boolean {
     if (!selectedPackage) return false;
+    if (scheduleMode && (!scheduledLocalTime || !scheduleTimeZone)) return false;
     if (needsSiteTarget && !effectiveSiteId) return false;
     for (const field of runtimeFields) {
       if (isBlockedByTenant(field) && field.required) return false;
@@ -452,6 +542,7 @@
         continue;
       }
       if (field.typeHint === 'password') {
+        if (passwordMode(field) === 'preserve') continue;
         if (passwordMode(field) === 'generate') continue;
         if (typeof raw !== 'string' || raw.length < 8) return false;
         continue;
@@ -480,13 +571,24 @@
     for (const field of runtimeFields) {
       runtimeInputs[field.promptKey] = coerce(field, values[field.promptKey]);
     }
-    start.mutate({
-      packageId: selectedPackage.id,
-      runtimeInputs,
-      siteId: effectiveSiteId,
-      startStepIndex,
-      skippedStepIndexes: [...skippedSteps],
-    });
+    if (scheduleMode) {
+      saveSchedule.mutate({
+        packageId: selectedPackage.id,
+        runtimeInputs,
+        siteId: effectiveSiteId,
+        // Integration-link runtime inputs are already part of the package
+        // form. Use that selected value as the run context when present.
+        linkId: cascadeLinkId,
+      });
+    } else {
+      start.mutate({
+        packageId: selectedPackage.id,
+        runtimeInputs,
+        siteId: effectiveSiteId,
+        startStepIndex,
+        skippedStepIndexes: [...skippedSteps],
+      });
+    }
   }
 
   const packageOptions = $derived(
@@ -495,6 +597,22 @@
       .map((p) => ({ value: p.id, label: p.name })),
   );
 
+  const TIME_ZONE_SHORTCUTS = [
+    { value: 'America/New_York', label: 'Eastern — New York (EST/EDT)' },
+    { value: 'America/Chicago', label: 'Central — Chicago (CST/CDT)' },
+    { value: 'America/Denver', label: 'Mountain — Denver (MST/MDT)' },
+    { value: 'America/Phoenix', label: 'Arizona — Phoenix (MST, no DST)' },
+    { value: 'America/Los_Angeles', label: 'Pacific — Los Angeles (PST/PDT)' },
+    { value: 'America/Anchorage', label: 'Alaska — Anchorage (AKST/AKDT)' },
+    { value: 'Pacific/Honolulu', label: 'Hawaii — Honolulu (HST)' },
+  ];
+  const scheduleTimeZoneOptions = $derived([
+    ...TIME_ZONE_SHORTCUTS,
+    ...Intl.supportedValuesOf('timeZone')
+      .filter((timeZone) => !TIME_ZONE_SHORTCUTS.some((shortcut) => shortcut.value === timeZone))
+      .map((timeZone) => ({ value: timeZone, label: timeZone })),
+  ]);
+
 </script>
 
 <Dialog.Root bind:open onOpenChange={onOpenChange}>
@@ -502,11 +620,22 @@
     class="sm:max-w-[600px] max-h-[85vh] overflow-hidden grid-rows-[auto_1fr_auto]"
   >
     <Dialog.Header>
-      <Dialog.Title>Run a package</Dialog.Title>
-      <Dialog.Description>Fill in the runtime inputs before this executes.</Dialog.Description>
+      <Dialog.Title>{scheduleMode ? (scheduleId ? 'Review scheduled run' : 'Schedule package') : 'Run a package'}</Dialog.Title>
+      <Dialog.Description>
+        {#if scheduleMode}
+          Set the exact answers this run will use. You can reopen it to review or change those answers until it dispatches.
+        {:else}
+          Fill in the runtime inputs before this executes.
+        {/if}
+      </Dialog.Description>
     </Dialog.Header>
 
     <div class="space-y-4 overflow-y-auto px-1 pb-2 pt-1">
+      {#if isDialogLoading}
+        <div class="flex min-h-64 items-center justify-center px-3 py-8">
+          <Loader size={32}>Loading package inputs…</Loader>
+        </div>
+      {:else}
       {#if !packageId}
         <section class="space-y-2 px-3">
           <Label class="text-xs uppercase tracking-wide text-muted-foreground">Package</Label>
@@ -520,6 +649,35 @@
       {/if}
 
       {#if selectedPackage}
+        {#if scheduleMode}
+          <section class="mx-3 rounded-lg border border-sky-500/25 bg-sky-500/[0.04] p-3 space-y-4">
+            <div>
+              <div class="text-sm font-medium">When</div>
+              <p class="mt-0.5 text-xs text-muted-foreground">
+                This snapshot runs once using the package inputs below. Edit it here any time before dispatch.
+              </p>
+            </div>
+            <div class="grid gap-4 sm:grid-cols-2">
+              <div class="grid gap-1.5">
+                <Label for="scheduled-local-time">Run date and time</Label>
+                <Input id="scheduled-local-time" type="datetime-local" bind:value={scheduledLocalTime} />
+              </div>
+              <div class="grid gap-1.5">
+                <Label>Time zone</Label>
+                <SingleSelect
+                  options={scheduleTimeZoneOptions}
+                  selected={scheduleTimeZone}
+                  placeholder="Choose a time zone"
+                  disableSort
+                  onchange={(value) => (scheduleTimeZone = value)}
+                />
+              </div>
+            </div>
+            <p class="text-[11px] text-muted-foreground">
+              Search EST, CST, MST, or PST. The saved IANA zone keeps daylight-saving time correct.
+            </p>
+          </section>
+        {/if}
         {#if needsSiteTarget && !siteId}
           <section class="rounded-lg border border-sky-500/25 bg-sky-500/[0.04] px-3 py-3 space-y-2">
             <Label class="text-sm font-medium">Target site<span class="text-rose-500 ml-0.5">*</span></Label>
@@ -683,9 +841,18 @@
                           <RadioGroup.Root
                             value={passwordMode(field)}
                             onValueChange={(v) =>
-                              (passwordModes[field.promptKey] = v as 'generate' | 'custom')}
+                              (passwordModes[field.promptKey] = v as 'preserve' | 'generate' | 'custom')}
                             class="gap-2"
                           >
+                            {#if scheduleMode && scheduleId && values[field.promptKey] !== undefined}
+                              <label class="flex items-start gap-2 text-sm cursor-pointer">
+                                <RadioGroup.Item value="preserve" class="mt-0.5" />
+                                <div class="flex flex-col gap-0.5">
+                                  <span>Keep the saved value</span>
+                                  <span class="text-xs text-muted-foreground">Leave this selected when reviewing other schedule details.</span>
+                                </div>
+                              </label>
+                            {/if}
                             <label class="flex items-start gap-2 text-sm cursor-pointer">
                               <RadioGroup.Item value="generate" class="mt-0.5" />
                               <div class="flex flex-col gap-0.5">
@@ -815,15 +982,23 @@
         {/if}
 
       {/if}
+      {/if}
     </div>
 
     <Dialog.Footer>
+      {#if scheduleMode && scheduleId && onRequestDeleteSchedule}
+        <Button variant="destructive" onclick={onRequestDeleteSchedule}>Delete schedule</Button>
+      {/if}
       <Button variant="ghost" onclick={() => onOpenChange(false)}>Cancel</Button>
       <Button
         onclick={submit}
-        disabled={!canSubmit() || start.isPending}
+        disabled={isDialogLoading || !canSubmit() || start.isPending || saveSchedule.isPending}
       >
-        {start.isPending ? 'Starting…' : 'Run'}
+        {#if scheduleMode}
+          {saveSchedule.isPending ? 'Saving…' : scheduleId ? 'Save changes' : 'Schedule run'}
+        {:else}
+          {start.isPending ? 'Starting…' : 'Run'}
+        {/if}
       </Button>
     </Dialog.Footer>
   </Dialog.Content>
