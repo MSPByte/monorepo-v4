@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt, lte } from "drizzle-orm";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
-import { packageRuns, packageSchedules } from "@mspbyte/drizzle";
+import { packageRuns, packageSchedules, users } from "@mspbyte/drizzle";
 import {
   enqueuePendingPackageRun,
   createPendingScheduledPackageRun,
@@ -125,6 +125,14 @@ async function dispatchDueSchedules(db: any, orgId: string): Promise<void> {
     if (!schedule) continue;
 
     try {
+      const [creator] = await db
+        .select({ name: users.name, email: users.email })
+        .from(users)
+        .where(eq(users.id, schedule.createdByUserId))
+        .limit(1);
+      const creatorLabel =
+        creator?.name || creator?.email || schedule.createdByUserId;
+
       const created = await createPendingScheduledPackageRun(db, {
         packageId: schedule.packageId,
         packageVersion: schedule.packageVersion,
@@ -139,7 +147,7 @@ async function dispatchDueSchedules(db: any, orgId: string): Promise<void> {
           timeZone: schedule.timeZone,
         },
         triggeredByUserId: schedule.createdByUserId,
-        triggerSourceLabel: `Scheduled package run · ${schedule.scheduledLocalTime} ${schedule.timeZone}`,
+        triggerSourceLabel: creatorLabel,
         runtimeInputs: schedule.runtimeInputs as Record<string, unknown>,
         billingSnapshot: schedule.billingSnapshot,
         scheduleId: schedule.id,

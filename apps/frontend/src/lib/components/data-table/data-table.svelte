@@ -122,6 +122,7 @@
   let data = $state<TData[]>([]);
   let total = $state(0);
   let loading = $state(false);
+  let initialLoading = $state(true);
   let actionRunning = $state(false);
   let activeAction = $state<RowAction<TData> | null>(null);
   let actionProgress = $state<string | null>(null);
@@ -186,6 +187,7 @@
       console.error('DataTable fetch error:', err);
     } finally {
       if (showLoadingState) loading = false;
+      initialLoading = false;
     }
   }
 
@@ -514,24 +516,26 @@
       showColumnToggle={enableColumnToggle}
       showExport={enableExport}
       onexport={enableExport ? handleExport : undefined}
+      {loading}
+      onrefresh={fetchData}
     />
   </div>
 
   <!-- Table -->
-  {#if loading}
+  {#if initialLoading}
     <Loader />
   {:else}
-    <FadeIn class="flex relative size-full flex-col rounded-md border overflow-hidden bg-card/10">
-      {#if signalStrip}
-        {@render signalStrip(stripApi)}
-      {/if}
-      <div
-        class={cn(
-          'flex w-full min-h-0 flex-1 transition-[filter,opacity]',
-          actionRunning ? 'pointer-events-none blur-[2px] opacity-60' : undefined
-        )}
-        aria-busy={actionRunning}
-      >
+  <FadeIn class="flex relative size-full flex-col rounded-md border overflow-hidden bg-card/10">
+    {#if signalStrip}
+      {@render signalStrip(stripApi)}
+    {/if}
+    <div
+      class={cn(
+        'flex w-full min-h-0 flex-1 transition-[filter,opacity]',
+        actionRunning ? 'pointer-events-none blur-[2px] opacity-60' : undefined
+      )}
+      aria-busy={actionRunning}
+    >
         <Table.Root>
           <Table.Header>
             <Table.Row>
@@ -637,7 +641,7 @@
           </Loader>
         </div>
       {/if}
-    </FadeIn>
+  </FadeIn>
   {/if}
 
   <!-- Bulk Actions -->

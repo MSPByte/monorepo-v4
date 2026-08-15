@@ -1,5 +1,6 @@
 <script lang="ts">
   import DownloadIcon from '@lucide/svelte/icons/download';
+  import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
   import { Button } from '$lib/components/ui/button';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
   import type { DataTableColumn, TableFilter, TableView } from './types';
@@ -26,6 +27,8 @@
     showColumnToggle?: boolean;
     showExport?: boolean;
     onexport?: (format: 'csv' | 'xlsx') => void;
+    loading?: boolean;
+    onrefresh?: () => void;
   }
 
   let {
@@ -45,25 +48,30 @@
     showColumnToggle = true,
     showExport = true,
     onexport,
+    loading = false,
+    onrefresh,
   }: Props = $props();
 </script>
 
 <div class="space-y-4">
   <!-- Top row: Search and Actions -->
   <div class="flex items-center justify-between gap-4">
-    <!-- Global Search -->
-    {#if onglobalsearchchange}
-      <div class="flex-1 max-w-sm">
+    <!-- Global Search + Refresh -->
+    <div class="flex items-center gap-2 flex-1 max-w-sm">
+      {#if onglobalsearchchange}
         <SearchBar
           value={globalSearch}
           placeholder="Search..."
           delay={800}
           onchange={onglobalsearchchange}
         />
-      </div>
-    {:else}
-      <div></div>
-    {/if}
+      {/if}
+      {#if onrefresh}
+        <Button variant="ghost" size="icon" class="h-8 w-8 shrink-0" onclick={onrefresh} disabled={loading}>
+          <RefreshCwIcon class="h-4 w-4 {loading ? 'animate-spin' : ''}" />
+        </Button>
+      {/if}
+    </div>
 
     <!-- Actions -->
     <div class="flex items-center gap-2">
