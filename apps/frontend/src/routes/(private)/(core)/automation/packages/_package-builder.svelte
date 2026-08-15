@@ -8,7 +8,8 @@
         entityType: string;
         contextKey?: string;
       }
-    | { kind: 'priorOutput'; stepPosition: number; path: string }
+    | { kind: 'priorOutput'; stepPosition: number; path: string; lane?: 'main' | 'onSuccess' | 'onFailure' }
+    | { kind: 'failureContext'; path: 'runId' | 'status' | 'siteId' | 'stepPosition' | 'capabilityId' | 'capabilityName' | 'errorClass' | 'message' }
     | { kind: 'generated'; generator: string; params: Record<string, unknown> }
     | { kind: 'siteFact'; key: string; required: boolean };
 
@@ -89,7 +90,7 @@
   } from '@lucide/svelte';
 
   type EntityType = 'integration_link' | 'm365_identity' | 'm365_group' | 'm365_license' | 'm365_role';
-  type Source = 'fixed' | 'runtime' | 'row' | 'wire' | 'generated' | 'fact';
+  type Source = 'fixed' | 'runtime' | 'row' | 'wire' | 'failure' | 'generated' | 'fact';
 
   type Props = {
     initial: PackageDraft;
@@ -199,6 +200,8 @@
   // Selection defaults to the first step when the package loads; -1 = meta (details).
   let selectedIndex = $state<number>(initial.steps.length > 0 ? 0 : -1);
   let capabilityPickerOpen = $state(false);
+  let capabilityPickerTarget = $state<'main' | 'onSuccess' | 'onFailure'>('main');
+  let reactionEditor = $state<{ lane: 'onSuccess' | 'onFailure'; index: number } | null>(null);
   let capabilitySearch = $state('');
   let vendorFilters = $state<string[]>([]);
   let categoryFilters = $state<string[]>([]);
@@ -240,6 +243,7 @@
     if (binding.kind === 'literal') return 'fixed';
     if (binding.kind === 'runtime') return 'runtime';
     if (binding.kind === 'priorOutput') return 'wire';
+    if (binding.kind === 'failureContext') return 'failure';
     if (binding.kind === 'generated') return 'generated';
     if (binding.kind === 'siteFact') return 'fact';
     // entity kind:
@@ -249,7 +253,7 @@
   function allowedSourcesFor(meta: {
     allowedBindings: readonly string[];
     typeHint?: string;
-  }): Source[] {
+  }, allowFailureContext = false): Source[] {
     const set = new Set(meta.allowedBindings);
     const out: Source[] = [];
     if (set.has('literal')) out.push('fixed');
@@ -257,6 +261,7 @@
     // Row-trigger execution is not implemented by the worker yet. Do not
     // advertise a source authors cannot successfully run.
     if (set.has('priorOutput')) out.push('wire');
+    if (allowFailureContext && set.has('failureContext')) out.push('failure');
     // Only show `generated` if a registered generator applies to this typeHint,
     // otherwise it's dead UI.
     if (set.has('generated') && generatorFor(meta.typeHint)) out.push('generated');
@@ -310,6 +315,7 @@
     if (source === 'fact') {
       return { kind: 'siteFact', key: '', required: true };
     }
+    if (source === 'failure') return { kind: 'failureContext', path: 'message' };
     return { kind: 'priorOutput', stepPosition: 0, path: '' };
   }
 
@@ -333,38 +339,224 @@
     return defaultBindingFor(preferred, inputName, meta);
   }
 
-  function promptFor(inputName: string, meta: { label?: string; description?: string; required?: boolean }) {
+  function failurePromptKey(inputName: string): string {
+    return `onFailure.${inputName}`;
+  }
+
+  function promptFor(
+    promptKey: string,
+    inputName: string,
+    meta: { label?: string; description?: string; required?: boolean },
+    lane: 'main' | 'onSuccess' | 'onFailure' = 'main',
+  ) {
     return {
-      id: inputName,
+      id: promptKey,
       label: fieldLabel(inputName, meta.label),
       description: meta.description,
       required: meta.required !== false,
-      section: 'Run details',
+      section: lane === 'onFailure' ? 'On failure' : 'Run details',
       order: draft.prompts.length,
     } satisfies PackagePrompt;
   }
 
-  function ensurePrompt(inputName: string, meta: { label?: string; description?: string; required?: boolean }) {
-    if (draft.prompts.some((prompt) => prompt.id === inputName)) return;
-    draft.prompts = [...draft.prompts, promptFor(inputName, meta)];
+  function ensurePrompt(
+    promptKey: string,
+    inputName: string,
+    meta: { label?: string; description?: string; required?: boolean },
+    lane: 'main' | 'onSuccess' | 'onFailure' = 'main',
+  ) {
+    if (draft.prompts.some((prompt) => prompt.id === promptKey)) return;
+    draft.prompts = [...draft.prompts, promptFor(promptKey, inputName, meta, lane)];
   }
 
-  function addStep(capabilityId: string) {
-    if (!capabilityId) return;
+  function runtimeBindingForLane(
+    binding: Binding,
+    inputName: string,
+    meta: { label?: string; description?: string; required?: boolean },
+    lane: 'main' | 'onSuccess' | 'onFailure',
+  ): Binding {
+    if (binding.kind !== 'runtime') return binding;
+    const promptKey = lane === 'onFailure' ? failurePromptKey(inputName) : inputName;
+    ensurePrompt(promptKey, inputName, meta, lane);
+    return { ...binding, promptKey };
+  }
+
+  function activePromptIds(): Set<string> {
+    const ids = new Set<string>();
+    const allSteps = [
+      ...draft.steps,
+      ...draft.outcomeSteps.onSuccess,
+      ...draft.outcomeSteps.onFailure,
+    ];
+    for (const step of allSteps) {
+      for (const binding of Object.values(step.inputBindings)) {
+        if (binding.kind === 'runtime') ids.add(binding.promptKey);
+      }
+    }
+    return ids;
+  }
+
+  function promptIdsForSteps(steps: Step[]): Set<string> {
+    const ids = new Set<string>();
+    for (const step of steps) {
+      for (const binding of Object.values(step.inputBindings)) {
+        if (binding.kind === 'runtime') ids.add(binding.promptKey);
+      }
+    }
+    return ids;
+  }
+
+  function pruneUnusedPrompts() {
+    const active = activePromptIds();
+    draft.prompts = draft.prompts.filter((prompt) => active.has(prompt.id));
+  }
+
+  function buildStep(capabilityId: string, lane: 'main' | 'onSuccess' | 'onFailure' = 'main'): Step | null {
+    if (!capabilityId) return null;
     const cap = capIndex.get(capabilityId);
-    if (!cap) return;
+    if (!cap) return null;
     const inputBindings: Record<string, Binding> = {};
     for (const [name, meta] of Object.entries(cap.inputMeta)) {
       if (!isRequiredInput(meta)) continue;
-      inputBindings[name] = defaultForInput(name, meta);
-      if (inputBindings[name]?.kind === 'runtime') ensurePrompt(name, meta);
+      inputBindings[name] = runtimeBindingForLane(defaultForInput(name, meta), name, meta, lane);
     }
-    const nextIndex = draft.steps.length;
-    draft.steps = [...draft.steps, { capabilityId: cap.id, label: cap.name, optional: false, inputBindings }];
-    selectedIndex = nextIndex;
+    return { capabilityId: cap.id, label: cap.name, optional: false, inputBindings };
+  }
+
+  function addStep(capabilityId: string) {
+    const step = buildStep(capabilityId, capabilityPickerTarget);
+    if (!step) return;
+    if (capabilityPickerTarget === 'main') {
+      const nextIndex = draft.steps.length;
+      draft.steps = [...draft.steps, step];
+      selectedIndex = nextIndex;
+    } else {
+      draft.outcomeSteps = {
+        ...draft.outcomeSteps,
+        [capabilityPickerTarget]: [...draft.outcomeSteps[capabilityPickerTarget], step],
+      };
+    }
     capabilityPickerOpen = false;
     capabilitySearch = '';
   }
+
+  function openCapabilityPicker(target: 'main' | 'onSuccess' | 'onFailure' = 'main') {
+    capabilityPickerTarget = target;
+    capabilityPickerOpen = true;
+  }
+
+  function removeOutcomeStep(lane: 'onSuccess' | 'onFailure', index: number) {
+    draft.outcomeSteps = {
+      ...draft.outcomeSteps,
+      [lane]: draft.outcomeSteps[lane].filter((_, position) => position !== index),
+    };
+    pruneUnusedPrompts();
+  }
+
+  function reactionStep(editor = reactionEditor): Step | null {
+    if (!editor) return null;
+    return draft.outcomeSteps[editor.lane][editor.index] ?? null;
+  }
+
+  function setReactionBinding(inputName: string, binding: Binding) {
+    if (!reactionEditor) return;
+    const { lane, index } = reactionEditor;
+    const reaction = draft.outcomeSteps[lane][index];
+    if (!reaction) return;
+    draft.outcomeSteps = {
+      ...draft.outcomeSteps,
+      [lane]: draft.outcomeSteps[lane].map((step, position) =>
+        position === index ? { ...step, inputBindings: { ...step.inputBindings, [inputName]: binding } } : step,
+      ),
+    };
+  }
+
+  function changeReactionSource(inputName: string, source: Source) {
+    const reaction = reactionStep();
+    if (!reaction) return;
+    const cap = capIndex.get(reaction.capabilityId);
+    const meta = cap?.inputMeta[inputName];
+    if (!meta) return;
+    const binding = runtimeBindingForLane(
+      defaultBindingFor(source, inputName, meta),
+      inputName,
+      meta,
+      reactionEditor?.lane ?? 'onSuccess',
+    );
+    setReactionBinding(inputName, binding);
+    pruneUnusedPrompts();
+  }
+
+  function addOptionalReactionInput(inputName: string) {
+    const reaction = reactionStep();
+    if (!reaction) return;
+    const cap = capIndex.get(reaction.capabilityId);
+    const meta = cap?.inputMeta[inputName];
+    if (!meta) return;
+    const binding = runtimeBindingForLane(
+      defaultForInput(inputName, meta),
+      inputName,
+      meta,
+      reactionEditor?.lane ?? 'onSuccess',
+    );
+    setReactionBinding(inputName, binding);
+  }
+
+  function removeOptionalReactionInput(inputName: string) {
+    if (!reactionEditor) return;
+    const { lane, index } = reactionEditor;
+    const reaction = draft.outcomeSteps[lane][index];
+    if (!reaction) return;
+    const nextBindings = { ...reaction.inputBindings };
+    delete nextBindings[inputName];
+    draft.outcomeSteps = {
+      ...draft.outcomeSteps,
+      [lane]: draft.outcomeSteps[lane].map((step, position) =>
+        position === index ? { ...step, inputBindings: nextBindings } : step,
+      ),
+    };
+    pruneUnusedPrompts();
+  }
+
+  type ReactionWireBinding = Extract<Binding, { kind: 'priorOutput' }>;
+
+  function reactionWireSteps() {
+    if (!reactionEditor) return [] as Array<{ value: string; label: string; lane: 'main' | 'onSuccess' | 'onFailure'; position: number; step: Step }>;
+    const ownLane = reactionEditor.lane;
+    const main = ownLane === 'onFailure' ? [] : draft.steps.map((step, position) => ({
+      value: `main:${position}`,
+      label: `Main · Step ${String(position + 1).padStart(2, '0')}: ${step.label ?? capIndex.get(step.capabilityId)?.name ?? step.capabilityId}`,
+      lane: 'main' as const,
+      position,
+      step,
+    }));
+    const earlierReactions = draft.outcomeSteps[ownLane]
+      .slice(0, reactionEditor.index)
+      .map((step, position) => ({
+        value: `${ownLane}:${position}`,
+        label: `${ownLane === 'onSuccess' ? 'On success' : 'On failure'} · Step ${String(position + 1).padStart(2, '0')}: ${step.label ?? capIndex.get(step.capabilityId)?.name ?? step.capabilityId}`,
+        lane: ownLane,
+        position,
+        step,
+      }));
+    return [...main, ...earlierReactions];
+  }
+
+  function reactionWireOutputs(binding: ReactionWireBinding, inputMeta: { priorOutputCompat?: readonly string[] }) {
+    const sourceLane = binding.lane ?? 'main';
+    const source = reactionWireSteps().find(
+      (candidate) => candidate.lane === sourceLane && candidate.position === binding.stepPosition,
+    );
+    const cap = source ? capIndex.get(source.step.capabilityId) : undefined;
+    if (!cap) return [];
+    return Object.entries(cap.outputMeta)
+      .filter(([, meta]) => {
+        if (!inputMeta.priorOutputCompat || inputMeta.priorOutputCompat.length === 0) return true;
+        return !!meta.outputType && inputMeta.priorOutputCompat.includes(meta.outputType);
+      })
+      .map(([value, meta]) => ({ value, label: fieldLabel(value, meta.label) }));
+  }
+
 
   function setStepOptional(index: number, value: boolean) {
     draft.steps[index]!.optional = value;
@@ -397,7 +589,7 @@
     const meta = cap?.inputMeta[inputName];
     if (!meta) return;
     step.inputBindings[inputName] = defaultForInput(inputName, meta);
-    if (step.inputBindings[inputName]?.kind === 'runtime') ensurePrompt(inputName, meta);
+    if (step.inputBindings[inputName]?.kind === 'runtime') ensurePrompt(inputName, inputName, meta);
     draft.steps = [...draft.steps];
   }
 
@@ -405,6 +597,7 @@
     const step = draft.steps[stepIndex]!;
     delete step.inputBindings[inputName];
     draft.steps = [...draft.steps];
+    pruneUnusedPrompts();
   }
 
   function removeStep(index: number) {
@@ -424,6 +617,7 @@
     }
     draft.steps = filtered;
     if (selectedIndex >= filtered.length) selectedIndex = filtered.length - 1;
+    pruneUnusedPrompts();
   }
 
   function moveStep(index: number, direction: -1 | 1) {
@@ -442,8 +636,9 @@
     const meta = cap?.inputMeta[inputName];
     if (!meta) return;
     step.inputBindings[inputName] = defaultBindingFor(source, inputName, meta);
-    if (step.inputBindings[inputName]?.kind === 'runtime') ensurePrompt(inputName, meta);
+    if (step.inputBindings[inputName]?.kind === 'runtime') ensurePrompt(inputName, inputName, meta);
     draft.steps = [...draft.steps];
+    pruneUnusedPrompts();
   }
 
   function setBinding(stepIndex: number, inputName: string, binding: Binding) {
@@ -518,6 +713,7 @@
     if (source === 'row') return 'From triggering row';
     if (source === 'generated') return 'Generate';
     if (source === 'fact') return 'From site fact';
+    if (source === 'failure') return 'From failure';
     return 'Wire from step';
   }
 
@@ -535,6 +731,7 @@
     if (source === 'generated') return 'Produced by a generator at run time.';
     if (source === 'fact')
       return "Reads a value from the run's site profile facts — needs a site selected at run time.";
+    if (source === 'failure') return 'Reads the dependable error context created when the main package fails.';
     return 'Reads a specific output from an earlier step in this package.';
   }
 
@@ -544,6 +741,7 @@
     if (source === 'row') return 'text-violet-600 dark:text-violet-400';
     if (source === 'generated') return 'text-emerald-600 dark:text-emerald-400';
     if (source === 'fact') return 'text-fuchsia-600 dark:text-fuchsia-400';
+    if (source === 'failure') return 'text-rose-600 dark:text-rose-400';
     return 'text-cyan-600 dark:text-cyan-400';
   }
 
@@ -553,7 +751,37 @@
     if (source === 'row') return 'border-l-violet-500/70';
     if (source === 'generated') return 'border-l-emerald-500/70';
     if (source === 'fact') return 'border-l-fuchsia-500/70';
+    if (source === 'failure') return 'border-l-rose-500/70';
     return 'border-l-cyan-500/70';
+  }
+
+  // This is intentionally a presentation layer over the existing capability
+  // metadata. The upcoming shared type-registry work will own these labels
+  // across packages, site facts, and compliance policies; authors should not
+  // have to wait for that larger migration to see the shape of a field today.
+  function inputTypeLabel(meta: { entityType?: string; typeHint?: string }): string {
+    const entityLabels: Record<string, string> = {
+      integration_link: 'Integration link',
+      m365_identity: 'Microsoft 365 identity',
+      m365_group: 'Microsoft 365 group',
+      m365_license: 'Microsoft 365 license',
+      m365_role: 'Microsoft 365 role',
+      site: 'MSPByte site',
+    };
+    if (meta.entityType) return entityLabels[meta.entityType] ?? meta.entityType.replace(/[_-]+/g, ' ');
+    const labels: Record<string, string> = {
+      boolean: 'Boolean',
+      number: 'Number',
+      stringArray: 'Text list',
+      password: 'Secret text',
+      upn: 'User principal name',
+      postalCode: 'Postal code',
+      city: 'City',
+      countryCode: 'Country code',
+      state: 'State / region',
+      text: 'Text',
+    };
+    return labels[meta.typeHint ?? 'text'] ?? 'Text';
   }
 
   function inputGroupFor(
@@ -575,12 +803,18 @@
     if (!draft.name.trim()) return false;
     if (draft.steps.length === 0) return false;
     if (draft.prompts.some((prompt) => !prompt.id.trim() || !prompt.label.trim())) return false;
-    for (const step of draft.steps) {
+    const allSteps = [
+      ...draft.steps,
+      ...draft.outcomeSteps.onSuccess,
+      ...draft.outcomeSteps.onFailure,
+    ];
+    for (const step of allSteps) {
       const cap = capIndex.get(step.capabilityId);
       if (!cap) return false;
       for (const [name, binding] of Object.entries(step.inputBindings)) {
         if (binding.kind === 'runtime' && !binding.promptKey.trim()) return false;
         if (binding.kind === 'priorOutput' && !binding.path.trim()) return false;
+        if (binding.kind === 'failureContext' && !binding.path.trim()) return false;
         if (binding.kind === 'literal') {
           const meta = cap.inputMeta[name];
           if (!meta) return false;
@@ -597,7 +831,22 @@
   const selectedStep = $derived(selectedIndex >= 0 ? (draft.steps[selectedIndex] ?? null) : null);
   const selectedCap = $derived(selectedStep ? capIndex.get(selectedStep.capabilityId) : undefined);
   const publishedPrompts = $derived(
-    [...draft.prompts].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label))
+    draft.prompts
+      .filter((prompt) => activePromptIds().has(prompt.id))
+      .sort((a, b) => a.order - b.order || a.label.localeCompare(b.label))
+  );
+  const normalPromptIds = $derived(
+    new Set([
+      ...promptIdsForSteps(draft.steps),
+      ...promptIdsForSteps(draft.outcomeSteps.onSuccess),
+    ]),
+  );
+  const failurePromptIds = $derived(promptIdsForSteps(draft.outcomeSteps.onFailure));
+  const normalPublishedPrompts = $derived(
+    publishedPrompts.filter((prompt) => normalPromptIds.has(prompt.id) && !failurePromptIds.has(prompt.id)),
+  );
+  const failurePublishedPrompts = $derived(
+    publishedPrompts.filter((prompt) => failurePromptIds.has(prompt.id)),
   );
 
   function updatePrompt(id: string, patch: Partial<PackagePrompt>) {
@@ -606,7 +855,7 @@
 
   function setPromptRequired(id: string, required: boolean) {
     updatePrompt(id, { required });
-    draft.steps = draft.steps.map((step) => ({
+    const applyRequired = (steps: Step[]) => steps.map((step) => ({
       ...step,
       inputBindings: Object.fromEntries(
         Object.entries(step.inputBindings).map(([name, binding]) => [
@@ -615,6 +864,11 @@
         ])
       ),
     }));
+    draft.steps = applyRequired(draft.steps);
+    draft.outcomeSteps = {
+      onSuccess: applyRequired(draft.outcomeSteps.onSuccess),
+      onFailure: applyRequired(draft.outcomeSteps.onFailure),
+    };
   }
 
   // Inspector: prompt-key hint. When the promptKey differs from the input
@@ -661,7 +915,10 @@
             <Select.Item value="archived">Archived</Select.Item>
           </Select.Content>
         </Select.Root>
-        <Button onclick={() => onSave(draft)} disabled={!canSave() || saving}>
+        <Button
+          onclick={() => onSave({ ...draft, prompts: publishedPrompts })}
+          disabled={!canSave() || saving}
+        >
           {saving ? 'Saving…' : 'Save'}
         </Button>
       </div>
@@ -818,7 +1075,7 @@
           <Button
             variant="outline"
             class="h-auto w-full items-center justify-between gap-3 overflow-hidden px-3 py-3 text-left"
-            onclick={() => (capabilityPickerOpen = true)}
+            onclick={() => openCapabilityPicker()}
           >
             <span class="min-w-0 flex-1">
               <span class="block truncate text-sm font-medium text-foreground">
@@ -949,16 +1206,16 @@
                 </p>
               </div>
               <span class="font-mono text-[11px] text-muted-foreground">
-                {publishedPrompts.length} {publishedPrompts.length === 1 ? 'prompt' : 'prompts'}
+                {normalPublishedPrompts.length} {normalPublishedPrompts.length === 1 ? 'prompt' : 'prompts'}
               </span>
             </div>
-            {#if publishedPrompts.length === 0}
+            {#if normalPublishedPrompts.length === 0}
               <p class="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
                 This package runs with its preset values. Add a capability input as “Ask when run” to publish a question.
               </p>
             {:else}
               <div class="space-y-2">
-                {#each publishedPrompts as prompt (prompt.id)}
+                {#each normalPublishedPrompts as prompt (prompt.id)}
                   <div class="grid gap-2 rounded-md border bg-background p-3 sm:grid-cols-[1fr_auto] sm:items-start">
                     <div class="min-w-0 space-y-1">
                       <Input
@@ -986,6 +1243,112 @@
                 {/each}
               </div>
             {/if}
+          </div>
+
+          {#if draft.outcomeSteps.onFailure.length > 0}
+            <div class="space-y-3 rounded-lg border border-rose-500/30 bg-rose-500/5 p-4">
+              <div class="flex items-baseline justify-between gap-3">
+                <div>
+                  <h3 class="text-sm font-medium">On failure run experience</h3>
+                  <p class="mt-0.5 text-xs text-muted-foreground">
+                    These questions are only used if this package reaches its failure lane. They stay separate from normal-run inputs.
+                  </p>
+                </div>
+                <span class="font-mono text-[11px] text-muted-foreground">
+                  {failurePublishedPrompts.length} {failurePublishedPrompts.length === 1 ? 'prompt' : 'prompts'}
+                </span>
+              </div>
+              {#if failurePublishedPrompts.length === 0}
+                <p class="rounded-md border border-dashed border-rose-500/30 px-3 py-2 text-xs text-muted-foreground">
+                  This failure lane uses preset values and site facts only.
+                </p>
+              {:else}
+                <div class="space-y-2">
+                  {#each failurePublishedPrompts as prompt (prompt.id)}
+                    <div class="grid gap-2 rounded-md border bg-background p-3 sm:grid-cols-[1fr_auto] sm:items-start">
+                      <div class="min-w-0 space-y-1">
+                        <Input
+                          value={prompt.label}
+                          aria-label={`Failure prompt label for ${prompt.id}`}
+                          oninput={(event) => updatePrompt(prompt.id, { label: (event.target as HTMLInputElement).value })}
+                          class="h-8 text-sm font-medium"
+                        />
+                        <Input
+                          value={prompt.description ?? ''}
+                          placeholder="Help the operator understand this failure input"
+                          aria-label={`Failure prompt help for ${prompt.id}`}
+                          oninput={(event) => updatePrompt(prompt.id, { description: (event.target as HTMLInputElement).value })}
+                          class="h-8 text-xs"
+                        />
+                      </div>
+                      <label class="flex items-center gap-2 whitespace-nowrap pt-1 text-xs text-muted-foreground">
+                        <Checkbox
+                          checked={prompt.required}
+                          onCheckedChange={(checked) => setPromptRequired(prompt.id, Boolean(checked))}
+                        />
+                        Required
+                      </label>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
+
+          <div class="space-y-3 rounded-lg border p-4">
+            <div>
+              <h3 class="text-sm font-medium">After the package finishes</h3>
+              <p class="mt-0.5 text-xs text-muted-foreground">
+                Add one-way reactions for completion or failure. These run after the main path and cannot branch back into it.
+              </p>
+            </div>
+            <div class="grid gap-3 lg:grid-cols-2">
+              {#each [
+                { id: 'onSuccess' as const, title: 'On success', description: 'Run only when every main step completes.', tone: 'border-emerald-500/30 bg-emerald-500/5' },
+                { id: 'onFailure' as const, title: 'On failure', description: 'Run after a halted or partial package.', tone: 'border-rose-500/30 bg-rose-500/5' },
+              ] as lane}
+                <section class="rounded-md border p-3 {lane.tone}">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <h4 class="text-sm font-medium">{lane.title}</h4>
+                      <p class="mt-0.5 text-xs text-muted-foreground">{lane.description}</p>
+                    </div>
+                    <Button variant="outline" size="sm" class="h-7 gap-1 px-2 text-xs" onclick={() => openCapabilityPicker(lane.id)}>
+                      <Plus class="size-3" /> Add reaction
+                    </Button>
+                  </div>
+                  {#if draft.outcomeSteps[lane.id].length === 0}
+                    <p class="mt-3 border-t border-current/10 pt-3 text-xs text-muted-foreground">No reaction configured.</p>
+                  {:else}
+                    <ol class="mt-3 space-y-1.5 border-t border-current/10 pt-3">
+                      {#each draft.outcomeSteps[lane.id] as reaction, reactionIndex (reactionIndex)}
+                        {@const reactionCap = capIndex.get(reaction.capabilityId)}
+                        <li class="flex items-center gap-2 rounded border bg-background/80 px-2.5 py-2 text-xs">
+                          <span class="font-mono text-muted-foreground">{String(reactionIndex + 1).padStart(2, '0')}</span>
+                          <button
+                            type="button"
+                            class="min-w-0 flex-1 truncate text-left font-medium transition-colors hover:text-primary"
+                            onclick={() => (reactionEditor = { lane: lane.id, index: reactionIndex })}
+                          >
+                            {reactionCap?.name ?? reaction.capabilityId}
+                          </button>
+                          <button
+                            type="button"
+                            class="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            onclick={() => (reactionEditor = { lane: lane.id, index: reactionIndex })}
+                          >
+                            Configure
+                          </button>
+                          <button type="button" class="text-muted-foreground hover:text-rose-500" onclick={() => removeOutcomeStep(lane.id, reactionIndex)} aria-label={`Remove ${reactionCap?.name ?? reaction.capabilityId}`}>
+                            <Trash2 class="size-3.5" />
+                          </button>
+                        </li>
+                      {/each}
+                    </ol>
+                  {/if}
+                </section>
+              {/each}
+            </div>
           </div>
 
           {#if draft.steps.length === 0}
@@ -1118,6 +1481,12 @@
                     <div class="min-w-0 space-y-0.5">
                       <div class="flex flex-wrap items-center gap-2">
                         <span class="text-sm font-medium">{label}</span>
+                        <span
+                          class="rounded-sm border bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                          title="Field type"
+                        >
+                          {inputTypeLabel(meta)}
+                        </span>
                         {#if !optional}
                           <span
                             class="text-[10px] font-semibold uppercase tracking-wider text-rose-600 dark:text-rose-500"
@@ -1139,11 +1508,6 @@
                       </div>
                       {#if meta.description}
                         <p class="text-xs text-muted-foreground">{meta.description}</p>
-                      {/if}
-                      {#if meta.entityType}
-                        <p class="pt-0.5 font-mono text-[10px] text-muted-foreground/70">
-                          entity: {meta.entityType}
-                        </p>
                       {/if}
                     </div>
                     {#if optional}
@@ -1649,9 +2013,17 @@
     class="flex h-[min(88vh,820px)] w-[min(96vw,1320px)] max-w-[min(96vw,1320px)] flex-col overflow-hidden p-0 sm:max-w-[min(96vw,1320px)]"
   >
     <Dialog.Header class="border-b bg-muted/20 px-6 py-5">
-      <Dialog.Title class="text-xl font-semibold tracking-tight">Add capability</Dialog.Title>
+      <Dialog.Title class="text-xl font-semibold tracking-tight">
+        {capabilityPickerTarget === 'main'
+          ? 'Add capability'
+          : capabilityPickerTarget === 'onSuccess'
+            ? 'Add success reaction'
+            : 'Add failure reaction'}
+      </Dialog.Title>
       <Dialog.Description>
-        Search the catalog, narrow the list, then insert the next step.
+        {capabilityPickerTarget === 'main'
+          ? 'Search the catalog, narrow the list, then insert the next step.'
+          : 'Choose the next one-way reaction for this terminal lane.'}
       </Dialog.Description>
     </Dialog.Header>
 
@@ -1854,5 +2226,201 @@
         </ScrollArea.Root>
       </div>
     </div>
+  </Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root
+  open={!!reactionEditor}
+  onOpenChange={(open) => {
+    if (!open) reactionEditor = null;
+  }}
+>
+  <Dialog.Content class="max-h-[85vh] overflow-y-auto sm:max-w-[680px]">
+    {#if reactionEditor && reactionStep()}
+      {@const reaction = reactionStep()!}
+      {@const reactionCap = capIndex.get(reaction.capabilityId)}
+      {#if reactionCap}
+        {@const availableOptionalInputs = Object.entries(reactionCap.inputMeta)
+          .filter(([name, meta]) => meta.required === false && !(name in reaction.inputBindings))
+          .map(([name, meta]) => ({ value: name, label: fieldLabel(name, meta.label) }))}
+        <Dialog.Header>
+          <Dialog.Title>Configure {reactionCap.name}</Dialog.Title>
+          <Dialog.Description>
+            This reaction runs only {reactionEditor.lane === 'onSuccess' ? 'after a successful package' : 'after a halted or partial package'}.
+          </Dialog.Description>
+        </Dialog.Header>
+        <div class="space-y-4 py-3">
+          {#each Object.keys(reaction.inputBindings).sort((a, b) => {
+            const aGroup = inputGroupFor(reactionCap, a);
+            const bGroup = inputGroupFor(reactionCap, b);
+            return aGroup.order - bGroup.order || aGroup.inputOrder - bGroup.inputOrder;
+          }) as inputName (inputName)}
+            {@const meta = reactionCap.inputMeta[inputName]}
+            {@const binding = reaction.inputBindings[inputName]}
+            {#if meta && binding}
+              {@const source = sourceOf(binding)}
+              {@const reactionSources = allowedSourcesFor(meta, reactionEditor?.lane === 'onFailure').filter(
+                (candidate) => candidate !== 'wire' || reactionWireSteps().length > 0,
+              )}
+              <section class="rounded-lg border bg-card">
+                <div class="flex items-start justify-between gap-3 border-b px-4 py-3">
+                  <div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <h3 class="text-sm font-medium">{fieldLabel(inputName, meta.label)}</h3>
+                      <span class="rounded-sm border bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                        {inputTypeLabel(meta)}
+                      </span>
+                    </div>
+                    {#if meta.description}<p class="mt-0.5 text-xs text-muted-foreground">{meta.description}</p>{/if}
+                  </div>
+                  <span class="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {meta.required === false ? 'Optional' : 'Required'}
+                  </span>
+                  {#if meta.required === false}
+                    <button
+                      type="button"
+                      class="text-muted-foreground transition-colors hover:text-rose-500"
+                      onclick={() => removeOptionalReactionInput(inputName)}
+                      aria-label={`Remove ${fieldLabel(inputName, meta.label)}`}
+                    >
+                      <Trash2 class="size-3.5" />
+                    </button>
+                  {/if}
+                </div>
+                <div class="space-y-3 p-4">
+                  <SingleSelect
+                    options={reactionSources.map((value) => ({ value, label: sourceLabel(value) }))}
+                    selected={source}
+                    disableSort
+                    onchange={(value) => changeReactionSource(inputName, value as Source)}
+                  />
+
+                  {#if binding.kind === 'literal'}
+                    {#if meta.entityType}
+                      <EntityPicker
+                        entityType={meta.entityType as EntityType}
+                        multiple={meta.typeHint === 'stringArray'}
+                        value={binding.value as string | string[] | null}
+                        onValueChange={(value) => setReactionBinding(inputName, { kind: 'literal', value })}
+                      />
+                    {:else if meta.typeHint === 'boolean'}
+                      <label class="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={Boolean(binding.value)}
+                          onCheckedChange={(checked) => setReactionBinding(inputName, { kind: 'literal', value: Boolean(checked) })}
+                        />
+                        <span>{binding.value ? 'Yes' : 'No'}</span>
+                      </label>
+                    {:else if meta.choices && meta.choices.length > 0}
+                      <SingleSelect
+                        options={meta.choices as { value: string; label: string }[]}
+                        selected={typeof binding.value === 'string' ? binding.value : ''}
+                        onchange={(value) => setReactionBinding(inputName, { kind: 'literal', value })}
+                      />
+                    {:else if meta.typeHint === 'stringArray'}
+                      <Input
+                        placeholder="Comma-separated values"
+                        value={Array.isArray(binding.value) ? binding.value.join(', ') : ''}
+                        oninput={(event) => setReactionBinding(inputName, {
+                          kind: 'literal',
+                          value: (event.target as HTMLInputElement).value.split(',').map((value) => value.trim()).filter(Boolean),
+                        })}
+                      />
+                    {:else}
+                      <Input
+                        type={meta.sensitive ? 'password' : 'text'}
+                        value={typeof binding.value === 'string' || typeof binding.value === 'number' ? String(binding.value) : ''}
+                        oninput={(event) => setReactionBinding(inputName, { kind: 'literal', value: (event.target as HTMLInputElement).value })}
+                      />
+                    {/if}
+                  {:else if binding.kind === 'runtime'}
+                    <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                      The operator will answer this before the package starts. Edit its wording and required state in Run experience.
+                    </div>
+                  {:else if binding.kind === 'siteFact'}
+                    <SingleSelect
+                      options={factFieldsFor(meta.typeHint).map((field) => ({ value: field.key, label: field.label, subLabel: field.section }))}
+                      selected={binding.key}
+                      placeholder="Choose a site profile field…"
+                      onchange={(key) => setReactionBinding(inputName, { ...binding, key })}
+                    />
+                  {:else if binding.kind === 'failureContext'}
+                    <SingleSelect
+                      options={[
+                        { value: 'message', label: 'Error message' },
+                        { value: 'capabilityName', label: 'Failed capability' },
+                        { value: 'errorClass', label: 'Error class' },
+                        { value: 'stepPosition', label: 'Failed step number' },
+                        { value: 'status', label: 'Run status' },
+                        { value: 'runId', label: 'Run ID' },
+                        { value: 'siteId', label: 'Site ID' },
+                      ]}
+                      selected={binding.path}
+                      disableSort
+                      onchange={(path) => setReactionBinding(inputName, { ...binding, path: path as typeof binding.path })}
+                    />
+                  {:else if binding.kind === 'generated'}
+                    <p class="text-xs text-muted-foreground">{sourceHint('generated', meta)}</p>
+                  {:else if binding.kind === 'priorOutput'}
+                    {@const wireSteps = reactionWireSteps()}
+                    {@const sourceLane = binding.lane ?? 'main'}
+                    {@const selectedWireStep = `${sourceLane}:${binding.stepPosition}`}
+                    {@const outputOptions = reactionWireOutputs(binding, meta)}
+                    {#if wireSteps.length === 0}
+                      <div class="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                        Add a main step or an earlier reaction before wiring this input.
+                      </div>
+                    {:else}
+                      <div class="grid gap-2 sm:grid-cols-2">
+                        <SingleSelect
+                          options={wireSteps.map(({ value, label }) => ({ value, label }))}
+                          selected={selectedWireStep}
+                          placeholder="Source step…"
+                          disableSort
+                          onchange={(value) => {
+                            const source = wireSteps.find((candidate) => candidate.value === value);
+                            if (!source) return;
+                            setReactionBinding(inputName, {
+                              ...binding,
+                              lane: source.lane,
+                              stepPosition: source.position,
+                              path: '',
+                            });
+                          }}
+                        />
+                        <SingleSelect
+                          options={outputOptions}
+                          selected={binding.path}
+                          placeholder="Output field…"
+                          onchange={(path) => setReactionBinding(inputName, { ...binding, path })}
+                        />
+                      </div>
+                      {#if outputOptions.length === 0}
+                        <p class="text-xs text-amber-700 dark:text-amber-400">
+                          The selected step has no compatible outputs for this input.
+                        </p>
+                      {/if}
+                    {/if}
+                  {:else}
+                    <p class="text-xs text-muted-foreground">This source will be supplied by the run context.</p>
+                  {/if}
+                </div>
+              </section>
+            {/if}
+          {/each}
+          {#if availableOptionalInputs.length > 0}
+            <SingleSelect
+              options={availableOptionalInputs}
+              selected=""
+              placeholder="Add an optional input…"
+              onchange={(inputName) => inputName && addOptionalReactionInput(inputName)}
+            />
+          {/if}
+        </div>
+        <Dialog.Footer>
+          <Button onclick={() => (reactionEditor = null)}>Done</Button>
+        </Dialog.Footer>
+      {/if}
+    {/if}
   </Dialog.Content>
 </Dialog.Root>

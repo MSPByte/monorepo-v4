@@ -140,7 +140,8 @@
     | { kind: 'literal'; value: unknown }
     | { kind: 'runtime'; promptKey: string; required: boolean }
     | { kind: 'entity'; source: string; entityType: string; contextKey?: string }
-    | { kind: 'priorOutput'; stepPosition: number; path: string };
+    | { kind: 'priorOutput'; stepPosition: number; path: string; lane?: 'main' | 'onSuccess' | 'onFailure' }
+    | { kind: 'failureContext'; path: string };
 
   type Step = {
     capabilityId: string;
@@ -174,6 +175,8 @@
   };
 
   type StepGroup = {
+    id: string;
+    lane: 'main' | 'onSuccess' | 'onFailure';
     position: number;
     capabilityId: string;
     capabilityName: string;
@@ -194,69 +197,82 @@
     );
     const seenKeys = new Set<string>();
     const groups: StepGroup[] = [];
-    const steps = (selectedPackage.steps as Step[]) ?? [];
+    const mainSteps = (selectedPackage.steps as Step[]) ?? [];
+    const outcomeSteps = (selectedPackage.outcomeSteps as {
+      onSuccess?: Step[];
+      onFailure?: Step[];
+    } | null) ?? {};
+    const lanes: Array<{ lane: StepGroup['lane']; steps: Step[] }> = [
+      { lane: 'main', steps: mainSteps },
+      { lane: 'onSuccess', steps: outcomeSteps.onSuccess ?? [] },
+      { lane: 'onFailure', steps: outcomeSteps.onFailure ?? [] },
+    ];
 
     // Determine which step positions have downstream priorOutput dependencies.
     const positionsWithWiredOutputs = new Set<number>();
-    for (const step of steps) {
+    for (const step of [...mainSteps, ...(outcomeSteps.onSuccess ?? [])]) {
       for (const binding of Object.values(step.inputBindings as Record<string, Binding>)) {
-        if (binding.kind === 'priorOutput') {
+        if (binding.kind === 'priorOutput' && (binding.lane ?? 'main') === 'main') {
           positionsWithWiredOutputs.add(binding.stepPosition);
         }
       }
     }
 
-    for (let pos = 0; pos < steps.length; pos++) {
-      const step = steps[pos]!;
-      const cap = capMeta.get(step.capabilityId);
-      if (!cap) continue;
+    for (const { lane, steps } of lanes) {
+      for (let pos = 0; pos < steps.length; pos++) {
+        const step = steps[pos]!;
+        const cap = capMeta.get(step.capabilityId);
+        if (!cap) continue;
 
-      const fields: RuntimeField[] = [];
-      // Iterate inputMeta keys in declaration order to preserve field sequence.
-      for (const [inputName, meta] of Object.entries(
-        cap.inputMeta as Record<string, {
-          sensitive?: boolean;
-          typeHint?: RuntimeField['typeHint'];
-          entityType?: EntityType;
-          label?: string;
-          description?: string;
-          required?: boolean;
-          choices?: ReadonlyArray<{ value: string; label: string }>;
-          dynamicSource?: string;
-          visibleWhen?: { input: string; equals: unknown };
-        }>
-      )) {
-        const binding = (step.inputBindings as Record<string, Binding>)[inputName];
-        if (!binding || binding.kind !== 'runtime') continue;
-        if (seenKeys.has(binding.promptKey)) continue;
-        const prompt = promptMap.get(binding.promptKey);
-        seenKeys.add(binding.promptKey);
-        fields.push({
-          promptKey: binding.promptKey,
-          inputName,
-          required: prompt?.required ?? binding.required,
-          typeHint: meta.typeHint ?? 'text',
-          sensitive: meta.sensitive ?? false,
-          entityType: meta.entityType,
-          label: prompt?.label ?? meta.label,
-          description: prompt?.description ?? meta.description,
-          choices: meta.choices,
-          dynamicSource: meta.dynamicSource,
-          section: prompt?.section,
-          order: prompt?.order,
-          visibleWhen: meta.visibleWhen,
+        const fields: RuntimeField[] = [];
+        // Iterate inputMeta keys in declaration order to preserve field sequence.
+        for (const [inputName, meta] of Object.entries(
+          cap.inputMeta as Record<string, {
+            sensitive?: boolean;
+            typeHint?: RuntimeField['typeHint'];
+            entityType?: EntityType;
+            label?: string;
+            description?: string;
+            required?: boolean;
+            choices?: ReadonlyArray<{ value: string; label: string }>;
+            dynamicSource?: string;
+            visibleWhen?: { input: string; equals: unknown };
+          }>
+        )) {
+          const binding = (step.inputBindings as Record<string, Binding>)[inputName];
+          if (!binding || binding.kind !== 'runtime') continue;
+          if (seenKeys.has(binding.promptKey)) continue;
+          const prompt = promptMap.get(binding.promptKey);
+          seenKeys.add(binding.promptKey);
+          fields.push({
+            promptKey: binding.promptKey,
+            inputName,
+            required: prompt?.required ?? binding.required,
+            typeHint: meta.typeHint ?? 'text',
+            sensitive: meta.sensitive ?? false,
+            entityType: meta.entityType,
+            label: prompt?.label ?? meta.label,
+            description: prompt?.description ?? meta.description,
+            choices: meta.choices,
+            dynamicSource: meta.dynamicSource,
+            section: prompt?.section,
+            order: prompt?.order,
+            visibleWhen: meta.visibleWhen,
+          });
+        }
+
+        groups.push({
+          id: `${lane}:${pos}`,
+          lane,
+          position: pos,
+          capabilityId: step.capabilityId,
+          capabilityName: step.label ?? cap.name,
+          category: cap.category,
+          fields,
+          optional: lane === 'main' && !!(step as any).optional,
+          hasWiredOutputs: lane === 'main' && positionsWithWiredOutputs.has(pos),
         });
       }
-
-      groups.push({
-        position: pos,
-        capabilityId: step.capabilityId,
-        capabilityName: step.label ?? cap.name,
-        category: cap.category,
-        fields,
-        optional: !!(step as any).optional,
-        hasWiredOutputs: positionsWithWiredOutputs.has(pos),
-      });
     }
     return groups;
   });
@@ -264,14 +280,19 @@
   // Flat list of runtime fields for non-skipped steps (drives canSubmit / cascadeLinkId / postal autofill).
   const runtimeFields = $derived(
     stepGroups
-      .filter((g) => !skippedSteps.has(g.position))
+      .filter((g) => g.lane !== 'main' || !skippedSteps.has(g.position))
       .flatMap((g) => g.fields)
       .filter((field) => isFieldVisible(field))
   );
 
   function controllingValue(inputName: string): unknown {
     if (!selectedPackage) return undefined;
-    const steps = (selectedPackage.steps as Step[]) ?? [];
+    const outcomeSteps = (selectedPackage.outcomeSteps as { onSuccess?: Step[]; onFailure?: Step[] } | null) ?? {};
+    const steps = [
+      ...((selectedPackage.steps as Step[]) ?? []),
+      ...(outcomeSteps.onSuccess ?? []),
+      ...(outcomeSteps.onFailure ?? []),
+    ];
     for (const step of steps) {
       const binding = step.inputBindings[inputName];
       if (!binding) continue;
@@ -485,8 +506,16 @@
 
       {#if selectedPackage}
         {#if stepGroups.length > 0}
-          {#each stepGroups as group (group.position)}
-            {@const isSkipped = skippedSteps.has(group.position)}
+          {#each stepGroups as group (group.id)}
+            {#if group.lane === 'onFailure' && !stepGroups.some((candidate) => candidate.lane === 'onFailure' && candidate.position < group.position)}
+              <section class="rounded-lg border border-rose-500/30 bg-rose-500/5 px-3 py-3">
+                <h3 class="text-sm font-medium text-foreground">On failure inputs</h3>
+                <p class="mt-0.5 text-xs text-muted-foreground">
+                  Only failure reactions use these answers. They are kept out of the normal package inputs.
+                </p>
+              </section>
+            {/if}
+            {@const isSkipped = group.lane === 'main' && skippedSteps.has(group.position)}
             {@const canSkip = group.optional && !group.hasWiredOutputs}
             {@const visibleFields = group.fields.filter((field) => isFieldVisible(field))}
             <div class="rounded-lg border overflow-hidden {isSkipped ? 'opacity-50' : ''}">
@@ -504,7 +533,7 @@
                   </span>
                 {/if}
                 <span class="ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider bg-muted text-muted-foreground">
-                  {group.category}
+                  {group.lane === 'onFailure' ? 'On failure' : group.category}
                 </span>
                 {#if canSkip}
                   <label class="flex items-center gap-1.5 cursor-pointer shrink-0">

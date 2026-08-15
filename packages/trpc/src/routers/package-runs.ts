@@ -84,7 +84,11 @@ export const packageRunsRouter = t.router({
       .from(packageRunSteps)
       .where(eq(packageRunSteps.packageRunId, input.id));
 
-    steps.sort((a: (typeof steps)[number], b: (typeof steps)[number]) => a.position - b.position);
+    const laneRank: Record<string, number> = { main: 0, on_success: 1, on_failure: 2 };
+    steps.sort(
+      (a: (typeof steps)[number], b: (typeof steps)[number]) =>
+        (laneRank[a.lane] ?? 0) - (laneRank[b.lane] ?? 0) || a.position - b.position,
+    );
 
     return { run, steps };
   }),

@@ -160,6 +160,12 @@ export const packageRunSteps = packagesSchema.table(
     packageRunId: uuid('package_run_id')
       .notNull()
       .references(() => packageRuns.id, { onDelete: 'cascade' }),
+    // A run has one main path and at most one terminal reaction lane. Keeping
+    // this explicit makes execution history understandable without admitting
+    // arbitrary workflow graphs.
+    lane: text('lane', { enum: ['main', 'on_success', 'on_failure'] })
+      .notNull()
+      .default('main'),
     position: integer('position').notNull(),
     capabilityId: text('capability_id').notNull(),
     status: text('status', {
@@ -183,7 +189,7 @@ export const packageRunSteps = packagesSchema.table(
       .defaultNow(),
   },
   (t) => [
-    unique('package_run_steps_run_position').on(t.packageRunId, t.position),
+    unique('package_run_steps_run_lane_position').on(t.packageRunId, t.lane, t.position),
     index('package_run_steps_run_idx').on(t.packageRunId),
     systemRls,
   ],

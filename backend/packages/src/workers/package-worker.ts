@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
 import {
   customerLogs,
@@ -33,7 +33,7 @@ import {
   type UpsertM365IdentityData,
   type UpsertM365PolicyData,
 } from "@mspbyte/capabilities";
-import { type M365Connector, SophosConnector, DattoConnector, CoveConnector } from "@mspbyte/connectors";
+import { type M365Connector, SophosConnector, DattoConnector, CoveConnector, HaloPSAConnector } from "@mspbyte/connectors";
 import { Encryption } from "@mspbyte/encryption";
 import { env, requireEncryptionKey } from "../env.js";
 import { serializeError } from "../errors.js";
@@ -57,6 +57,7 @@ type PackageSnapshot = {
   name: string;
   version: number;
   steps: StepDefinition[];
+  outcomeSteps?: { onSuccess?: StepDefinition[]; onFailure?: StepDefinition[] };
   failureActions?: FailureAction[];
   skippedStepIndexes?: number[];
 };
@@ -180,6 +181,7 @@ export function createPackageWorker(
       let sophosPartnerConnector: SophosConnector | null = null;
       let dattoConnectorSingleton: DattoConnector | null = null;
       let coveConnectorSingleton: { connector: CoveConnector; rootPartnerId: number } | null = null;
+      let haloConnectorSingleton: { connector: HaloPSAConnector; haloSiteId: number } | null = null;
 
       const ctxBase: Omit<CapabilityCtx, "packageRunStepId" | "generatedInputs"> = {
         encryptionKey,
@@ -214,6 +216,13 @@ export function createPackageWorker(
             coveConnectorSingleton = await getCoveConnector(db, encryptionKey);
           }
           return coveConnectorSingleton;
+        },
+        getHaloPSAConnector: async () => {
+          if (!haloConnectorSingleton) {
+            if (!run.siteId) throw new Error("HaloPSA ticket creation requires a site-scoped package run");
+            haloConnectorSingleton = await getHaloPSAConnector(db, run.siteId, encryptionKey);
+          }
+          return haloConnectorSingleton;
         },
         lookupSite: (siteId: string) =>
           lookupSite(db, siteId),
@@ -442,6 +451,39 @@ export function createPackageWorker(
           : anyStepFailed
             ? "partial"
             : "completed";
+      // Terminal lanes are deliberately one-way reactions. They run only
+      // after the main path settles and cannot alter its terminal status.
+      const outcomeLane = finalStatus === 'completed'
+        ? 'on_success' as const
+        : finalStatus === 'halted' || finalStatus === 'partial'
+          ? 'on_failure' as const
+          : null;
+      const outcomeSteps = outcomeLane === 'on_success'
+        ? snapshot.outcomeSteps?.onSuccess ?? []
+        : outcomeLane === 'on_failure'
+          ? snapshot.outcomeSteps?.onFailure ?? []
+          : [];
+      const failureContext = finalStatus === 'halted' || finalStatus === 'partial'
+        ? await loadFailureContext(db, packageRunId, finalStatus, run.siteId)
+        : undefined;
+      if (outcomeLane && outcomeSteps.length > 0) {
+        await executeOutcomeLane({
+          db,
+          run,
+          runId: packageRunId,
+          lane: outcomeLane,
+          steps: outcomeSteps,
+          runtimeInputs,
+          siteFacts,
+          ctxBase,
+          encryptionKey,
+          // A failed main path cannot provide a dependable output contract.
+          // Failure reactions may only consume earlier failure-reaction outputs.
+          mainOutputs: outcomeLane === 'on_success' ? stepOutputs : new Map(),
+          failureContext,
+        });
+      }
+
       const totalBillable = await sumBillable(db, packageRunId);
       await db
         .update(packageRuns)
@@ -514,11 +556,170 @@ async function executeFailureActions(args: {
   }
 }
 
+async function executeOutcomeLane(args: {
+  db: any;
+  run: any;
+  runId: string;
+  lane: 'on_success' | 'on_failure';
+  steps: StepDefinition[];
+  runtimeInputs: Record<string, unknown>;
+  siteFacts: ReadonlyMap<string, unknown>;
+  ctxBase: Omit<CapabilityCtx, 'packageRunStepId' | 'generatedInputs'>;
+  encryptionKey: string;
+  mainOutputs: Map<number, Record<string, unknown>>;
+  failureContext?: Record<string, unknown>;
+}): Promise<void> {
+  const outputs = new Map<number, Record<string, unknown>>();
+
+  for (const [position, step] of args.steps.entries()) {
+    const capability = getCapability(step.capabilityId);
+    if (!capability) {
+      await dbInsertOutcomeFailure(args, position, step.capabilityId, {
+        errorClass: 'capability_missing',
+        message: `Unknown capability ${step.capabilityId}`,
+      });
+      continue;
+    }
+
+    const [stepRow] = await args.db
+      .insert(packageRunSteps)
+      .values({
+        packageRunId: args.runId,
+        lane: args.lane,
+        position,
+        capabilityId: step.capabilityId,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+      })
+      .returning({ id: packageRunSteps.id });
+
+    const resolved = resolveBindings(step.inputBindings, args.runtimeInputs, outputs, {
+      siteId: args.run.siteId,
+      siteFacts: args.siteFacts,
+    }, {
+      main: args.mainOutputs,
+      [args.lane === 'on_success' ? 'onSuccess' : 'onFailure']: outputs,
+    }, args.failureContext);
+    if (!resolved.ok) {
+      await failStep(args.db, stepRow!.id, {
+        errorClass: 'binding_unresolved',
+        message: resolved.error,
+        resolvedInputs: {},
+      });
+      continue;
+    }
+
+    const cleaned = stripUndefined(resolved.value);
+    const parsed = capability.inputs.safeParse(cleaned);
+    if (!parsed.success) {
+      await failStep(args.db, stepRow!.id, {
+        errorClass: 'input_validation',
+        message: parsed.error.message,
+        resolvedInputs: encryptSensitiveInputs(cleaned, capability, args.encryptionKey),
+      });
+      continue;
+    }
+
+    const ctx: CapabilityCtx = {
+      ...args.ctxBase,
+      packageRunStepId: stepRow!.id,
+      generatedInputs: resolved.generatedInputs,
+    };
+    let result: CapabilityResult<unknown>;
+    try {
+      result = await capability.handler(ctx, parsed.data);
+    } catch (error) {
+      result = {
+        outcome: 'fail',
+        errorClass: 'handler_threw',
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+
+    const auditRow = await writeAuditLog(args.db, {
+      run: args.run,
+      capability,
+      position,
+      resolvedInputs: parsed.data as Record<string, unknown>,
+      result,
+    });
+    const encryptedInputs = encryptSensitiveInputs(
+      parsed.data as Record<string, unknown>,
+      capability,
+      args.encryptionKey,
+    );
+
+    if (result.outcome === 'success') {
+      await args.db
+        .update(packageRunSteps)
+        .set({
+          status: 'success',
+          resolvedInputs: encryptedInputs,
+          outputs: encryptSensitiveOutputs(result.outputs as Record<string, unknown>, capability, args.encryptionKey),
+          billable: true,
+          unitPrice: String(capability.defaultUnitPrice),
+          finishedAt: new Date().toISOString(),
+          auditLogIds: auditRow ? [auditRow] : [],
+        })
+        .where(eq(packageRunSteps.id, stepRow!.id));
+      outputs.set(position, result.outputs as Record<string, unknown>);
+      continue;
+    }
+
+    if (result.outcome === 'skip') {
+      await args.db
+        .update(packageRunSteps)
+        .set({
+          status: 'skip',
+          skipReason: result.reason,
+          resolvedInputs: encryptedInputs,
+          finishedAt: new Date().toISOString(),
+          auditLogIds: auditRow ? [auditRow] : [],
+        })
+        .where(eq(packageRunSteps.id, stepRow!.id));
+      continue;
+    }
+
+    await args.db
+      .update(packageRunSteps)
+      .set({
+        status: 'fail',
+        resolvedInputs: encryptedInputs,
+        errorClass: result.errorClass,
+        errorMessage: result.message,
+        finishedAt: new Date().toISOString(),
+        auditLogIds: auditRow ? [auditRow] : [],
+      })
+      .where(eq(packageRunSteps.id, stepRow!.id));
+  }
+}
+
+async function dbInsertOutcomeFailure(
+  args: { db: any; runId: string; lane: 'on_success' | 'on_failure' },
+  position: number,
+  capabilityId: string,
+  failure: { errorClass: ErrorClass; message: string },
+): Promise<void> {
+  await args.db.insert(packageRunSteps).values({
+    packageRunId: args.runId,
+    lane: args.lane,
+    position,
+    capabilityId,
+    status: 'fail',
+    errorClass: failure.errorClass,
+    errorMessage: failure.message,
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+  });
+}
+
 function resolveBindings(
   bindings: Record<string, Binding>,
   runtimeInputs: Record<string, unknown>,
   stepOutputs: Map<number, Record<string, unknown>>,
   runContext: { siteId: string | null; siteFacts: ReadonlyMap<string, unknown> },
+  outputLanes?: Partial<Record<'main' | 'onSuccess' | 'onFailure', Map<number, Record<string, unknown>>>>,
+  failureContext?: Record<string, unknown>,
 ):
   | { ok: true; value: Record<string, unknown>; generatedInputs: Set<string> }
   | { ok: false; error: string } {
@@ -548,14 +749,27 @@ function resolveBindings(
         break;
       }
       case "priorOutput": {
-        const prior = stepOutputs.get(binding.stepPosition);
+        const sourceLane = binding.lane ?? 'main';
+        const prior = outputLanes?.[sourceLane]?.get(binding.stepPosition) ??
+          (sourceLane === 'main' ? stepOutputs.get(binding.stepPosition) : undefined);
         if (!prior) {
           return {
             ok: false,
-            error: `Prior step ${binding.stepPosition} has no outputs`,
+            error: `Prior ${sourceLane} step ${binding.stepPosition} has no outputs`,
           };
         }
         value[name] = getByPath(prior, binding.path);
+        break;
+      }
+      case "failureContext": {
+        if (!failureContext) {
+          return { ok: false, error: `Input '${name}' reads failure context outside an On failure reaction` };
+        }
+        const contextValue = getByPath(failureContext, binding.path);
+        if (contextValue === undefined) {
+          return { ok: false, error: `Failure context '${binding.path}' is unavailable` };
+        }
+        value[name] = contextValue;
         break;
       }
       case "generated": {
@@ -606,6 +820,40 @@ function getByPath(source: Record<string, unknown>, path: string): unknown {
     }
     return undefined;
   }, source);
+}
+
+async function loadFailureContext(
+  db: any,
+  packageRunId: string,
+  status: 'halted' | 'partial',
+  siteId: string | null,
+): Promise<Record<string, unknown>> {
+  const [failedStep] = await db
+    .select({
+      position: packageRunSteps.position,
+      capabilityId: packageRunSteps.capabilityId,
+      errorClass: packageRunSteps.errorClass,
+      errorMessage: packageRunSteps.errorMessage,
+    })
+    .from(packageRunSteps)
+    .where(and(
+      eq(packageRunSteps.packageRunId, packageRunId),
+      eq(packageRunSteps.lane, 'main'),
+      eq(packageRunSteps.status, 'fail'),
+    ))
+    .orderBy(asc(packageRunSteps.position))
+    .limit(1);
+  const capability = failedStep ? getCapability(failedStep.capabilityId) : undefined;
+  return {
+    runId: packageRunId,
+    status,
+    siteId,
+    stepPosition: failedStep ? failedStep.position + 1 : 0,
+    capabilityId: failedStep?.capabilityId ?? 'unknown',
+    capabilityName: capability?.name ?? failedStep?.capabilityId ?? 'Unknown capability',
+    errorClass: failedStep?.errorClass ?? 'unknown',
+    message: failedStep?.errorMessage ?? 'Package run did not complete successfully',
+  };
 }
 
 function encryptSensitiveInputs(
@@ -890,6 +1138,35 @@ async function getCoveConnector(
   return { connector: new CoveConnector(server, clientId, clientSecret), rootPartnerId };
 }
 
+async function getHaloPSAConnector(
+  db: any,
+  siteId: string,
+  encryptionKey: string,
+): Promise<{ connector: HaloPSAConnector; haloSiteId: number }> {
+  const [row] = await db
+    .select({
+      config: integrations.config,
+      haloSiteId: integrationLinks.externalId,
+    })
+    .from(integrationLinks)
+    .innerJoin(integrations, eq(integrationLinks.integrationId, integrations.id))
+    .where(and(eq(integrationLinks.integrationId, "halopsa"), eq(integrationLinks.siteId, siteId)))
+    .limit(1);
+  if (!row?.haloSiteId) throw new Error("HaloPSA is not linked to this site");
+  const haloSiteId = Number(row.haloSiteId);
+  if (!Number.isInteger(haloSiteId) || haloSiteId < 0) {
+    throw new Error("The HaloPSA site link has an invalid external ID");
+  }
+  const config = row.config as Record<string, unknown>;
+  const url = config.url as string | undefined;
+  const clientId = config.clientId as string | undefined;
+  const encryptedSecret = config.clientSecret as string | undefined;
+  if (!url || !clientId || !encryptedSecret) throw new Error("HaloPSA integration missing credentials");
+  const clientSecret = Encryption.decrypt(encryptedSecret, encryptionKey);
+  if (!clientSecret) throw new Error("HaloPSA client secret could not be decrypted");
+  return { connector: new HaloPSAConnector(url, clientId, clientSecret), haloSiteId };
+}
+
 async function lookupSite(
   db: any,
   siteId: string,
@@ -1030,7 +1307,12 @@ async function seedPriorOutputs(args: {
   const priorSteps = await args.db
     .select()
     .from(packageRunSteps)
-    .where(eq(packageRunSteps.packageRunId, args.parentRunId));
+    .where(
+      and(
+        eq(packageRunSteps.packageRunId, args.parentRunId),
+        eq(packageRunSteps.lane, 'main'),
+      ),
+    );
 
   for (const step of priorSteps as Array<{
     position: number;

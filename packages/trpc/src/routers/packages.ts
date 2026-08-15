@@ -18,6 +18,7 @@ import {
   getGenerator,
   listCapabilities,
   listGenerators,
+  FAILURE_CONTEXT_PATHS,
 } from '@mspbyte/capabilities';
 import { ActionLabels } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
@@ -41,6 +42,10 @@ const bindingSchema = z.discriminatedUnion('kind', [
     required: z.boolean(),
   }),
   z.object({
+    kind: z.literal('failureContext'),
+    path: z.enum(FAILURE_CONTEXT_PATHS),
+  }),
+  z.object({
     kind: z.literal('entity'),
     source: z.enum(['row-context', 'picker']),
     entityType: z.string().min(1),
@@ -56,6 +61,7 @@ const bindingSchema = z.discriminatedUnion('kind', [
     kind: z.literal('priorOutput'),
     stepPosition: z.number().int().min(0),
     path: z.string().min(1),
+    lane: z.enum(['main', 'onSuccess', 'onFailure']).optional(),
   }),
   z.object({
     kind: z.literal('generated'),
@@ -142,7 +148,10 @@ type EntityOption = {
 // pointing forward, entity bindings whose entityType the capability doesn't
 // declare, etc. Real type-checking of literal values happens at run time via
 // zod on capability.inputs.
-function validateStepsAgainstRegistry(steps: ParsedStep[]): string | null {
+function validateStepsAgainstRegistry(
+  steps: ParsedStep[],
+  lane: 'main' | 'onSuccess' | 'onFailure' = 'main',
+): string | null {
   for (let pos = 0; pos < steps.length; pos++) {
     const step = steps[pos]!;
     const cap = getCapability(step.capabilityId);
@@ -156,8 +165,23 @@ function validateStepsAgainstRegistry(steps: ParsedStep[]): string | null {
       if (binding.kind === 'entity' && meta.entityType && binding.entityType !== meta.entityType) {
         return `Step ${pos + 1} input "${inputName}" expects entity type "${meta.entityType}" (got "${binding.entityType}")`;
       }
-      if (binding.kind === 'priorOutput' && binding.stepPosition >= pos) {
-        return `Step ${pos + 1} priorOutput can only reference earlier steps`;
+      if (binding.kind === 'priorOutput') {
+        const sourceLane = binding.lane ?? 'main';
+        if (lane === 'main' && sourceLane !== 'main') {
+          return `Step ${pos + 1} main path cannot read from a terminal lane`;
+        }
+        if (lane === 'onFailure' && sourceLane === 'main') {
+          return `Step ${pos + 1} failure reactions cannot read from the main path because it may have stopped before that output existed`;
+        }
+        if (sourceLane !== 'main' && sourceLane !== lane) {
+          return `Step ${pos + 1} can only read from an earlier reaction in its own lane`;
+        }
+        if (sourceLane === lane && binding.stepPosition >= pos) {
+          return `Step ${pos + 1} priorOutput can only reference an earlier step in the same lane`;
+        }
+      }
+      if (binding.kind === 'failureContext' && lane !== 'onFailure') {
+        return `Step ${pos + 1} can only read failure context inside the On failure lane`;
       }
       if (binding.kind === 'generated') {
         const generator = getGenerator(binding.generator);
@@ -193,6 +217,13 @@ function validatePromptBindings(
     }
   }
   return null;
+}
+
+function allPackageSteps(input: {
+  steps: ParsedStep[];
+  outcomeSteps: z.infer<typeof outcomeStepsSchema>;
+}): ParsedStep[] {
+  return [...input.steps, ...input.outcomeSteps.onSuccess, ...input.outcomeSteps.onFailure];
 }
 
 export const packagesRouter = t.router({
@@ -267,11 +298,11 @@ export const packagesRouter = t.router({
       }
       const err = validateStepsAgainstRegistry(input.steps);
       if (err) throw new TRPCError({ code: 'BAD_REQUEST', message: err });
-      const promptError = validatePromptBindings(input.steps, input.prompts);
+      const promptError = validatePromptBindings(allPackageSteps(input), input.prompts);
       if (promptError) throw new TRPCError({ code: 'BAD_REQUEST', message: promptError });
-      const successOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onSuccess);
+      const successOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onSuccess, 'onSuccess');
       if (successOutcomeError) throw new TRPCError({ code: 'BAD_REQUEST', message: `On success: ${successOutcomeError}` });
-      const failureOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onFailure);
+      const failureOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onFailure, 'onFailure');
       if (failureOutcomeError) throw new TRPCError({ code: 'BAD_REQUEST', message: `On failure: ${failureOutcomeError}` });
       const directLinkScope = await assertTenantScopedIntegrationLinks(
         ctx.db,
@@ -349,17 +380,20 @@ export const packagesRouter = t.router({
         const err = validateStepsAgainstRegistry(input.steps);
         if (err) throw new TRPCError({ code: 'BAD_REQUEST', message: err });
       }
-      if (input.steps || input.prompts) {
+      if (input.steps || input.prompts || input.outcomeSteps) {
         const promptError = validatePromptBindings(
-          input.steps ?? (current.steps as ParsedStep[]),
+          allPackageSteps({
+            steps: input.steps ?? (current.steps as ParsedStep[]),
+            outcomeSteps: input.outcomeSteps ?? (current.outcomeSteps as z.infer<typeof outcomeStepsSchema>),
+          }),
           input.prompts ?? (current.prompts as Array<z.infer<typeof promptSchema>>),
         );
         if (promptError) throw new TRPCError({ code: 'BAD_REQUEST', message: promptError });
       }
       if (input.outcomeSteps) {
-        const successOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onSuccess);
+        const successOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onSuccess, 'onSuccess');
         if (successOutcomeError) throw new TRPCError({ code: 'BAD_REQUEST', message: `On success: ${successOutcomeError}` });
-        const failureOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onFailure);
+        const failureOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onFailure, 'onFailure');
         if (failureOutcomeError) throw new TRPCError({ code: 'BAD_REQUEST', message: `On failure: ${failureOutcomeError}` });
       }
       if (input.allowedIntegrationLinks) {

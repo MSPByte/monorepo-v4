@@ -96,7 +96,8 @@ export enum ActionLabels {
   SophosPartnerSiteCreate = 'sophos_partner.site.create',
   DattoSiteCreate = 'datto.site.create',
   CoveSiteCreate = 'cove.site.create',
-  CoreSiteProvision = 'core.site.provision'
+  CoreSiteProvision = 'core.site.provision',
+  CoreHaloPSATicketCreate = 'core.halopsa.ticket.create'
 }
 
 export type ActionLabel = `${ActionLabels}`;
@@ -498,6 +499,10 @@ export const ActionResources = {
   [ActionLabels.CoreSiteProvision]: {
     label: ActionLabels.CoreSiteProvision,
     name: 'Provision MSPByte site'
+  },
+  [ActionLabels.CoreHaloPSATicketCreate]: {
+    label: ActionLabels.CoreHaloPSATicketCreate,
+    name: 'Create HaloPSA ticket'
   }
 } satisfies Record<ActionLabel, ActionResource>;
 

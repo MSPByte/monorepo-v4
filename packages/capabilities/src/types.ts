@@ -1,6 +1,21 @@
 import type { z } from 'zod';
-import type { M365Connector, SophosConnector, DattoConnector, CoveConnector } from '@mspbyte/connectors';
+import type { M365Connector, SophosConnector, DattoConnector, CoveConnector, HaloPSAConnector } from '@mspbyte/connectors';
 import type { ActionLabels } from '@mspbyte/shared';
+
+// Stable, deliberately small data contract exposed only to failure reactions.
+// Unlike main-step outputs, every field here exists whenever the failure lane
+// runs, so responders can safely describe what went wrong.
+export const FAILURE_CONTEXT_PATHS = [
+  'runId',
+  'status',
+  'siteId',
+  'stepPosition',
+  'capabilityId',
+  'capabilityName',
+  'errorClass',
+  'message',
+] as const;
+export type FailureContextPath = (typeof FAILURE_CONTEXT_PATHS)[number];
 
 // Tagged union describing how a step's input value is produced at run time.
 // Persisted verbatim in packages.package_steps.input_bindings and inside the
@@ -15,7 +30,15 @@ export type Binding =
       pickerConfig?: { multi?: boolean; filter?: Record<string, unknown> };
       contextKey?: string;
     }
-  | { kind: 'priorOutput'; stepPosition: number; path: string }
+  | {
+      kind: 'priorOutput';
+      stepPosition: number;
+      path: string;
+      // Terminal reactions can read from the completed main path or a prior
+      // reaction in their own lane. Omitted remains `main` for old packages.
+      lane?: 'main' | 'onSuccess' | 'onFailure';
+    }
+  | { kind: 'failureContext'; path: FailureContextPath }
   // `generator` names a registered entry in the generators registry
   // (see ./generators). Params are validated per-generator at resolve time.
   | { kind: 'generated'; generator: string; params: Record<string, unknown> }
@@ -226,6 +249,10 @@ export interface CapabilityCtx {
   // Returns a CoveConnector for the Cove integration (loaded by integration ID) plus
   // the root partner ID read from the root integration link (siteId IS NULL).
   getCoveConnector: () => Promise<{ connector: CoveConnector; rootPartnerId: number }>;
+  // Returns the HaloPSA connector and the Halo site linked to the package run's
+  // MSPByte site. This capability context deliberately resolves the site link
+  // instead of asking package authors to manage Halo IDs.
+  getHaloPSAConnector: () => Promise<{ connector: HaloPSAConnector; haloSiteId: number }>;
   // Looks up a MSPByte site by id. Returns null if not found.
   lookupSite: (siteId: string) => Promise<{ id: string; name: string } | null>;
   // Creates a new MSPByte internal site. Returns the site id and name.

@@ -149,6 +149,10 @@
         {@const snapshot = run.packageSnapshot as {
           name?: string;
           steps?: Array<{ label?: string; capabilityId: string }>;
+          outcomeSteps?: {
+            onSuccess?: Array<{ label?: string; capabilityId: string }>;
+            onFailure?: Array<{ label?: string; capabilityId: string }>;
+          };
         }}
         {@const badge = runStatusBadge(run.status)}
         {@const totalDuration = formatDuration(run.startedAt, run.finishedAt)}
@@ -221,7 +225,12 @@
           <div class="space-y-0">
             {#each steps as step, index (step.id)}
               {@const stepDuration = formatDuration(step.startedAt, step.finishedAt)}
-              {@const snapshotStep = snapshot?.steps?.[step.position]}
+              {@const lane = step.lane ?? 'main'}
+              {@const snapshotStep = lane === 'on_success'
+                ? snapshot?.outcomeSteps?.onSuccess?.[step.position]
+                : lane === 'on_failure'
+                  ? snapshot?.outcomeSteps?.onFailure?.[step.position]
+                  : snapshot?.steps?.[step.position]}
               {@const outputs = (step.outputs ?? {}) as Record<string, unknown>}
               {@const inputs = (step.resolvedInputs ?? {}) as Record<string, unknown>}
               {@const isLast = index === steps.length - 1}
@@ -234,10 +243,15 @@
                 </div>
                 <div class={isLast ? 'pb-2' : 'pb-6'}>
                   <div class="rounded-lg border bg-card p-4">
-                    <div class="flex flex-wrap items-start justify-between gap-3">
-                      <div class="space-y-0.5">
-                        <div class="font-medium">
-                          {snapshotStep?.label ?? step.capabilityId}
+                      <div class="flex flex-wrap items-start justify-between gap-3">
+                        <div class="space-y-0.5">
+                        <div class="flex items-center gap-2">
+                          <div class="font-medium">{snapshotStep?.label ?? step.capabilityId}</div>
+                          {#if lane !== 'main'}
+                            <span class="rounded-sm px-1.5 py-0.5 text-[10px] uppercase tracking-wide {lane === 'on_success' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' : 'bg-rose-500/10 text-rose-700 dark:text-rose-400'}">
+                              {lane === 'on_success' ? 'On success' : 'On failure'}
+                            </span>
+                          {/if}
                         </div>
                         <div class="font-mono text-xs text-muted-foreground">
                           {step.capabilityId}
@@ -245,7 +259,7 @@
                       </div>
                       <div class="flex items-center gap-3 text-xs text-muted-foreground">
                         {#if stepDuration}<span>{stepDuration}</span>{/if}
-                        {#if canRun && canRetry(run.status, purged, step.position)}
+                        {#if lane === 'main' && canRun && canRetry(run.status, purged, step.position)}
                           <Button
                             variant="outline"
                             size="sm"
