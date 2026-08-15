@@ -72,7 +72,7 @@
     X,
   } from '@lucide/svelte';
 
-  type EntityType = 'integration_link' | 'm365_identity' | 'm365_group' | 'm365_license';
+  type EntityType = 'integration_link' | 'm365_identity' | 'm365_group' | 'm365_license' | 'm365_role';
   type Source = 'fixed' | 'runtime' | 'row' | 'wire' | 'generated' | 'fact';
 
   type Props = {

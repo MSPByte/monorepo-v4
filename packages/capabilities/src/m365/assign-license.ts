@@ -41,7 +41,7 @@ export const m365LicenseAssign: Capability<
     identityId: {
       allowedBindings: ['entity', 'runtime', 'priorOutput', 'literal'],
       entityType: 'm365_identity',
-      priorOutputCompat: ['m365.identity.create'],
+      priorOutputCompat: ['m365_identity_external_id', 'm365_identity_internal_id'],
       typeHint: 'text',
       label: 'User',
       description: 'Pick the user, or wire in from a previous create-user step.',

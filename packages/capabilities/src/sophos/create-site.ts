@@ -86,10 +86,10 @@ const inputs = z.object({
 );
 
 const outputs = z.object({
-  sophosTenantId: z.string(),
-  sophosTenantName: z.string(),
+  externalId: z.string(),
+  name: z.string(),
+  internalId: z.string(),
   sophosApiHost: z.string().optional(),
-  integrationLinkId: z.string(),
 });
 
 export const sophosCreateSite: Capability<
@@ -265,10 +265,10 @@ export const sophosCreateSite: Capability<
     },
   },
   outputMeta: {
-    sophosTenantId: { label: 'Sophos tenant ID', outputType: 'sophos.tenantId' },
-    sophosTenantName: { label: 'Sophos tenant name', outputType: 'sophos.tenantName' },
+    externalId: { label: 'Sophos tenant ID', outputType: 'sophos.tenantId' },
+    name: { label: 'Sophos tenant name', outputType: 'sophos.tenantName' },
+    internalId: { label: 'Integration link ID', outputType: 'mspbyte.integrationLinkId' },
     sophosApiHost: { label: 'Sophos API host', outputType: 'sophos.apiHost' },
-    integrationLinkId: { label: 'Integration link ID', outputType: 'mspbyte.integrationLinkId' },
   },
   actionLabel: ActionLabels.SophosPartnerSiteCreate,
   auditAction: 'create',
@@ -341,10 +341,10 @@ export const sophosCreateSite: Capability<
       return {
         outcome: 'success',
         outputs: {
-          sophosTenantId: tenant.id,
-          sophosTenantName: tenant.name,
+          externalId: tenant.id,
+          name: tenant.name,
+          internalId: link.id,
           sophosApiHost: apiHost,
-          integrationLinkId: link.id,
         },
       };
     } catch (err) {

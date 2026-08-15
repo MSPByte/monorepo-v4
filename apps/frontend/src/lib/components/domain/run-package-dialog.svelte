@@ -22,6 +22,7 @@
     | 'm365_identity'
     | 'm365_group'
     | 'm365_license'
+    | 'm365_role'
     | 'site';
   type PickerEntityType = Exclude<EntityType, 'site'>;
 
@@ -345,7 +346,8 @@
       entityType === 'integration_link' ||
       entityType === 'm365_identity' ||
       entityType === 'm365_group' ||
-      entityType === 'm365_license'
+      entityType === 'm365_license' ||
+      entityType === 'm365_role'
     );
   }
 

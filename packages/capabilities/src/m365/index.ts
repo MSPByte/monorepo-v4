@@ -4,4 +4,6 @@ export { m365LicenseAssign } from './assign-license.js';
 export { m365IdentityDisable } from './disable-identity.js';
 export { m365IdentityRevokeSessions } from './revoke-sessions.js';
 export { m365GroupAddMember } from './add-group-member.js';
+export { m365GroupCreate } from './create-group.js';
+export { m365ConditionalAccessPolicyCreate } from './create-conditional-access-policy.js';
 export { generateM365Password } from './password.js';

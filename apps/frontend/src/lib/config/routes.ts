@@ -29,11 +29,11 @@ const ROUTES: Route[] = [
   { label: 'Findings', href: '/findings', permission: 'Findings.Read' },
   {
     label: 'Automation',
-    href: '/automation/runs',
+    href: '/automation/packages',
     permission: 'Packages.Read',
     children: [
-      { label: 'Runs', href: '/automation/runs', permission: 'Packages.Read' },
       { label: 'Packages', href: '/automation/packages', permission: 'Packages.Read' },
+      { label: 'Package Runs', href: '/automation/runs', permission: 'Packages.Read' },
       { label: 'Fact Rules', href: '/automation/fact-rules', permission: 'Policies.Read' },
     ],
   },

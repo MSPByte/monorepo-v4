@@ -70,10 +70,7 @@
     {@const active = i === activeIndex}
     {@const activeChild = activeChildOf(route)}
     {#if route.children?.length}
-      <Popover.Root
-        open={openIndex === i}
-        onOpenChange={(v) => (openIndex = v ? i : null)}
-      >
+      <Popover.Root open={openIndex === i} onOpenChange={(v) => (openIndex = v ? i : null)}>
         <Popover.Trigger>
           {#snippet child({ props })}
             <button
@@ -81,11 +78,7 @@
               bind:this={itemEls[i]}
               type="button"
               aria-current={active ? 'page' : undefined}
-              class={cn(
-                itemClass,
-                'gap-1.5',
-                active ? 'text-foreground' : 'text-muted-foreground',
-              )}
+              class={cn(itemClass, 'gap-1.5', active ? 'text-foreground' : 'text-muted-foreground')}
             >
               {route.label}
               {#if activeChild && activeChild.label !== route.label}
@@ -96,7 +89,7 @@
             </button>
           {/snippet}
         </Popover.Trigger>
-        <Popover.Content align="start" class="w-auto min-w-56 max-w-sm p-1">
+        <Popover.Content align="start" class="w-auto min-w-32 max-w-sm p-1">
           {#each route.children as child (child.href)}
             {@const childActive = isRouteActive(child, page.url.pathname)}
             <button
@@ -106,14 +99,11 @@
                 goto(child.href);
               }}
               class={cn(
-                'flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-sm transition-colors hover:bg-accent',
-                childActive ? 'bg-accent text-foreground font-medium' : 'text-muted-foreground',
+                'flex w-full items-center justify-center rounded-md px-2.5 py-1.5 text-sm transition-colors hover:bg-accent',
+                childActive ? 'bg-accent text-foreground font-medium' : 'text-muted-foreground'
               )}
             >
               <span>{child.label}</span>
-              <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/60">
-                {child.href}
-              </span>
             </button>
           {/each}
         </Popover.Content>

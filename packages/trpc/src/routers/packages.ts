@@ -6,6 +6,7 @@ import {
   m365Groups,
   m365Identities,
   m365Licenses,
+  m365Roles,
   packageRuns,
   packages,
   siteGroupLinkMembers,
@@ -110,6 +111,7 @@ const entityTypeSchema = z.enum([
   'm365_identity',
   'm365_group',
   'm365_license',
+  'm365_role',
 ]);
 type EntityOption = {
   id: string;
@@ -581,12 +583,22 @@ export const packagesRouter = t.router({
           filters.push(eq(m365Groups.linkId, input.integrationLinkId));
         }
         const rows = await ctx.db
-          .select({ id: m365Groups.id, name: m365Groups.name })
+          .select({ externalId: m365Groups.externalId, name: m365Groups.name })
           .from(m365Groups)
           .where(filters.length ? and(...filters) : undefined)
           .orderBy(asc(m365Groups.name))
           .limit(input.limit);
-        return rows.map((r) => ({ id: r.id, label: r.name ?? r.id }));
+        return rows.map((r) => ({ id: r.externalId, label: r.name ?? r.externalId }));
+      }
+
+      if (input.entityType === 'm365_role') {
+        // Roles are global (no linkId) — all tenants share the same Azure AD built-in role templates.
+        const rows = await ctx.db
+          .select({ templateId: m365Roles.templateId, name: m365Roles.name })
+          .from(m365Roles)
+          .orderBy(asc(m365Roles.name))
+          .limit(input.limit);
+        return rows.map((r) => ({ id: r.templateId, label: r.name ?? r.templateId }));
       }
 
       if (input.entityType === 'm365_license') {

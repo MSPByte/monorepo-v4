@@ -5,7 +5,9 @@ import {
   customerLogs,
   integrationLinks,
   integrations,
+  m365Groups,
   m365Identities,
+  m365Policies,
   packageRuns,
   packageRunSteps,
   siteProfileFacts,
@@ -27,6 +29,9 @@ import {
   type M365IdentityRow,
   type SophosEndpointRow,
   type StepOnFailure,
+  type UpsertM365GroupData,
+  type UpsertM365IdentityData,
+  type UpsertM365PolicyData,
 } from "@mspbyte/capabilities";
 import { type M365Connector, SophosConnector, DattoConnector, CoveConnector } from "@mspbyte/connectors";
 import { Encryption } from "@mspbyte/encryption";
@@ -216,6 +221,9 @@ export function createPackageWorker(
           createSite(db, name, description),
         createIntegrationLink: (opts: CreateIntegrationLinkOpts) =>
           createIntegrationLink(db, opts),
+        upsertM365Group: (data: UpsertM365GroupData) => upsertM365Group(db, data),
+        upsertM365Identity: (data: UpsertM365IdentityData) => upsertM365Identity(db, data),
+        upsertM365Policy: (data: UpsertM365PolicyData) => upsertM365Policy(db, data),
       };
 
       let halted = false;
@@ -628,6 +636,92 @@ function encryptSensitiveOutputs(
     out[name] = Encryption.encrypt(JSON.stringify(value), encryptionKey);
   }
   return out;
+}
+
+async function upsertM365Group(db: any, data: UpsertM365GroupData): Promise<{ id: string }> {
+  const now = new Date().toISOString();
+  const rows = await db
+    .insert(m365Groups)
+    .values({
+      linkId: data.linkId,
+      externalId: data.externalId,
+      name: data.name,
+      description: data.description ?? null,
+      mailEnabled: data.mailEnabled,
+      securityEnabled: data.securityEnabled,
+      lastSeenAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [m365Groups.linkId, m365Groups.externalId],
+      set: {
+        name: data.name,
+        description: data.description ?? null,
+        mailEnabled: data.mailEnabled,
+        securityEnabled: data.securityEnabled,
+        updatedAt: now,
+        lastSeenAt: now,
+      },
+    })
+    .returning({ id: m365Groups.id });
+  return { id: rows[0]!.id };
+}
+
+async function upsertM365Identity(db: any, data: UpsertM365IdentityData): Promise<{ id: string }> {
+  const now = new Date().toISOString();
+  const rows = await db
+    .insert(m365Identities)
+    .values({
+      linkId: data.linkId,
+      externalId: data.externalId,
+      name: data.name,
+      email: data.email,
+      enabled: data.enabled ?? true,
+      type: data.type ?? 'member',
+      mfaEnforced: false,
+      lastSeenAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [m365Identities.linkId, m365Identities.externalId],
+      set: {
+        name: data.name,
+        email: data.email,
+        enabled: data.enabled ?? true,
+        updatedAt: now,
+        lastSeenAt: now,
+      },
+    })
+    .returning({ id: m365Identities.id });
+  return { id: rows[0]!.id };
+}
+
+async function upsertM365Policy(db: any, data: UpsertM365PolicyData): Promise<{ id: string }> {
+  const now = new Date().toISOString();
+  const rows = await db
+    .insert(m365Policies)
+    .values({
+      linkId: data.linkId,
+      externalId: data.externalId,
+      name: data.name,
+      policyState: data.policyState,
+      conditions: data.conditions ?? null,
+      grantControls: data.grantControls ?? null,
+      sessionControls: data.sessionControls ?? null,
+      lastSeenAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [m365Policies.linkId, m365Policies.externalId],
+      set: {
+        name: data.name,
+        policyState: data.policyState,
+        conditions: data.conditions ?? null,
+        grantControls: data.grantControls ?? null,
+        sessionControls: data.sessionControls ?? null,
+        updatedAt: now,
+        lastSeenAt: now,
+      },
+    })
+    .returning({ id: m365Policies.id });
+  return { id: rows[0]!.id };
 }
 
 async function loadIdentity(db: any, id: string): Promise<M365IdentityRow | null> {

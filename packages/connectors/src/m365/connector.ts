@@ -49,6 +49,15 @@ export class M365Connector {
   readonly groups: {
     listAll: (select: string) => Promise<unknown[]>;
     members: (groupId: string) => Promise<Array<{ id?: string }>>;
+    create: (payload: {
+      displayName: string;
+      mailNickname: string;
+      groupTypes: string[];
+      mailEnabled: boolean;
+      securityEnabled: boolean;
+      description?: string;
+      visibility?: string;
+    }) => Promise<{ id: string; displayName: string }>;
     // 400 with "One or more added object references already exist" is treated as success
     addMember: (groupId: string, userId: string) => Promise<void>;
     // 404 is ignored (already not a member)
@@ -77,6 +86,13 @@ export class M365Connector {
 
   readonly conditionalAccess: {
     policies: () => Promise<unknown[]>;
+    createPolicy: (payload: {
+      displayName: string;
+      state: string;
+      conditions: Record<string, unknown>;
+      grantControls: Record<string, unknown> | null;
+      sessionControls: Record<string, unknown> | null;
+    }) => Promise<{ id: string; displayName: string }>;
   };
 
   readonly devices: {
@@ -247,6 +263,23 @@ export class M365Connector {
           `https://graph.microsoft.com/v1.0/groups/${groupId}/members?$select=id`
         ),
 
+      create: async (payload) => {
+        const body: Record<string, unknown> = {
+          displayName: payload.displayName,
+          mailNickname: payload.mailNickname,
+          groupTypes: payload.groupTypes,
+          mailEnabled: payload.mailEnabled,
+          securityEnabled: payload.securityEnabled,
+        };
+        if (payload.description) body.description = payload.description;
+        if (payload.visibility) body.visibility = payload.visibility;
+        const { data } = await this.client.post<{ id: string; displayName: string }>(
+          'https://graph.microsoft.com/v1.0/groups',
+          body
+        );
+        return { id: data.id, displayName: data.displayName };
+      },
+
       addMember: async (groupId, userId) => {
         try {
           await this.client.post(
@@ -291,7 +324,15 @@ export class M365Connector {
 
     this.conditionalAccess = {
       policies: () =>
-        this.client.getAll('https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies')
+        this.client.getAll('https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies'),
+
+      createPolicy: async (payload) => {
+        const { data } = await this.client.post<{ id: string; displayName: string }>(
+          'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies',
+          payload
+        );
+        return { id: data.id, displayName: data.displayName };
+      }
     };
 
     this.devices = {

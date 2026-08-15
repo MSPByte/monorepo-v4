@@ -80,8 +80,10 @@ export enum ActionLabels {
   M365IdentityResetPassword = 'm365.identity.reset_password',
   M365IdentityRequireMfaReset = 'm365.identity.require_mfa_reset',
   M365IdentityDeleteAuthMethod = 'm365.identity.delete_auth_method',
+  M365GroupCreate = 'm365.group.create',
   M365IdentityGroupAdd = 'm365.identity.group.add',
   M365IdentityGroupRemove = 'm365.identity.group.remove',
+  M365ConditionalAccessPolicyCreate = 'm365.conditional_access.policy.create',
   M365IdentityLicenseAdd = 'm365.identity.license.add',
   M365IdentityLicenseRemove = 'm365.identity.license.remove',
   M365IdentityRoleAdd = 'm365.identity.role.add',
@@ -429,9 +431,17 @@ export const ActionResources = {
     label: ActionLabels.M365IdentityDeleteAuthMethod,
     name: 'M365 identity delete auth method'
   },
+  [ActionLabels.M365GroupCreate]: {
+    label: ActionLabels.M365GroupCreate,
+    name: 'M365 group create'
+  },
   [ActionLabels.M365IdentityGroupAdd]: {
     label: ActionLabels.M365IdentityGroupAdd,
     name: 'M365 identity add to group'
+  },
+  [ActionLabels.M365ConditionalAccessPolicyCreate]: {
+    label: ActionLabels.M365ConditionalAccessPolicyCreate,
+    name: 'M365 conditional access policy create'
   },
   [ActionLabels.M365IdentityGroupRemove]: {
     label: ActionLabels.M365IdentityGroupRemove,

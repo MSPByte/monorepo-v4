@@ -7,9 +7,9 @@ const inputs = z.object({
 });
 
 const outputs = z.object({
-  endpointId: z.string(),
-  hostname: z.string(),
-  alreadyDisabled: z.boolean(),
+  externalId: z.string(),
+  internalId: z.string(),
+  name: z.string(),
 });
 
 export const sophosEndpointDisableTamper: Capability<
@@ -34,9 +34,9 @@ export const sophosEndpointDisableTamper: Capability<
     },
   },
   outputMeta: {
-    endpointId: { label: 'Endpoint ID' },
-    hostname: { label: 'Hostname' },
-    alreadyDisabled: { label: 'Already disabled' },
+    externalId: { label: 'Sophos endpoint ID', outputType: 'sophos.endpointId' },
+    internalId: { label: 'Internal endpoint ID', outputType: 'sophos.endpointInternalId' },
+    name: { label: 'Hostname' },
   },
   actionLabel: ActionLabels.SophosEndpointTamperDisable,
   auditAction: 'update',
@@ -66,9 +66,9 @@ export const sophosEndpointDisableTamper: Capability<
       return {
         outcome: 'success',
         outputs: {
-          endpointId: endpoint.id,
-          hostname: endpoint.hostname,
-          alreadyDisabled: false,
+          externalId: endpoint.externalId,
+          internalId: endpoint.id,
+          name: endpoint.hostname,
         },
       };
     } catch (err) {

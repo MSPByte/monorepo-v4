@@ -16,7 +16,8 @@ const inputs = z
   });
 
 const outputs = z.object({
-  userId: z.string(),
+  externalId: z.string(),
+  name: z.string(),
   temporaryPassword: z.string(),
 });
 
@@ -33,23 +34,45 @@ export const m365IdentityResetPassword: Capability<
   outputs,
   inputMeta: {
     identityId: {
-      allowedBindings: ['entity', 'priorOutput'],
+      allowedBindings: ['entity', 'priorOutput', 'runtime'],
       entityType: 'm365_identity',
+      priorOutputCompat: ['m365_identity_internal_id'],
+      typeHint: 'text',
+      label: 'Identity',
+      description: 'The M365 user whose password to reset.',
+      required: true,
     },
-    mode: { allowedBindings: ['literal', 'runtime'], typeHint: 'text' },
+    mode: {
+      allowedBindings: ['literal', 'runtime'],
+      typeHint: 'text',
+      label: 'Password mode',
+      required: true,
+      defaultValue: 'random',
+      choices: [
+        { value: 'random', label: 'Generate random password' },
+        { value: 'custom', label: 'Set custom password' },
+      ],
+    },
     password: {
       allowedBindings: ['literal', 'runtime'],
       sensitive: true,
-      typeHint: 'text',
+      typeHint: 'password',
+      label: 'Custom password',
+      description: 'Required when mode is "custom".',
+      required: false,
     },
     forceChangeAtNextSignin: {
       allowedBindings: ['literal', 'runtime'],
       typeHint: 'boolean',
+      label: 'Force change at next sign-in',
+      required: true,
+      defaultValue: true,
     },
   },
   outputMeta: {
-    userId: {},
-    temporaryPassword: { sensitive: true },
+    externalId: { label: 'Graph user id', outputType: 'm365_identity_external_id' },
+    name: { label: 'Display name' },
+    temporaryPassword: { label: 'Temporary password', sensitive: true },
   },
   actionLabel: ActionLabels.M365IdentityResetPassword,
   auditAction: 'update',
@@ -58,11 +81,7 @@ export const m365IdentityResetPassword: Capability<
   async handler(ctx, input) {
     const identity = await ctx.loadM365Identity(input.identityId);
     if (!identity) {
-      return {
-        outcome: 'fail',
-        errorClass: 'not_found',
-        message: 'M365 identity not found',
-      };
+      return { outcome: 'fail', errorClass: 'not_found', message: 'M365 identity not found' };
     }
 
     const password = input.mode === 'random' ? generateM365Password() : input.password!;
@@ -86,7 +105,11 @@ export const m365IdentityResetPassword: Capability<
 
     return {
       outcome: 'success',
-      outputs: { userId: identity.externalId, temporaryPassword: password },
+      outputs: {
+        externalId: identity.externalId,
+        name: identity.name ?? identity.externalId,
+        temporaryPassword: password,
+      },
     };
   },
 };

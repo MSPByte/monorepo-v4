@@ -6,7 +6,7 @@
   import SingleSelect from '$lib/components/single-select.svelte';
   import MultiSelect from '$lib/components/multi-select.svelte';
 
-  type EntityType = 'integration_link' | 'm365_identity' | 'm365_group' | 'm365_license';
+  type EntityType = 'integration_link' | 'm365_identity' | 'm365_group' | 'm365_license' | 'm365_role';
 
   type Props = {
     entityType: EntityType;

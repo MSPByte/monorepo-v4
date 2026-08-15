@@ -25,8 +25,10 @@ const inputs = z.object({
 });
 
 const outputs = z.object({
-  userId: z.string(),
-  userPrincipalName: z.string(),
+  externalId: z.string(),
+  internalId: z.string(),
+  name: z.string(),
+  email: z.string(),
   // Only populated when the worker generated the password — the user needs a
   // way to retrieve it. Sensitive → encrypted-at-rest + reveal-audited.
   temporaryPassword: z.string().optional(),
@@ -157,8 +159,10 @@ export const m365IdentityCreate: Capability<
     },
   },
   outputMeta: {
-    userId: { label: 'Graph user id' },
-    userPrincipalName: { label: 'User principal name' },
+    externalId: { label: 'Graph user id', outputType: 'm365_identity_external_id' },
+    internalId: { label: 'Internal user id', outputType: 'm365_identity_internal_id' },
+    name: { label: 'Display name' },
+    email: { label: 'User principal name', outputType: 'm365_identity_upn' },
     temporaryPassword: {
       label: 'Temporary password',
       sensitive: true,
@@ -206,11 +210,30 @@ export const m365IdentityCreate: Capability<
         usageLocation: input.usageLocation,
         preferredLanguage: input.preferredLanguage,
       });
+
+      // Write-through: persist immediately so downstream steps can wire internalId.
+      let internalId = result.id;
+      try {
+        const row = await ctx.upsertM365Identity({
+          linkId: input.tenantLinkId,
+          externalId: result.id,
+          name: input.displayName,
+          email: result.userPrincipalName,
+          enabled: true,
+          type: 'member',
+        });
+        internalId = row.id;
+      } catch {
+        // DB write failed — sync will catch it; use externalId as fallback.
+      }
+
       return {
         outcome: 'success',
         outputs: {
-          userId: result.id,
-          userPrincipalName: result.userPrincipalName,
+          externalId: result.id,
+          internalId,
+          name: input.displayName,
+          email: result.userPrincipalName,
           // Only expose the password if we generated it — a user-supplied one
           // isn't ours to echo.
           temporaryPassword: generated ? password : undefined,

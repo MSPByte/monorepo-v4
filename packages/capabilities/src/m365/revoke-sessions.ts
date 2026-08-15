@@ -7,7 +7,8 @@ const inputs = z.object({
 });
 
 const outputs = z.object({
-  userId: z.string(),
+  externalId: z.string(),
+  name: z.string(),
 });
 
 export const m365IdentityRevokeSessions: Capability<
@@ -25,13 +26,17 @@ export const m365IdentityRevokeSessions: Capability<
     identityId: {
       allowedBindings: ['entity', 'priorOutput', 'runtime'],
       entityType: 'm365_identity',
+      priorOutputCompat: ['m365_identity_internal_id'],
       typeHint: 'text',
       label: 'Identity',
       description: 'The M365 user whose sessions to revoke.',
       required: true,
     },
   },
-  outputMeta: { userId: { label: 'Graph user id' } },
+  outputMeta: {
+    externalId: { label: 'Graph user id', outputType: 'm365_identity_external_id' },
+    name: { label: 'Display name' },
+  },
   actionLabel: ActionLabels.M365IdentityRevokeSessions,
   auditAction: 'update',
   requiredPermission: 'Vendors.Write',
@@ -44,7 +49,7 @@ export const m365IdentityRevokeSessions: Capability<
     try {
       const connector = await ctx.getM365Connector(identity.linkId);
       await connector.users.revokeSignInSessions(identity.externalId);
-      return { outcome: 'success', outputs: { userId: identity.externalId } };
+      return { outcome: 'success', outputs: { externalId: identity.externalId, name: identity.name ?? identity.externalId } };
     } catch (err) {
       return {
         outcome: 'fail',

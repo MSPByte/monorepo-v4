@@ -14,9 +14,9 @@ const inputs = z.object({
 });
 
 const outputs = z.object({
-  covePartnerId: z.number(),
-  covePartnerName: z.string(),
-  integrationLinkId: z.string(),
+  externalId: z.string(),
+  name: z.string(),
+  internalId: z.string(),
 });
 
 export const coveCreateSite: Capability<
@@ -62,9 +62,9 @@ export const coveCreateSite: Capability<
     },
   },
   outputMeta: {
-    covePartnerId: { label: 'Cove partner ID', outputType: 'cove.partnerId' },
-    covePartnerName: { label: 'Cove partner name', outputType: 'cove.partnerName' },
-    integrationLinkId: { label: 'Integration link ID', outputType: 'mspbyte.integrationLinkId' },
+    externalId: { label: 'Cove partner ID', outputType: 'cove.partnerId' },
+    name: { label: 'Cove partner name', outputType: 'cove.partnerName' },
+    internalId: { label: 'Integration link ID', outputType: 'mspbyte.integrationLinkId' },
   },
   actionLabel: ActionLabels.CoveSiteCreate,
   auditAction: 'create',
@@ -107,9 +107,9 @@ export const coveCreateSite: Capability<
       return {
         outcome: 'success',
         outputs: {
-          covePartnerId: child.Info.Id,
-          covePartnerName: child.Info.Name,
-          integrationLinkId: link.id,
+          externalId: String(child.Info.Id),
+          name: child.Info.Name,
+          internalId: link.id,
         },
       };
     } catch (err) {

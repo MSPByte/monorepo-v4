@@ -9,8 +9,8 @@ const inputs = z.object({
 });
 
 const outputs = z.object({
-  groupId: z.string(),
-  userId: z.string(),
+  groupExternalId: z.string(),
+  userExternalId: z.string(),
 });
 
 export const m365GroupAddMember: Capability<
@@ -33,27 +33,28 @@ export const m365GroupAddMember: Capability<
       required: true,
     },
     groupId: {
-      allowedBindings: ['entity', 'literal', 'runtime', 'siteFact'],
+      allowedBindings: ['entity', 'literal', 'runtime', 'siteFact', 'priorOutput'],
       entityType: 'm365_group',
       typeHint: 'text',
+      priorOutputCompat: ['m365_group_external_id'],
       label: 'Group',
       description:
-        'The Microsoft 365 group to add the user to. A site fact can carry a per-site standard group id.',
+        'The group to add the user to. Wire from a create-group step, pick from the tenant, or supply a Graph group id directly.',
       required: true,
     },
     identityExternalId: {
       allowedBindings: ['literal', 'runtime', 'priorOutput'],
-      priorOutputCompat: ['m365.identity.create'],
+      priorOutputCompat: ['m365_identity_external_id'],
       typeHint: 'text',
       label: 'User (Graph id)',
       description:
-        'The user\'s Graph id. Wire from a create-identity step, or provide directly.',
+        'The user\'s Graph object id. Wire from a create-identity step, or provide directly.',
       required: true,
     },
   },
   outputMeta: {
-    groupId: { label: 'Graph group id' },
-    userId: { label: 'Graph user id' },
+    groupExternalId: { label: 'Graph group id', outputType: 'm365_group_external_id' },
+    userExternalId: { label: 'Graph user id', outputType: 'm365_identity_external_id' },
   },
   actionLabel: ActionLabels.M365IdentityGroupAdd,
   auditAction: 'update',
@@ -65,7 +66,7 @@ export const m365GroupAddMember: Capability<
       await connector.groups.addMember(input.groupId, input.identityExternalId);
       return {
         outcome: 'success',
-        outputs: { groupId: input.groupId, userId: input.identityExternalId },
+        outputs: { groupExternalId: input.groupId, userExternalId: input.identityExternalId },
       };
     } catch (err) {
       return {

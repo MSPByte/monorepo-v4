@@ -7,8 +7,9 @@ const inputs = z.object({
 });
 
 const outputs = z.object({
-  endpointId: z.string(),
-  hostname: z.string(),
+  externalId: z.string(),
+  internalId: z.string(),
+  name: z.string(),
 });
 
 export const sophosEndpointDelete: Capability<
@@ -33,8 +34,9 @@ export const sophosEndpointDelete: Capability<
     },
   },
   outputMeta: {
-    endpointId: { label: 'Endpoint ID' },
-    hostname: { label: 'Hostname' },
+    externalId: { label: 'Sophos endpoint ID', outputType: 'sophos.endpointId' },
+    internalId: { label: 'Internal endpoint ID', outputType: 'sophos.endpointInternalId' },
+    name: { label: 'Hostname' },
   },
   actionLabel: ActionLabels.SophosEndpointDelete,
   auditAction: 'delete',
@@ -58,8 +60,9 @@ export const sophosEndpointDelete: Capability<
       return {
         outcome: 'success',
         outputs: {
-          endpointId: endpoint.id,
-          hostname: endpoint.hostname,
+          externalId: endpoint.externalId,
+          internalId: endpoint.id,
+          name: endpoint.hostname,
         },
       };
     } catch (err) {

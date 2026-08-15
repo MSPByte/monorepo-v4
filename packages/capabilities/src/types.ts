@@ -123,6 +123,34 @@ export interface SophosEndpointRow {
   apiHost: string | null;
 }
 
+export interface UpsertM365GroupData {
+  linkId: string;
+  externalId: string;
+  name: string;
+  description?: string;
+  mailEnabled: boolean;
+  securityEnabled: boolean;
+}
+
+export interface UpsertM365IdentityData {
+  linkId: string;
+  externalId: string;
+  name: string;
+  email: string;
+  enabled?: boolean;
+  type?: 'member' | 'guest' | 'service';
+}
+
+export interface UpsertM365PolicyData {
+  linkId: string;
+  externalId: string;
+  name: string;
+  policyState: 'enabled' | 'disabled' | 'enabledForReportingButNotEnforced';
+  conditions?: unknown;
+  grantControls?: unknown;
+  sessionControls?: unknown;
+}
+
 // Options for creating an integration link inside a capability handler.
 export interface CreateIntegrationLinkOpts {
   siteId: string;
@@ -189,6 +217,12 @@ export interface CapabilityCtx {
   createSite: (name: string, description?: string) => Promise<{ id: string; name: string }>;
   // Creates an integration link connecting a MSPByte site to a vendor account.
   createIntegrationLink: (opts: CreateIntegrationLinkOpts) => Promise<{ id: string }>;
+  // Write-through helpers: persist a vendor resource to the DB immediately after
+  // creation so downstream steps and the UI see it without waiting for a sync.
+  // All three are best-effort — a DB failure does not fail the step.
+  upsertM365Group: (data: UpsertM365GroupData) => Promise<{ id: string }>;
+  upsertM365Identity: (data: UpsertM365IdentityData) => Promise<{ id: string }>;
+  upsertM365Policy: (data: UpsertM365PolicyData) => Promise<{ id: string }>;
 }
 
 export interface Capability<Inputs = unknown, Outputs = unknown> {

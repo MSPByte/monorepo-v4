@@ -5,6 +5,8 @@ import { m365LicenseAssign } from './m365/assign-license.js';
 import { m365IdentityDisable } from './m365/disable-identity.js';
 import { m365IdentityRevokeSessions } from './m365/revoke-sessions.js';
 import { m365GroupAddMember } from './m365/add-group-member.js';
+import { m365GroupCreate } from './m365/create-group.js';
+import { m365ConditionalAccessPolicyCreate } from './m365/create-conditional-access-policy.js';
 import { coreSiteProvision } from './core/provision-site.js';
 import { sophosEndpointEnableTamper } from './sophos/enable-tamper.js';
 import { sophosEndpointDisableTamper } from './sophos/disable-tamper.js';
@@ -21,6 +23,8 @@ export const CAPABILITIES = {
   [m365IdentityDisable.id]: m365IdentityDisable,
   [m365IdentityRevokeSessions.id]: m365IdentityRevokeSessions,
   [m365GroupAddMember.id]: m365GroupAddMember,
+  [m365GroupCreate.id]: m365GroupCreate,
+  [m365ConditionalAccessPolicyCreate.id]: m365ConditionalAccessPolicyCreate,
   [sophosEndpointEnableTamper.id]: sophosEndpointEnableTamper,
   [sophosEndpointDisableTamper.id]: sophosEndpointDisableTamper,
   [sophosEndpointDelete.id]: sophosEndpointDelete,

@@ -12,10 +12,10 @@ const inputs = z.object({
 });
 
 const outputs = z.object({
+  externalId: z.string(),
+  name: z.string(),
+  internalId: z.string(),
   dattoSiteId: z.number(),
-  dattoSiteUid: z.string(),
-  dattoSiteName: z.string(),
-  integrationLinkId: z.string()
 });
 
 export const dattoCreateSite: Capability<z.infer<typeof inputs>, z.infer<typeof outputs>> = {
@@ -58,10 +58,10 @@ export const dattoCreateSite: Capability<z.infer<typeof inputs>, z.infer<typeof 
     }
   },
   outputMeta: {
-    dattoSiteId: { label: 'Datto site ID', outputType: 'datto.siteId' },
-    dattoSiteUid: { label: 'Datto site UID', outputType: 'datto.siteUid' },
-    dattoSiteName: { label: 'Datto site name', outputType: 'datto.siteName' },
-    integrationLinkId: { label: 'Integration link ID', outputType: 'mspbyte.integrationLinkId' }
+    externalId: { label: 'Datto site UID', outputType: 'datto.siteUid' },
+    name: { label: 'Datto site name', outputType: 'datto.siteName' },
+    internalId: { label: 'Integration link ID', outputType: 'mspbyte.integrationLinkId' },
+    dattoSiteId: { label: 'Datto site ID (integer)', outputType: 'datto.siteId' },
   },
   actionLabel: ActionLabels.DattoSiteCreate,
   auditAction: 'create',
@@ -88,10 +88,10 @@ export const dattoCreateSite: Capability<z.infer<typeof inputs>, z.infer<typeof 
       return {
         outcome: 'success',
         outputs: {
+          externalId: dattoSite.uid,
+          name: dattoSite.name,
+          internalId: link.id,
           dattoSiteId: dattoSite.id,
-          dattoSiteUid: dattoSite.uid,
-          dattoSiteName: dattoSite.name,
-          integrationLinkId: link.id
         }
       };
     } catch (err) {
