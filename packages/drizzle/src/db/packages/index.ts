@@ -31,6 +31,15 @@ export const packages = packagesSchema.table(
     // Steps live inline here as an ordered array during Phase 1. A dedicated
     // `package_steps` table lands in Phase 2 when the builder UI needs it.
     steps: jsonb('steps').notNull().default(sql`'[]'::jsonb`),
+    // The small, authored operator contract for a package. Steps reference a
+    // prompt id through their runtime binding; this keeps the runner focused
+    // on the preset rather than exposing implementation inputs one by one.
+    prompts: jsonb('prompts').notNull().default(sql`'[]'::jsonb`),
+    // Ordered terminal lanes. These deliberately are not a general graph:
+    // the main steps run first, then exactly one terminal lane may run.
+    outcomeSteps: jsonb('outcome_steps')
+      .notNull()
+      .default(sql`'{"onSuccess":[],"onFailure":[]}'::jsonb`),
     // Ordered list of package-level FailureAction records (see @mspbyte/capabilities).
     // Worker executes them after any terminal failed/halted/partial state.
     failureActions: jsonb('failure_actions').notNull().default(sql`'[]'::jsonb`),

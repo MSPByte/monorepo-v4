@@ -79,6 +79,20 @@ const stepSchema = z.object({
 });
 type ParsedStep = z.infer<typeof stepSchema>;
 
+const promptSchema = z.object({
+  id: z.string().min(1).max(160),
+  label: z.string().min(1).max(200),
+  description: z.string().max(500).optional(),
+  required: z.boolean().default(true),
+  section: z.string().max(100).optional(),
+  order: z.number().int().min(0).default(0),
+});
+
+const outcomeStepsSchema = z.object({
+  onSuccess: z.array(stepSchema).default([]),
+  onFailure: z.array(stepSchema).default([]),
+});
+
 const failureActionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('log') }),
   z.object({
@@ -98,6 +112,8 @@ const packageInputSchema = z.object({
   description: z.string().max(2000).optional().nullable(),
   status: z.enum(['draft', 'active', 'archived']).default('draft'),
   steps: z.array(stepSchema).min(1),
+  prompts: z.array(promptSchema).default([]),
+  outcomeSteps: outcomeStepsSchema.default({ onSuccess: [], onFailure: [] }),
   failureActions: z.array(failureActionSchema).default([]),
   // Scope: empty arrays => global. Non-empty restricts which sites can run
   // this package (site direct-match, tenant direct-match, or any matching group).
@@ -161,6 +177,24 @@ function validateStepsAgainstRegistry(steps: ParsedStep[]): string | null {
   return null;
 }
 
+function validatePromptBindings(
+  steps: ParsedStep[],
+  prompts: Array<z.infer<typeof promptSchema>>,
+): string | null {
+  const promptIds = new Set(prompts.map((prompt) => prompt.id));
+  for (const [position, step] of steps.entries()) {
+    for (const [inputName, binding] of Object.entries(step.inputBindings)) {
+      if (binding.kind !== 'runtime') continue;
+      // Legacy packages predate authored prompts. Keep them runnable and only
+      // require a definition once the package begins publishing prompts.
+      if (prompts.length > 0 && !promptIds.has(binding.promptKey)) {
+        return `Step ${position + 1} input "${inputName}" references unknown prompt "${binding.promptKey}"`;
+      }
+    }
+  }
+  return null;
+}
+
 export const packagesRouter = t.router({
   list: authProcedure
     .input(
@@ -186,6 +220,8 @@ export const packagesRouter = t.router({
           status: packages.status,
           version: packages.version,
           steps: packages.steps,
+          prompts: packages.prompts,
+          outcomeSteps: packages.outcomeSteps,
           allowedSites: packages.allowedSites,
           allowedSiteGroups: packages.allowedSiteGroups,
           allowedIntegrationLinks: packages.allowedIntegrationLinks,
@@ -231,6 +267,12 @@ export const packagesRouter = t.router({
       }
       const err = validateStepsAgainstRegistry(input.steps);
       if (err) throw new TRPCError({ code: 'BAD_REQUEST', message: err });
+      const promptError = validatePromptBindings(input.steps, input.prompts);
+      if (promptError) throw new TRPCError({ code: 'BAD_REQUEST', message: promptError });
+      const successOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onSuccess);
+      if (successOutcomeError) throw new TRPCError({ code: 'BAD_REQUEST', message: `On success: ${successOutcomeError}` });
+      const failureOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onFailure);
+      if (failureOutcomeError) throw new TRPCError({ code: 'BAD_REQUEST', message: `On failure: ${failureOutcomeError}` });
       const directLinkScope = await assertTenantScopedIntegrationLinks(
         ctx.db,
         input.allowedIntegrationLinks
@@ -247,6 +289,8 @@ export const packagesRouter = t.router({
           status: input.status,
           version: 1,
           steps: input.steps,
+          prompts: input.prompts,
+          outcomeSteps: input.outcomeSteps,
           failureActions: input.failureActions,
           allowedSites: input.allowedSites,
           allowedSiteGroups: input.allowedSiteGroups,
@@ -282,6 +326,8 @@ export const packagesRouter = t.router({
         description: z.string().max(2000).nullable().optional(),
         status: z.enum(['draft', 'active', 'archived']).optional(),
         steps: z.array(stepSchema).min(1).optional(),
+        prompts: z.array(promptSchema).optional(),
+        outcomeSteps: outcomeStepsSchema.optional(),
         failureActions: z.array(failureActionSchema).optional(),
         allowedSites: z.array(z.uuid()).optional(),
         allowedSiteGroups: z.array(z.uuid()).optional(),
@@ -302,6 +348,19 @@ export const packagesRouter = t.router({
       if (input.steps) {
         const err = validateStepsAgainstRegistry(input.steps);
         if (err) throw new TRPCError({ code: 'BAD_REQUEST', message: err });
+      }
+      if (input.steps || input.prompts) {
+        const promptError = validatePromptBindings(
+          input.steps ?? (current.steps as ParsedStep[]),
+          input.prompts ?? (current.prompts as Array<z.infer<typeof promptSchema>>),
+        );
+        if (promptError) throw new TRPCError({ code: 'BAD_REQUEST', message: promptError });
+      }
+      if (input.outcomeSteps) {
+        const successOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onSuccess);
+        if (successOutcomeError) throw new TRPCError({ code: 'BAD_REQUEST', message: `On success: ${successOutcomeError}` });
+        const failureOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onFailure);
+        if (failureOutcomeError) throw new TRPCError({ code: 'BAD_REQUEST', message: `On failure: ${failureOutcomeError}` });
       }
       if (input.allowedIntegrationLinks) {
         const directLinkScope = await assertTenantScopedIntegrationLinks(
@@ -324,6 +383,8 @@ export const packagesRouter = t.router({
           description: input.description === undefined ? current.description : input.description,
           status: input.status ?? current.status,
           steps: input.steps ?? current.steps,
+          prompts: input.prompts ?? current.prompts,
+          outcomeSteps: input.outcomeSteps ?? current.outcomeSteps,
           failureActions: input.failureActions ?? current.failureActions,
           allowedSites: input.allowedSites ?? current.allowedSites,
           allowedSiteGroups: input.allowedSiteGroups ?? current.allowedSiteGroups,
@@ -458,6 +519,8 @@ export const packagesRouter = t.router({
           status: 'draft',
           version: 1,
           steps: source.steps,
+          prompts: source.prompts,
+          outcomeSteps: source.outcomeSteps,
           failureActions: source.failureActions,
           authorUserId: ctx.user.id,
         })
@@ -649,6 +712,7 @@ export const packagesRouter = t.router({
       description: capability.description,
       category: capability.category,
       inputMeta: capability.inputMeta,
+      inputGroups: capability.inputGroups,
       outputMeta: capability.outputMeta,
       defaultUnitPrice: capability.defaultUnitPrice,
     }));

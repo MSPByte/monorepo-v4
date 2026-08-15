@@ -45,6 +45,35 @@ const inputs = z.object({
   signInFrequencyType: z.enum(['days', 'hours']).optional(),
   persistentBrowserEnabled: z.boolean().optional(),
   persistentBrowserMode: z.enum(['always', 'never']).optional(),
+}).superRefine((value, ctx) => {
+  const nonBlockGrant = [
+    value.requireMfa,
+    value.requireCompliantDevice,
+    value.requireDomainJoinedDevice,
+    value.requireApprovedApp,
+    value.requireAppProtectionPolicy,
+  ].some(Boolean);
+  if (value.blockAccess && nonBlockGrant) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['blockAccess'],
+      message: 'Block access cannot be combined with another grant control.',
+    });
+  }
+  if (value.signInFrequencyEnabled && !value.signInFrequencyValue) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['signInFrequencyValue'],
+      message: 'Set a sign-in frequency when the control is enabled.',
+    });
+  }
+  if (value.persistentBrowserEnabled && !value.persistentBrowserMode) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['persistentBrowserMode'],
+      message: 'Choose a persistent browser mode when the control is enabled.',
+    });
+  }
 });
 
 const outputs = z.object({
@@ -80,6 +109,34 @@ export const m365ConditionalAccessPolicyCreate: Capability<
   category: 'admin',
   inputs,
   outputs,
+  inputGroups: {
+    basics: {
+      label: 'Policy basics',
+      description: 'Name the policy and choose how it starts.',
+      order: 0,
+    },
+    assignments: {
+      label: 'Assignments',
+      description: 'Choose who the policy applies to and who is excluded.',
+      order: 10,
+    },
+    applications: {
+      label: 'Cloud apps',
+      description: 'Choose which applications this policy protects.',
+      order: 20,
+    },
+    grants: {
+      label: 'Grant controls',
+      description: 'Choose what Microsoft Entra requires before access is granted.',
+      order: 30,
+    },
+    sessions: {
+      label: 'Session controls',
+      description: 'Control how long and where sessions persist.',
+      order: 40,
+      advanced: true,
+    },
+  },
   inputMeta: {
     tenantLinkId: {
       allowedBindings: ['entity', 'literal', 'runtime'],
@@ -87,12 +144,16 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       typeHint: 'text',
       label: 'Tenant',
       required: true,
+      group: 'basics',
+      order: 0,
     },
     displayName: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'text',
       label: 'Policy name',
       required: true,
+      group: 'basics',
+      order: 10,
     },
     state: {
       allowedBindings: ['literal', 'runtime'],
@@ -100,6 +161,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       label: 'State',
       description: 'Start in report-only mode to verify impact before enforcing.',
       required: true,
+      group: 'basics',
+      order: 20,
       defaultValue: 'enabledForReportingButNotEnforced',
       choices: [
         { value: 'enabledForReportingButNotEnforced', label: 'Report-only (recommended)' },
@@ -116,6 +179,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       description: 'When on, the policy targets every user. Turn off to pick specific users or groups.',
       required: true,
       defaultValue: true,
+      group: 'assignments',
+      order: 0,
     },
     includeUserIds: {
       allowedBindings: ['entity', 'literal', 'runtime'],
@@ -125,6 +190,9 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       description: 'Only used when "Include all users" is off.',
       required: false,
       advanced: true,
+      group: 'assignments',
+      order: 10,
+      visibleWhen: { input: 'includeAllUsers', equals: false },
     },
     includeGroupIds: {
       allowedBindings: ['entity', 'literal', 'runtime'],
@@ -134,6 +202,9 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       description: 'Only used when "Include all users" is off.',
       required: false,
       advanced: true,
+      group: 'assignments',
+      order: 20,
+      visibleWhen: { input: 'includeAllUsers', equals: false },
     },
     includeRoleIds: {
       allowedBindings: ['entity', 'literal', 'runtime'],
@@ -143,6 +214,9 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       description: 'Target users assigned these directory roles.',
       required: false,
       advanced: true,
+      group: 'assignments',
+      order: 30,
+      visibleWhen: { input: 'includeAllUsers', equals: false },
     },
     excludeUserIds: {
       allowedBindings: ['entity', 'literal', 'runtime', 'priorOutput'],
@@ -152,6 +226,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       label: 'Exclude users',
       description: 'Exclude specific users (e.g. a breakglass account). Wire from a create-identity step or pick from the tenant.',
       required: false,
+      group: 'assignments',
+      order: 40,
     },
     excludeGroupIds: {
       allowedBindings: ['entity', 'literal', 'runtime', 'priorOutput'],
@@ -161,6 +237,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       label: 'Exclude groups',
       description: 'Exclude group members (e.g. an MFA-exempt group). Wire from a create-group step or pick an existing group.',
       required: false,
+      group: 'assignments',
+      order: 50,
     },
     excludeRoleIds: {
       allowedBindings: ['entity', 'literal', 'runtime'],
@@ -170,6 +248,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       description: 'Exclude users holding these directory roles.',
       required: false,
       advanced: true,
+      group: 'assignments',
+      order: 60,
     },
 
     // Application conditions
@@ -179,6 +259,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       label: 'Include all cloud apps',
       required: true,
       defaultValue: true,
+      group: 'applications',
+      order: 0,
     },
     includeApplicationIds: {
       allowedBindings: ['literal', 'runtime'],
@@ -187,6 +269,9 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       description: 'Microsoft app client IDs when "Include all cloud apps" is off.',
       required: false,
       advanced: true,
+      group: 'applications',
+      order: 10,
+      visibleWhen: { input: 'includeAllApplications', equals: false },
     },
     excludeApplicationIds: {
       allowedBindings: ['literal', 'runtime'],
@@ -194,6 +279,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       label: 'Exclude app IDs',
       required: false,
       advanced: true,
+      group: 'applications',
+      order: 20,
     },
 
     // Grant controls
@@ -203,6 +290,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       label: 'Require MFA',
       required: false,
       defaultValue: false,
+      group: 'grants',
+      order: 0,
     },
     requireCompliantDevice: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
@@ -211,6 +300,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       required: false,
       defaultValue: false,
       advanced: true,
+      group: 'grants',
+      order: 10,
     },
     requireDomainJoinedDevice: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
@@ -219,6 +310,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       required: false,
       defaultValue: false,
       advanced: true,
+      group: 'grants',
+      order: 20,
     },
     requireApprovedApp: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
@@ -227,6 +320,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       required: false,
       defaultValue: false,
       advanced: true,
+      group: 'grants',
+      order: 30,
     },
     requireAppProtectionPolicy: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
@@ -235,6 +330,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       required: false,
       defaultValue: false,
       advanced: true,
+      group: 'grants',
+      order: 40,
     },
     blockAccess: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
@@ -244,6 +341,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       required: false,
       defaultValue: false,
       advanced: true,
+      group: 'grants',
+      order: 50,
     },
     grantOperator: {
       allowedBindings: ['literal', 'runtime'],
@@ -253,6 +352,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       required: false,
       defaultValue: 'OR',
       advanced: true,
+      group: 'grants',
+      order: 60,
       choices: [
         { value: 'OR', label: 'OR — any control satisfies the policy' },
         { value: 'AND', label: 'AND — all controls must be satisfied' },
@@ -267,6 +368,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       required: false,
       defaultValue: false,
       advanced: true,
+      group: 'sessions',
+      order: 0,
     },
     signInFrequencyValue: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
@@ -274,6 +377,9 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       label: 'Sign-in frequency value',
       required: false,
       advanced: true,
+      group: 'sessions',
+      order: 10,
+      visibleWhen: { input: 'signInFrequencyEnabled', equals: true },
     },
     signInFrequencyType: {
       allowedBindings: ['literal', 'runtime'],
@@ -281,6 +387,9 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       label: 'Sign-in frequency unit',
       required: false,
       advanced: true,
+      group: 'sessions',
+      order: 20,
+      visibleWhen: { input: 'signInFrequencyEnabled', equals: true },
       choices: [
         { value: 'days', label: 'Days' },
         { value: 'hours', label: 'Hours' },
@@ -293,6 +402,8 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       required: false,
       defaultValue: false,
       advanced: true,
+      group: 'sessions',
+      order: 30,
     },
     persistentBrowserMode: {
       allowedBindings: ['literal', 'runtime'],
@@ -300,6 +411,9 @@ export const m365ConditionalAccessPolicyCreate: Capability<
       label: 'Persistent browser mode',
       required: false,
       advanced: true,
+      group: 'sessions',
+      order: 40,
+      visibleWhen: { input: 'persistentBrowserEnabled', equals: true },
       choices: [
         { value: 'never', label: 'Never (force re-auth on new browser session)' },
         { value: 'always', label: 'Always (stay signed in)' },

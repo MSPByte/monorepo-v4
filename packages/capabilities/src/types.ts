@@ -100,6 +100,21 @@ export interface InputMetaEntry {
   // Key for dynamic option lists fetched at run time by the run dialog.
   // Supported values: 'coveChildPartners'
   dynamicSource?: string;
+  // Presentation-only grouping used by the package builder and run dialog.
+  // The runtime contract stays flat so existing capability handlers remain
+  // backwards compatible while authors see the shape of the vendor object.
+  group?: string;
+  order?: number;
+  // Show this input only when a controlling input has the declared value.
+  // This is a UI affordance, not a substitute for handler-side validation.
+  visibleWhen?: { input: string; equals: unknown };
+}
+
+export interface InputGroupMeta {
+  label: string;
+  description?: string;
+  order?: number;
+  advanced?: boolean;
 }
 
 export interface OutputMetaEntry {
@@ -234,6 +249,9 @@ export interface Capability<Inputs = unknown, Outputs = unknown> {
   inputs: z.ZodType<Inputs>;
   outputs: z.ZodType<Outputs>;
   inputMeta: Record<string, InputMetaEntry>;
+  // Named sections that make a complex capability read like the product it
+  // drives (for example, Entra Conditional Access), rather than a flat API.
+  inputGroups?: Record<string, InputGroupMeta>;
   outputMeta: Record<string, OutputMetaEntry>;
   actionLabel: ActionLabels;
   // Maps to audit.customer_logs.action enum: 'create' | 'update' | 'delete'.

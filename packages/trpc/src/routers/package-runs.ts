@@ -232,6 +232,8 @@ export const packageRunsRouter = t.router({
         name: pkg.name,
         version: pkg.version,
         steps: pkg.steps,
+        prompts: pkg.prompts ?? [],
+        outcomeSteps: pkg.outcomeSteps ?? { onSuccess: [], onFailure: [] },
         failureActions: pkg.failureActions ?? [],
         skippedStepIndexes: input.skippedStepIndexes
       };

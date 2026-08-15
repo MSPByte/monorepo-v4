@@ -19,11 +19,27 @@
     inputBindings: Record<string, Binding>;
   };
 
+  export type PackagePrompt = {
+    id: string;
+    label: string;
+    description?: string;
+    required: boolean;
+    section?: string;
+    order: number;
+  };
+
+  export type OutcomeSteps = {
+    onSuccess: Step[];
+    onFailure: Step[];
+  };
+
   export type PackageDraft = {
     name: string;
     description: string;
     status: 'draft' | 'active' | 'archived';
     steps: Step[];
+    prompts: PackagePrompt[];
+    outcomeSteps: OutcomeSteps;
     // Empty arrays => global. Non-empty restricts which sites, groups, or
     // tenant links this package can run against.
     allowedSites: string[];
@@ -167,6 +183,8 @@
     description: initial.description,
     status: initial.status,
     steps: structuredClone(initial.steps),
+    prompts: structuredClone(initial.prompts ?? []),
+    outcomeSteps: structuredClone(initial.outcomeSteps ?? { onSuccess: [], onFailure: [] }),
     allowedSites: [...(initial.allowedSites ?? [])],
     allowedSiteGroups: [...(initial.allowedSiteGroups ?? [])],
     allowedIntegrationLinks: [...(initial.allowedIntegrationLinks ?? [])],
@@ -236,7 +254,8 @@
     const out: Source[] = [];
     if (set.has('literal')) out.push('fixed');
     if (set.has('runtime') || set.has('entity')) out.push('runtime');
-    if (set.has('entity')) out.push('row');
+    // Row-trigger execution is not implemented by the worker yet. Do not
+    // advertise a source authors cannot successfully run.
     if (set.has('priorOutput')) out.push('wire');
     // Only show `generated` if a registered generator applies to this typeHint,
     // otherwise it's dead UI.
@@ -256,11 +275,13 @@
       allowedBindings: readonly string[];
       entityType?: string;
       typeHint?: string;
+      required?: boolean;
+      defaultValue?: unknown;
     }
   ): Binding {
     if (source === 'fixed') {
       const initialValue =
-        meta.typeHint === 'boolean' ? false : meta.typeHint === 'stringArray' ? [] : '';
+        meta.defaultValue ?? (meta.typeHint === 'boolean' ? false : meta.typeHint === 'stringArray' ? [] : '');
       return { kind: 'literal', value: initialValue };
     }
     if (source === 'runtime') {
@@ -269,7 +290,7 @@
       if (!meta.allowedBindings.includes('runtime') && meta.allowedBindings.includes('entity')) {
         return { kind: 'entity', source: 'picker', entityType: meta.entityType ?? '' };
       }
-      return { kind: 'runtime', promptKey: inputName, required: true };
+      return { kind: 'runtime', promptKey: inputName, required: meta.required !== false };
     }
     if (source === 'row') {
       return { kind: 'entity', source: 'row-context', entityType: meta.entityType ?? '' };
@@ -298,11 +319,34 @@
       allowedBindings: readonly string[];
       entityType?: string;
       typeHint?: string;
+      required?: boolean;
+      defaultValue?: unknown;
     }
   ): Binding {
     const allowed = allowedSourcesFor(meta);
-    const preferred: Source = allowed.includes('runtime') ? 'runtime' : (allowed[0] ?? 'fixed');
+    const preferred: Source =
+      meta.defaultValue !== undefined && allowed.includes('fixed')
+        ? 'fixed'
+        : allowed.includes('runtime')
+          ? 'runtime'
+          : (allowed[0] ?? 'fixed');
     return defaultBindingFor(preferred, inputName, meta);
+  }
+
+  function promptFor(inputName: string, meta: { label?: string; description?: string; required?: boolean }) {
+    return {
+      id: inputName,
+      label: fieldLabel(inputName, meta.label),
+      description: meta.description,
+      required: meta.required !== false,
+      section: 'Run details',
+      order: draft.prompts.length,
+    } satisfies PackagePrompt;
+  }
+
+  function ensurePrompt(inputName: string, meta: { label?: string; description?: string; required?: boolean }) {
+    if (draft.prompts.some((prompt) => prompt.id === inputName)) return;
+    draft.prompts = [...draft.prompts, promptFor(inputName, meta)];
   }
 
   function addStep(capabilityId: string) {
@@ -313,6 +357,7 @@
     for (const [name, meta] of Object.entries(cap.inputMeta)) {
       if (!isRequiredInput(meta)) continue;
       inputBindings[name] = defaultForInput(name, meta);
+      if (inputBindings[name]?.kind === 'runtime') ensurePrompt(name, meta);
     }
     const nextIndex = draft.steps.length;
     draft.steps = [...draft.steps, { capabilityId: cap.id, label: cap.name, optional: false, inputBindings }];
@@ -352,6 +397,7 @@
     const meta = cap?.inputMeta[inputName];
     if (!meta) return;
     step.inputBindings[inputName] = defaultForInput(inputName, meta);
+    if (step.inputBindings[inputName]?.kind === 'runtime') ensurePrompt(inputName, meta);
     draft.steps = [...draft.steps];
   }
 
@@ -396,6 +442,7 @@
     const meta = cap?.inputMeta[inputName];
     if (!meta) return;
     step.inputBindings[inputName] = defaultBindingFor(source, inputName, meta);
+    if (step.inputBindings[inputName]?.kind === 'runtime') ensurePrompt(inputName, meta);
     draft.steps = [...draft.steps];
   }
 
@@ -509,9 +556,25 @@
     return 'border-l-cyan-500/70';
   }
 
+  function inputGroupFor(
+    capability: { inputMeta: Record<string, { group?: string; order?: number }>; inputGroups?: Record<string, { label: string; description?: string; order?: number; advanced?: boolean }> },
+    inputName: string,
+  ) {
+    const meta = capability.inputMeta[inputName];
+    const id = meta?.group ?? 'general';
+    return {
+      id,
+      label: capability.inputGroups?.[id]?.label ?? 'Configuration',
+      description: capability.inputGroups?.[id]?.description,
+      order: capability.inputGroups?.[id]?.order ?? 0,
+      inputOrder: meta?.order ?? 0,
+    };
+  }
+
   function canSave(): boolean {
     if (!draft.name.trim()) return false;
     if (draft.steps.length === 0) return false;
+    if (draft.prompts.some((prompt) => !prompt.id.trim() || !prompt.label.trim())) return false;
     for (const step of draft.steps) {
       const cap = capIndex.get(step.capabilityId);
       if (!cap) return false;
@@ -533,6 +596,26 @@
 
   const selectedStep = $derived(selectedIndex >= 0 ? (draft.steps[selectedIndex] ?? null) : null);
   const selectedCap = $derived(selectedStep ? capIndex.get(selectedStep.capabilityId) : undefined);
+  const publishedPrompts = $derived(
+    [...draft.prompts].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label))
+  );
+
+  function updatePrompt(id: string, patch: Partial<PackagePrompt>) {
+    draft.prompts = draft.prompts.map((prompt) => prompt.id === id ? { ...prompt, ...patch } : prompt);
+  }
+
+  function setPromptRequired(id: string, required: boolean) {
+    updatePrompt(id, { required });
+    draft.steps = draft.steps.map((step) => ({
+      ...step,
+      inputBindings: Object.fromEntries(
+        Object.entries(step.inputBindings).map(([name, binding]) => [
+          name,
+          binding.kind === 'runtime' && binding.promptKey === id ? { ...binding, required } : binding,
+        ])
+      ),
+    }));
+  }
 
   // Inspector: prompt-key hint. When the promptKey differs from the input
   // name the user is doing something intentional (dedup across steps) — we
@@ -857,6 +940,54 @@
             </div>
           </div>
 
+          <div class="space-y-3 rounded-lg border bg-muted/10 p-4">
+            <div class="flex items-baseline justify-between gap-3">
+              <div>
+                <h3 class="text-sm font-medium">Run experience</h3>
+                <p class="mt-0.5 text-xs text-muted-foreground">
+                  These are the only questions an operator sees when they run this preset.
+                </p>
+              </div>
+              <span class="font-mono text-[11px] text-muted-foreground">
+                {publishedPrompts.length} {publishedPrompts.length === 1 ? 'prompt' : 'prompts'}
+              </span>
+            </div>
+            {#if publishedPrompts.length === 0}
+              <p class="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                This package runs with its preset values. Add a capability input as “Ask when run” to publish a question.
+              </p>
+            {:else}
+              <div class="space-y-2">
+                {#each publishedPrompts as prompt (prompt.id)}
+                  <div class="grid gap-2 rounded-md border bg-background p-3 sm:grid-cols-[1fr_auto] sm:items-start">
+                    <div class="min-w-0 space-y-1">
+                      <Input
+                        value={prompt.label}
+                        aria-label={`Prompt label for ${prompt.id}`}
+                        oninput={(event) => updatePrompt(prompt.id, { label: (event.target as HTMLInputElement).value })}
+                        class="h-8 text-sm font-medium"
+                      />
+                      <Input
+                        value={prompt.description ?? ''}
+                        placeholder="Help the operator understand this choice"
+                        aria-label={`Prompt help for ${prompt.id}`}
+                        oninput={(event) => updatePrompt(prompt.id, { description: (event.target as HTMLInputElement).value })}
+                        class="h-8 text-xs"
+                      />
+                    </div>
+                    <label class="flex items-center gap-2 whitespace-nowrap pt-1 text-xs text-muted-foreground">
+                      <Checkbox
+                        checked={prompt.required}
+                        onCheckedChange={(checked) => setPromptRequired(prompt.id, Boolean(checked))}
+                      />
+                      Required
+                    </label>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+
           {#if draft.steps.length === 0}
             <div class="rounded-lg border border-dashed p-8 text-center">
               <div class="mx-auto flex size-10 items-center justify-center rounded-full bg-muted">
@@ -872,7 +1003,11 @@
       {:else if selectedStep && selectedCap}
         {@const cap = selectedCap}
         {@const step = selectedStep}
-        {@const boundInputNames = Object.keys(step.inputBindings)}
+        {@const boundInputNames = Object.keys(step.inputBindings).sort((a, b) => {
+          const aGroup = inputGroupFor(cap, a);
+          const bGroup = inputGroupFor(cap, b);
+          return aGroup.order - bGroup.order || aGroup.inputOrder - bGroup.inputOrder || a.localeCompare(b);
+        })}
         {@const availableOptional = Object.entries(cap.inputMeta)
           .filter(([name, meta]) => !isRequiredInput(meta) && !(name in step.inputBindings))
           .map(([name, meta]) => ({
@@ -956,9 +1091,19 @@
           {/if}
 
           <div class="space-y-3">
-            {#each boundInputNames as inputName (inputName)}
+            {#each boundInputNames as inputName, inputIndex (inputName)}
               {@const meta = cap.inputMeta[inputName]}
               {#if meta}
+                {@const group = inputGroupFor(cap, inputName)}
+                {@const previousGroup = inputIndex > 0 ? inputGroupFor(cap, boundInputNames[inputIndex - 1]!) : null}
+                {#if !previousGroup || previousGroup.id !== group.id}
+                  <div class="pt-3 first:pt-0">
+                    <h4 class="text-sm font-semibold">{group.label}</h4>
+                    {#if group.description}
+                      <p class="mt-0.5 text-xs text-muted-foreground">{group.description}</p>
+                    {/if}
+                  </div>
+                {/if}
                 {@const binding = step.inputBindings[inputName]}
                 {@const label = fieldLabel(inputName, meta.label)}
                 {@const optional = !isRequiredInput(meta)}
@@ -1015,23 +1160,17 @@
 
                   <!-- Source picker -->
                   <div
-                    class="grid grid-cols-2 gap-1 border-b bg-muted/30 p-1 sm:grid-cols-3 lg:grid-cols-6"
+                    class="flex flex-wrap gap-1 border-b bg-muted/30 p-1.5"
                   >
-                    {#each ['fixed', 'runtime', 'generated', 'fact', 'row', 'wire'] as src (src)}
-                      {@const isAllowed = allowed.includes(src as Source)}
+                    {#each allowed as src (src)}
                       {@const isActive = currentSource === src}
                       <button
                         type="button"
-                        disabled={!isAllowed}
-                        onclick={() => changeSource(selectedIndex, inputName, src as Source)}
+                        onclick={() => changeSource(selectedIndex, inputName, src)}
                         class="group relative flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-all {isActive
                           ? 'bg-background text-foreground shadow-sm ring-1 ring-border'
-                          : isAllowed
-                            ? 'text-muted-foreground hover:bg-background/60 hover:text-foreground'
-                            : 'cursor-not-allowed text-muted-foreground/40'}"
-                        title={isAllowed
-                          ? sourceHint(src as Source, meta)
-                          : 'Not available for this input'}
+                          : 'text-muted-foreground hover:bg-background/60 hover:text-foreground'}"
+                        title={sourceHint(src, meta)}
                       >
                         {#if src === 'fixed'}
                           <Circle class="size-3 {isActive ? sourceIconColor('fixed') : ''}" />
@@ -1046,7 +1185,7 @@
                         {:else}
                           <Link2 class="size-3 {isActive ? sourceIconColor('wire') : ''}" />
                         {/if}
-                        {sourceLabel(src as Source)}
+                        {sourceLabel(src)}
                       </button>
                     {/each}
                   </div>

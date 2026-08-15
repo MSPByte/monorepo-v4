@@ -148,6 +148,15 @@
     inputBindings: Record<string, Binding>;
   };
 
+  type PackagePrompt = {
+    id: string;
+    label: string;
+    description?: string;
+    required: boolean;
+    section?: string;
+    order: number;
+  };
+
   type RuntimeField = {
     promptKey: string;
     inputName: string;
@@ -159,6 +168,9 @@
     description?: string;
     choices?: ReadonlyArray<{ value: string; label: string }>;
     dynamicSource?: string;
+    section?: string;
+    order?: number;
+    visibleWhen?: { input: string; equals: unknown };
   };
 
   type StepGroup = {
@@ -177,6 +189,9 @@
   const stepGroups = $derived.by<StepGroup[]>(() => {
     if (!selectedPackage || !capabilitiesQuery.data) return [];
     const capMeta = new Map(capabilitiesQuery.data.map((c) => [c.id, c]));
+    const promptMap = new Map(
+      ((selectedPackage.prompts as PackagePrompt[] | null) ?? []).map((prompt) => [prompt.id, prompt]),
+    );
     const seenKeys = new Set<string>();
     const groups: StepGroup[] = [];
     const steps = (selectedPackage.steps as Step[]) ?? [];
@@ -208,23 +223,28 @@
           required?: boolean;
           choices?: ReadonlyArray<{ value: string; label: string }>;
           dynamicSource?: string;
+          visibleWhen?: { input: string; equals: unknown };
         }>
       )) {
         const binding = (step.inputBindings as Record<string, Binding>)[inputName];
         if (!binding || binding.kind !== 'runtime') continue;
         if (seenKeys.has(binding.promptKey)) continue;
+        const prompt = promptMap.get(binding.promptKey);
         seenKeys.add(binding.promptKey);
         fields.push({
           promptKey: binding.promptKey,
           inputName,
-          required: binding.required,
+          required: prompt?.required ?? binding.required,
           typeHint: meta.typeHint ?? 'text',
           sensitive: meta.sensitive ?? false,
           entityType: meta.entityType,
-          label: meta.label,
-          description: meta.description,
+          label: prompt?.label ?? meta.label,
+          description: prompt?.description ?? meta.description,
           choices: meta.choices,
           dynamicSource: meta.dynamicSource,
+          section: prompt?.section,
+          order: prompt?.order,
+          visibleWhen: meta.visibleWhen,
         });
       }
 
@@ -243,8 +263,28 @@
 
   // Flat list of runtime fields for non-skipped steps (drives canSubmit / cascadeLinkId / postal autofill).
   const runtimeFields = $derived(
-    stepGroups.filter((g) => !skippedSteps.has(g.position)).flatMap((g) => g.fields)
+    stepGroups
+      .filter((g) => !skippedSteps.has(g.position))
+      .flatMap((g) => g.fields)
+      .filter((field) => isFieldVisible(field))
   );
+
+  function controllingValue(inputName: string): unknown {
+    if (!selectedPackage) return undefined;
+    const steps = (selectedPackage.steps as Step[]) ?? [];
+    for (const step of steps) {
+      const binding = step.inputBindings[inputName];
+      if (!binding) continue;
+      if (binding.kind === 'literal') return binding.value;
+      if (binding.kind === 'runtime') return values[binding.promptKey];
+    }
+    return undefined;
+  }
+
+  function isFieldVisible(field: RuntimeField): boolean {
+    if (!field.visibleWhen) return true;
+    return controllingValue(field.visibleWhen.input) === field.visibleWhen.equals;
+  }
 
   const TENANT_SCOPED_ENTITY_TYPES = new Set(['m365_identity', 'm365_group', 'm365_license']);
 
@@ -448,6 +488,7 @@
           {#each stepGroups as group (group.position)}
             {@const isSkipped = skippedSteps.has(group.position)}
             {@const canSkip = group.optional && !group.hasWiredOutputs}
+            {@const visibleFields = group.fields.filter((field) => isFieldVisible(field))}
             <div class="rounded-lg border overflow-hidden {isSkipped ? 'opacity-50' : ''}">
               <!-- Step header -->
               <div class="flex items-center gap-2.5 px-3 py-2 bg-muted/40 border-b">
@@ -481,10 +522,10 @@
               </div>
 
               {#if !isSkipped}
-                {#if group.fields.length > 0}
+                {#if visibleFields.length > 0}
                   <!-- Fields -->
                   <div class="space-y-4 p-3">
-                    {#each group.fields as field (field.promptKey)}
+                    {#each visibleFields as field (field.promptKey)}
                       {@const label = fieldLabel(field.promptKey, field.label)}
                       {@const blocked = isBlockedByTenant(field)}
                       <div class="space-y-1.5">
