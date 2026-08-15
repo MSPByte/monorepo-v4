@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import type { M365Connector, SophosConnector, DattoConnector, CoveConnector, HaloPSAConnector } from '@mspbyte/connectors';
 import type { ActionLabels } from '@mspbyte/shared';
+import type { FieldTypeId as PackageFieldTypeId } from '@mspbyte/shared';
 
 // Stable, deliberately small data contract exposed only to failure reactions.
 // Unlike main-step outputs, every field here exists whenever the failure lane
@@ -101,6 +102,9 @@ export type InputTypeHint =
 
 export interface InputMetaEntry {
   allowedBindings: ReadonlyArray<BindingKind>;
+  // Canonical package type. When omitted, existing entityType/typeHint values
+  // resolve through the package field-type registry for backwards compatibility.
+  valueType?: PackageFieldTypeId;
   entityType?: string;
   sensitive?: boolean;
   priorOutputCompat?: readonly string[];
@@ -147,6 +151,9 @@ export interface OutputMetaEntry {
   // Semantic type identifier used by the package builder UI to filter compatible
   // priorOutput wires. Inputs declare which outputTypes they accept via priorOutputCompat.
   outputType?: string;
+  // Canonical package type. outputType remains the stable wire-compatibility
+  // identifier used by existing packages.
+  valueType?: PackageFieldTypeId;
 }
 
 // Row shape the worker resolves for Sophos endpoint capabilities.
@@ -269,6 +276,9 @@ export interface CapabilityCtx {
 
 export interface Capability<Inputs = unknown, Outputs = unknown> {
   id: string;
+  // Kept executable for existing package snapshots, but omitted from the
+  // authoring catalog. Use only for narrow compatibility bridges.
+  hidden?: boolean;
   vendor: string;
   name: string;
   description: string;

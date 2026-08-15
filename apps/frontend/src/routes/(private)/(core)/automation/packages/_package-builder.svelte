@@ -755,33 +755,8 @@
     return 'border-l-cyan-500/70';
   }
 
-  // This is intentionally a presentation layer over the existing capability
-  // metadata. The upcoming shared type-registry work will own these labels
-  // across packages, site facts, and compliance policies; authors should not
-  // have to wait for that larger migration to see the shape of a field today.
-  function inputTypeLabel(meta: { entityType?: string; typeHint?: string }): string {
-    const entityLabels: Record<string, string> = {
-      integration_link: 'Integration link',
-      m365_identity: 'Microsoft 365 identity',
-      m365_group: 'Microsoft 365 group',
-      m365_license: 'Microsoft 365 license',
-      m365_role: 'Microsoft 365 role',
-      site: 'MSPByte site',
-    };
-    if (meta.entityType) return entityLabels[meta.entityType] ?? meta.entityType.replace(/[_-]+/g, ' ');
-    const labels: Record<string, string> = {
-      boolean: 'Boolean',
-      number: 'Number',
-      stringArray: 'Text list',
-      password: 'Secret text',
-      upn: 'User principal name',
-      postalCode: 'Postal code',
-      city: 'City',
-      countryCode: 'Country code',
-      state: 'State / region',
-      text: 'Text',
-    };
-    return labels[meta.typeHint ?? 'text'] ?? 'Text';
+  function inputTypeLabel(meta: { fieldTypeLabel?: string }): string {
+    return meta.fieldTypeLabel ?? 'Text';
   }
 
   function inputGroupFor(
@@ -1781,7 +1756,7 @@
                       {@const factOpts = factFieldsFor(meta.typeHint).map((f) => ({
                         value: f.key,
                         label: f.label,
-                        subLabel: `${f.type}${f.valueMode === 'multiple' ? '[]' : ''} · ${f.section}`,
+                        subLabel: `${f.fieldTypeLabel ?? f.type} · ${f.section}`,
                       }))}
                       <div class="space-y-3">
                         {#if factOpts.length === 0}
@@ -2339,7 +2314,7 @@
                     </div>
                   {:else if binding.kind === 'siteFact'}
                     <SingleSelect
-                      options={factFieldsFor(meta.typeHint).map((field) => ({ value: field.key, label: field.label, subLabel: field.section }))}
+                      options={factFieldsFor(meta.typeHint).map((field) => ({ value: field.key, label: field.label, subLabel: `${field.fieldTypeLabel ?? field.type} · ${field.section}` }))}
                       selected={binding.key}
                       placeholder="Choose a site profile field…"
                       onchange={(key) => setReactionBinding(inputName, { ...binding, key })}

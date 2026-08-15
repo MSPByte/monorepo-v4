@@ -9,8 +9,12 @@ import { m365GroupCreate } from './m365/create-group.js';
 import { m365ConditionalAccessPolicyCreate } from './m365/create-conditional-access-policy.js';
 import { coreSiteProvision } from './core/provision-site.js';
 import { coreHaloPSATicketCreate } from './core/halopsa-create-ticket.js';
-import { sophosEndpointEnableTamper } from './sophos/enable-tamper.js';
-import { sophosEndpointDisableTamper } from './sophos/disable-tamper.js';
+import {
+  legacySophosEndpointDisableTamper,
+  legacySophosEndpointEnableTamper,
+  legacySophosEndpointsEnableTamper,
+  sophosEndpointToggleTamper,
+} from './sophos/enable-tamper.js';
 import { sophosEndpointDelete } from './sophos/delete-endpoint.js';
 import { sophosCreateSite } from './sophos/create-site.js';
 import { dattoCreateSite } from './datto/create-site.js';
@@ -27,8 +31,10 @@ export const CAPABILITIES = {
   [m365GroupAddMember.id]: m365GroupAddMember,
   [m365GroupCreate.id]: m365GroupCreate,
   [m365ConditionalAccessPolicyCreate.id]: m365ConditionalAccessPolicyCreate,
-  [sophosEndpointEnableTamper.id]: sophosEndpointEnableTamper,
-  [sophosEndpointDisableTamper.id]: sophosEndpointDisableTamper,
+  [sophosEndpointToggleTamper.id]: sophosEndpointToggleTamper,
+  [legacySophosEndpointEnableTamper.id]: legacySophosEndpointEnableTamper,
+  [legacySophosEndpointDisableTamper.id]: legacySophosEndpointDisableTamper,
+  [legacySophosEndpointsEnableTamper.id]: legacySophosEndpointsEnableTamper,
   [sophosEndpointDelete.id]: sophosEndpointDelete,
   [sophosCreateSite.id]: sophosCreateSite,
   [dattoCreateSite.id]: dattoCreateSite,

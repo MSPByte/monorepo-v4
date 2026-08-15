@@ -115,8 +115,11 @@
   const catalogFactKeyOptions = $derived.by(() => {
     const catalog = catalogQuery.data;
     if (!catalog) return [];
-    const catalogFields = (catalog as { fields?: { key: string; label: string }[] }).fields ?? [];
-    return catalogFields.map((f) => ({ value: f.key, label: `${f.label} (${f.key})` }));
+    const catalogFields = (catalog as { fields?: { key: string; label: string; valueTypeLabel?: string }[] }).fields ?? [];
+    return catalogFields.map((f) => ({
+      value: f.key,
+      label: `${f.label} (${f.key})${f.valueTypeLabel ? ` · ${f.valueTypeLabel}` : ''}`,
+    }));
   });
 
   const effectiveFactKey = $derived(factKey === '__custom__' ? customFactKey : factKey);

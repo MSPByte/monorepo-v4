@@ -23,6 +23,7 @@
     | 'm365_group'
     | 'm365_license'
     | 'm365_role'
+    | 'sophos_endpoint'
     | 'site';
   type PickerEntityType = Exclude<EntityType, 'site'>;
 
@@ -73,6 +74,7 @@
   let siteModes = $state<Record<string, 'select' | 'create'>>({});
   let postalLookupStatus = $state<Record<string, 'idle' | 'loading' | 'done' | 'error'>>({});
   let postalLookupTimer: ReturnType<typeof setTimeout> | null = null;
+  let selectedTargetSiteId = $state('');
   let startStepIndex = $state(0);
   let skippedSteps = $state<Set<number>>(new Set());
 
@@ -84,6 +86,7 @@
       passwordModes = {};
       siteModes = {};
       postalLookupStatus = {};
+      selectedTargetSiteId = '';
       skippedSteps = new Set();
     }
   });
@@ -285,6 +288,14 @@
       .filter((field) => isFieldVisible(field))
   );
 
+  // Device operations need a concrete site before their endpoint picker can
+  // be useful. Page-level launches already provide one; the automation page
+  // asks once here and persists it as the run target.
+  const needsSiteTarget = $derived(
+    runtimeFields.some((field) => field.entityType === 'sophos_endpoint'),
+  );
+  const effectiveSiteId = $derived(siteId ?? (selectedTargetSiteId || undefined));
+
   function controllingValue(inputName: string): unknown {
     if (!selectedPackage) return undefined;
     const outcomeSteps = (selectedPackage.outcomeSteps as { onSuccess?: Step[]; onFailure?: Step[] } | null) ?? {};
@@ -364,13 +375,14 @@
     mutationFn: (args: {
       packageId: string;
       runtimeInputs: Record<string, unknown>;
+      siteId?: string;
       startStepIndex: number;
       skippedStepIndexes: number[];
     }) =>
       trpc.packageRuns.start.mutate({
         packageId: args.packageId,
         linkId: linkId ?? null,
-        siteId: siteId ?? null,
+        siteId: args.siteId ?? null,
         runtimeInputs: args.runtimeInputs,
         startStepIndex: args.startStepIndex,
         skippedStepIndexes: args.skippedStepIndexes,
@@ -408,7 +420,8 @@
       entityType === 'm365_identity' ||
       entityType === 'm365_group' ||
       entityType === 'm365_license' ||
-      entityType === 'm365_role'
+      entityType === 'm365_role' ||
+      entityType === 'sophos_endpoint'
     );
   }
 
@@ -428,6 +441,7 @@
 
   function canSubmit(): boolean {
     if (!selectedPackage) return false;
+    if (needsSiteTarget && !effectiveSiteId) return false;
     for (const field of runtimeFields) {
       if (isBlockedByTenant(field) && field.required) return false;
       if (!field.required) continue;
@@ -469,6 +483,7 @@
     start.mutate({
       packageId: selectedPackage.id,
       runtimeInputs,
+      siteId: effectiveSiteId,
       startStepIndex,
       skippedStepIndexes: [...skippedSteps],
     });
@@ -505,6 +520,20 @@
       {/if}
 
       {#if selectedPackage}
+        {#if needsSiteTarget && !siteId}
+          <section class="rounded-lg border border-sky-500/25 bg-sky-500/[0.04] px-3 py-3 space-y-2">
+            <Label class="text-sm font-medium">Target site<span class="text-rose-500 ml-0.5">*</span></Label>
+            <p class="text-xs text-muted-foreground">
+              Endpoint choices are limited to this site and the run is recorded against it.
+            </p>
+            <SingleSelect
+              options={siteOptions}
+              selected={selectedTargetSiteId}
+              placeholder={sitesQuery.isLoading ? 'Loading sites…' : 'Choose a site…'}
+              onchange={(v) => (selectedTargetSiteId = v)}
+            />
+          </section>
+        {/if}
         {#if stepGroups.length > 0}
           {#each stepGroups as group (group.id)}
             {#if group.lane === 'onFailure' && !stepGroups.some((candidate) => candidate.lane === 'onFailure' && candidate.position < group.position)}
@@ -591,7 +620,11 @@
                             </div>
                           {/if}
                         {:else if isPickerEntityType(field.entityType)}
-                          {#if blocked}
+                          {#if field.entityType === 'sophos_endpoint' && !effectiveSiteId}
+                            <div class="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                              Choose the target site first.
+                            </div>
+                          {:else if blocked}
                             <div class="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
                               Choose a tenant first.
                             </div>
@@ -605,6 +638,7 @@
                               integrationId={field.entityType === 'integration_link'
                                 ? 'microsoft-365'
                                 : undefined}
+                              siteId={field.entityType === 'sophos_endpoint' ? effectiveSiteId : undefined}
                               multiple={field.typeHint === 'stringArray'}
                               value={values[field.promptKey] as string | string[] | null | undefined ??
                                 (field.typeHint === 'stringArray' ? [] : null)}

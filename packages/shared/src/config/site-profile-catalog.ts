@@ -1,3 +1,5 @@
+import type { FieldTypeId } from '../types/field-types.js';
+
 export type ProfileFieldType = 'string' | 'number' | 'boolean';
 export type ProfileFieldSection = 'executive' | 'context';
 export type ProfileFieldValueMode = 'single' | 'multiple';
@@ -10,6 +12,7 @@ export type ProfileFieldDef = {
   valueMode: ProfileFieldValueMode;
   displayOrder: number;
   values?: string[] | null;
+  valueType?: FieldTypeId;
 };
 
 export type StackCategoryDef = {
@@ -107,6 +110,7 @@ export const BUILT_IN_PROFILE_FIELDS: ProfileFieldDef[] = [
     label: 'Time Zone',
     section: 'executive',
     type: 'string',
+    valueType: 'timezone',
     valueMode: 'single',
     displayOrder: 70,
     values: Intl.supportedValuesOf('timeZone')

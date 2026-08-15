@@ -9,6 +9,8 @@ import {
   m365Roles,
   packageRuns,
   packages,
+  sites,
+  sophosEndpoints,
   siteGroupLinkMembers,
   siteProfileFields,
 } from '@mspbyte/drizzle';
@@ -19,8 +21,15 @@ import {
   listCapabilities,
   listGenerators,
   FAILURE_CONTEXT_PATHS,
+  packageFieldTypeLabel,
+  resolveInputFieldType,
+  resolveOutputFieldType,
 } from '@mspbyte/capabilities';
-import { ActionLabels } from '@mspbyte/shared';
+import {
+  ActionLabels,
+  fieldTypeLabel,
+  resolveSiteFactFieldType,
+} from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
 import {
@@ -134,6 +143,7 @@ const entityTypeSchema = z.enum([
   'm365_group',
   'm365_license',
   'm365_role',
+  'sophos_endpoint',
 ]);
 type EntityOption = {
   id: string;
@@ -590,6 +600,7 @@ export const packagesRouter = t.router({
         packageId: z.uuid().optional(),
         integrationLinkId: z.uuid().optional(),
         integrationId: z.string().optional(),
+        siteId: z.uuid().optional(),
         limit: z.number().int().min(1).max(500).default(200),
       }),
     )
@@ -732,6 +743,39 @@ export const packagesRouter = t.router({
           });
       }
 
+      if (input.entityType === 'sophos_endpoint') {
+        const filters = [];
+        if (input.integrationLinkId) {
+          filters.push(eq(sophosEndpoints.linkId, input.integrationLinkId));
+        }
+        if (input.siteId) {
+          filters.push(eq(sophosEndpoints.siteId, input.siteId));
+        }
+        const rows = await ctx.db
+          .select({
+            id: sophosEndpoints.id,
+            linkId: sophosEndpoints.linkId,
+            hostname: sophosEndpoints.hostname,
+            osName: sophosEndpoints.osName,
+            online: sophosEndpoints.online,
+            siteName: sites.name,
+          })
+          .from(sophosEndpoints)
+          .leftJoin(sites, eq(sophosEndpoints.siteId, sites.id))
+          .where(filters.length ? and(...filters) : undefined)
+          .orderBy(asc(sophosEndpoints.hostname))
+          .limit(input.limit);
+        return rows
+          .filter((row) => (scopedLinkIds ? scopedLinkIds.has(row.linkId) : true))
+          .map((row) => ({
+            id: row.id,
+            label: row.hostname,
+            subLabel: [row.osName, row.siteName, row.online ? 'online' : 'offline']
+              .filter(Boolean)
+              .join(' · '),
+          }));
+      }
+
       return [];
     }),
 
@@ -739,17 +783,27 @@ export const packagesRouter = t.router({
   // frontend can render "which capability does this run" labels without
   // duplicating the registry.
   capabilities: authProcedure.query(() => {
-    return listCapabilities().map((capability) => ({
-      id: capability.id,
-      vendor: capability.vendor,
-      name: capability.name,
-      description: capability.description,
-      category: capability.category,
-      inputMeta: capability.inputMeta,
-      inputGroups: capability.inputGroups,
-      outputMeta: capability.outputMeta,
-      defaultUnitPrice: capability.defaultUnitPrice,
-    }));
+      return listCapabilities().filter((capability) => !capability.hidden).map((capability) => ({
+        id: capability.id,
+        vendor: capability.vendor,
+        name: capability.name,
+        description: capability.description,
+        category: capability.category,
+        inputMeta: Object.fromEntries(
+          Object.entries(capability.inputMeta).map(([name, meta]) => {
+            const fieldType = resolveInputFieldType(meta);
+            return [name, { ...meta, fieldType, fieldTypeLabel: packageFieldTypeLabel(fieldType) }];
+          }),
+        ),
+        inputGroups: capability.inputGroups,
+        outputMeta: Object.fromEntries(
+          Object.entries(capability.outputMeta).map(([name, meta]) => {
+            const fieldType = resolveOutputFieldType(meta);
+            return [name, { ...meta, fieldType, fieldTypeLabel: packageFieldTypeLabel(fieldType) }];
+          }),
+        ),
+        defaultUnitPrice: capability.defaultUnitPrice,
+      }));
   }),
 
   // Generator registry surfaced to the builder UI so it can render the
@@ -771,7 +825,7 @@ export const packagesRouter = t.router({
     if (!ctx.can('Packages.Read')) {
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Read required' });
     }
-    return ctx.db
+    const fields = await ctx.db
       .select({
         key: siteProfileFields.key,
         label: siteProfileFields.label,
@@ -782,5 +836,9 @@ export const packagesRouter = t.router({
       .from(siteProfileFields)
       .where(eq(siteProfileFields.active, true))
       .orderBy(siteProfileFields.section, siteProfileFields.displayOrder, siteProfileFields.label);
+    return fields.map((field) => {
+      const fieldType = resolveSiteFactFieldType(field);
+      return { ...field, fieldType, fieldTypeLabel: fieldTypeLabel(fieldType) };
+    });
   }),
 });

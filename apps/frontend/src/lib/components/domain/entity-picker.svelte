@@ -6,13 +6,20 @@
   import SingleSelect from '$lib/components/single-select.svelte';
   import MultiSelect from '$lib/components/multi-select.svelte';
 
-  type EntityType = 'integration_link' | 'm365_identity' | 'm365_group' | 'm365_license' | 'm365_role';
+  type EntityType =
+    | 'integration_link'
+    | 'm365_identity'
+    | 'm365_group'
+    | 'm365_license'
+    | 'm365_role'
+    | 'sophos_endpoint';
 
   type Props = {
     entityType: EntityType;
     packageId?: string;
     integrationLinkId?: string;
     integrationId?: string;
+    siteId?: string;
     // Single mode: string | null. Multi mode: string[].
     value: string | string[] | null;
     onValueChange: (value: string | string[] | null) => void;
@@ -26,6 +33,7 @@
     packageId,
     integrationLinkId,
     integrationId,
+    siteId,
     value,
     onValueChange,
     multiple = false,
@@ -42,6 +50,7 @@
       packageId ?? null,
       integrationLinkId ?? null,
       integrationId ?? null,
+      siteId ?? null,
     ],
     queryFn: () =>
       trpc.packages.entityOptions.query({
@@ -49,6 +58,7 @@
         packageId,
         integrationLinkId,
         integrationId,
+        siteId,
       }),
     staleTime: 30_000,
   }));

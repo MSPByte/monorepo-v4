@@ -12,6 +12,8 @@ import {
   ActionLabels,
   BUILT_IN_PROFILE_FIELDS,
   BUILT_IN_STACK_CATEGORIES,
+  fieldTypeLabel,
+  resolveSiteFactFieldType,
   type Permission
 } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
@@ -66,6 +68,8 @@ type CatalogFieldOut = {
   values: string[] | null;
   active: boolean;
   builtIn: boolean;
+  valueType: string;
+  valueTypeLabel: string;
 };
 
 type CatalogCategoryOut = {
@@ -226,9 +230,9 @@ export const siteProfileRouter = t.router({
     ]);
 
     const fieldByKey = new Map<string, CatalogFieldOut>(
-      customFields.map((f) => [
-        f.key,
-        {
+      customFields.map((f) => {
+        const valueType = resolveSiteFactFieldType(f);
+        return [f.key, {
           id: f.id,
           key: f.key,
           label: f.label,
@@ -238,12 +242,15 @@ export const siteProfileRouter = t.router({
           displayOrder: f.displayOrder ?? 0,
           values: (f.values as string[] | null) ?? null,
           active: f.active,
-          builtIn: BUILT_IN_PROFILE_FIELDS.some((builtIn) => builtIn.key === f.key)
-        }
-      ])
+          builtIn: BUILT_IN_PROFILE_FIELDS.some((builtIn) => builtIn.key === f.key),
+          valueType,
+          valueTypeLabel: fieldTypeLabel(valueType),
+        }] as const;
+      })
     );
     for (const f of BUILT_IN_PROFILE_FIELDS) {
       if (fieldByKey.has(f.key)) continue;
+      const valueType = resolveSiteFactFieldType(f);
       fieldByKey.set(f.key, {
         id: null,
         key: f.key,
@@ -254,7 +261,9 @@ export const siteProfileRouter = t.router({
         displayOrder: f.displayOrder,
         values: f.values ?? null,
         active: true,
-        builtIn: true
+        builtIn: true,
+        valueType,
+        valueTypeLabel: fieldTypeLabel(valueType),
       });
     }
 
