@@ -64,6 +64,7 @@
   import { Checkbox } from '$lib/components/ui/checkbox';
   import EntityPicker from '$lib/components/domain/entity-picker.svelte';
   import SingleSelect from '$lib/components/single-select.svelte';
+  import MultiSelect from '$lib/components/multi-select.svelte';
   import BindingVariableInserter from '$lib/components/binding-variable-inserter.svelte';
   import CapabilityPicker from './_capability-picker.svelte';
   import PackageDetails from './_package-details.svelte';
@@ -426,6 +427,64 @@
     }
   }
 
+  function remapMovedSourcePosition(position: number, from: number, to: number): number {
+    if (position === from) return to;
+    if (from < to && position > from && position <= to) return position - 1;
+    if (from > to && position >= to && position < from) return position + 1;
+    return position;
+  }
+
+  // Wires identify a source by its position. Reordering must carry every
+  // source reference with the step it belongs to, across the main path and
+  // terminal reaction lanes.
+  function remapMovedWireSources(
+    movedLane: 'main' | 'onSuccess' | 'onFailure',
+    from: number,
+    to: number,
+  ) {
+    const remap = (steps: Step[]) => steps.map((step) => ({
+      ...step,
+      inputBindings: Object.fromEntries(
+        Object.entries(step.inputBindings).map(([name, binding]) => {
+          if (binding.kind !== 'priorOutput') return [name, binding];
+          const sourceLane = binding.lane ?? 'main';
+          if (sourceLane !== movedLane) return [name, binding];
+          return [name, { ...binding, stepPosition: remapMovedSourcePosition(binding.stepPosition, from, to) }];
+        }),
+      ),
+    }));
+
+    draft.steps = remap(draft.steps);
+    draft.outcomeSteps = {
+      onSuccess: remap(draft.outcomeSteps.onSuccess),
+      onFailure: remap(draft.outcomeSteps.onFailure),
+    };
+  }
+
+  function setWorkflowStepLabel(
+    lane: 'main' | 'onSuccess' | 'onFailure',
+    index: number,
+    label: string,
+  ) {
+    const normalized = label.trim() || undefined;
+    if (lane === 'main') {
+      const step = draft.steps[index];
+      if (!step) return;
+      draft.steps = draft.steps.map((candidate, position) =>
+        position === index ? { ...candidate, label: normalized } : candidate,
+      );
+      return;
+    }
+    const step = draft.outcomeSteps[lane][index];
+    if (!step) return;
+    draft.outcomeSteps = {
+      ...draft.outcomeSteps,
+      [lane]: draft.outcomeSteps[lane].map((candidate, position) =>
+        position === index ? { ...candidate, label: normalized } : candidate,
+      ),
+    };
+  }
+
   function moveReactionStep(lane: 'onSuccess' | 'onFailure', index: number, direction: -1 | 1) {
     const target = index + direction;
     const steps = draft.outcomeSteps[lane];
@@ -433,6 +492,7 @@
     const next = [...steps];
     [next[index], next[target]] = [next[target]!, next[index]!];
     draft.outcomeSteps = { ...draft.outcomeSteps, [lane]: next };
+    remapMovedWireSources(lane, index, target);
     if (selected.kind === 'reaction' && selected.lane === lane) {
       if (selected.index === index) selected = { kind: 'reaction', lane, index: target };
       else if (selected.index === target) selected = { kind: 'reaction', lane, index: index };
@@ -552,6 +612,10 @@
 
 
   function addOptionalInput(stepIndex: number, inputName: string) {
+    if (selected.kind === 'reaction') {
+      addOptionalReactionInput(inputName);
+      return;
+    }
     const step = draft.steps[stepIndex]!;
     const cap = capIndex.get(step.capabilityId);
     const meta = cap?.inputMeta[inputName];
@@ -562,6 +626,10 @@
   }
 
   function removeOptionalInput(stepIndex: number, inputName: string) {
+    if (selected.kind === 'reaction') {
+      removeOptionalReactionInput(inputName);
+      return;
+    }
     const step = draft.steps[stepIndex]!;
     delete step.inputBindings[inputName];
     draft.steps = [...draft.steps];
@@ -597,6 +665,7 @@
     const next = [...draft.steps];
     [next[index], next[target]] = [next[target]!, next[index]!];
     draft.steps = next;
+    remapMovedWireSources('main', index, target);
     if (selected.kind === 'step') {
       if (selected.index === index) selected = { kind: 'step', index: target };
       else if (selected.index === target) selected = { kind: 'step', index: index };
@@ -604,6 +673,10 @@
   }
 
   function changeSource(stepIndex: number, inputName: string, source: Source) {
+    if (selected.kind === 'reaction') {
+      changeReactionSource(inputName, source);
+      return;
+    }
     const step = draft.steps[stepIndex]!;
     const cap = capIndex.get(step.capabilityId);
     const meta = cap?.inputMeta[inputName];
@@ -615,6 +688,10 @@
   }
 
   function setBinding(stepIndex: number, inputName: string, binding: Binding) {
+    if (selected.kind === 'reaction') {
+      setReactionBinding(inputName, binding);
+      return;
+    }
     draft.steps[stepIndex]!.inputBindings[inputName] = binding;
     draft.steps = [...draft.steps];
   }
@@ -677,6 +754,35 @@
     return map;
   }
 
+  // A selected step is always inspected through the same panel. Main-step
+  // outputs can be read by later main steps and success reactions; outcome
+  // outputs can be read by later reactions in the same lane.
+  function workflowReaders(
+    lane: 'main' | 'onSuccess' | 'onFailure',
+    stepIndex: number,
+  ): Map<string, Array<{ lane: 'main' | 'onSuccess' | 'onFailure'; toStep: number; toInput: string }>> {
+    const map = new Map<string, Array<{ lane: 'main' | 'onSuccess' | 'onFailure'; toStep: number; toInput: string }>>();
+    const inspect = (steps: Step[], targetLane: 'main' | 'onSuccess' | 'onFailure', start: number) => {
+      for (let i = start; i < steps.length; i++) {
+        for (const [toInput, binding] of Object.entries(steps[i]!.inputBindings)) {
+          if (binding.kind !== 'priorOutput') continue;
+          const sourceLane = binding.lane ?? 'main';
+          if (sourceLane !== lane || binding.stepPosition !== stepIndex) continue;
+          const readers = map.get(binding.path) ?? [];
+          readers.push({ lane: targetLane, toStep: i, toInput });
+          map.set(binding.path, readers);
+        }
+      }
+    };
+    if (lane === 'main') {
+      inspect(draft.steps, 'main', stepIndex + 1);
+      inspect(draft.outcomeSteps.onSuccess, 'onSuccess', 0);
+    } else {
+      inspect(draft.outcomeSteps[lane], lane, stepIndex + 1);
+    }
+    return map;
+  }
+
   function inputGroupFor(
     capability: { inputMeta: Record<string, { group?: string; order?: number }>; inputGroups?: Record<string, { label: string; description?: string; order?: number; advanced?: boolean }> },
     inputName: string,
@@ -724,6 +830,7 @@
 
   const selectedStep = $derived(selected.kind === 'step' ? (draft.steps[selected.index] ?? null) : null);
   const selectedReaction = $derived(selected.kind === 'reaction' ? (draft.outcomeSteps[selected.lane][selected.index] ?? null) : null);
+  const selectedWorkflowStep = $derived(selectedStep ?? selectedReaction);
   const selectedCap = $derived(
     selectedStep ? capIndex.get(selectedStep.capabilityId) :
     selectedReaction ? capIndex.get(selectedReaction.capabilityId) : undefined
@@ -894,7 +1001,7 @@
                   </span>
                   <div class="min-w-0 flex-1 space-y-1">
                     <div class="truncate text-sm font-medium">
-                      {cap?.name ?? step.capabilityId}
+                      {step.label ?? cap?.name ?? step.capabilityId}
                     </div>
                     <div class="truncate font-mono text-[10px] text-muted-foreground/70">
                       {cap?.category ?? '—'}
@@ -1029,7 +1136,7 @@
                       F{i + 1}
                     </span>
                     <div class="min-w-0 flex-1 space-y-1">
-                      <div class="truncate text-xs font-medium">{reactionCap?.name ?? reaction.capabilityId}</div>
+                      <div class="truncate text-xs font-medium">{reaction.label ?? reactionCap?.name ?? reaction.capabilityId}</div>
                       <div class="flex flex-wrap items-center gap-1 text-[10px]">
                         {#if reactionSummary.wires.length > 0}
                           <span class="inline-flex items-center gap-0.5 rounded-sm bg-cyan-500/10 px-1 py-0.5 font-mono text-cyan-700 dark:text-cyan-400"><Link2 class="size-2" />{reactionSummary.wires.length}</span>
@@ -1093,7 +1200,7 @@
                       S{i + 1}
                     </span>
                     <div class="min-w-0 flex-1 space-y-1">
-                      <div class="truncate text-xs font-medium">{reactionCap?.name ?? reaction.capabilityId}</div>
+                      <div class="truncate text-xs font-medium">{reaction.label ?? reactionCap?.name ?? reaction.capabilityId}</div>
                       <div class="flex flex-wrap items-center gap-1 text-[10px]">
                         {#if reactionSummary.wires.length > 0}
                           <span class="inline-flex items-center gap-0.5 rounded-sm bg-cyan-500/10 px-1 py-0.5 font-mono text-cyan-700 dark:text-cyan-400"><Link2 class="size-2" />{reactionSummary.wires.length}</span>
@@ -1163,10 +1270,11 @@
           onUpdatePrompt={updatePrompt}
           onSetPromptRequired={setPromptRequired}
         />
-      {:else if selectedStep && selectedCap && selected.kind === 'step'}
+      {:else if selectedWorkflowStep && selectedCap}
         {@const cap = selectedCap}
-        {@const step = selectedStep}
+        {@const step = selectedWorkflowStep}
         {@const stepIndex = selected.index}
+        {@const lane = selected.kind === 'reaction' ? selected.lane : 'main'}
         {@const boundInputNames = Object.keys(step.inputBindings).sort((a, b) => {
           const aGroup = inputGroupFor(cap, a);
           const bGroup = inputGroupFor(cap, b);
@@ -1178,14 +1286,14 @@
             value: name,
             label: fieldLabel(name, (meta as { label?: string }).label),
           }))}
-        {@const readers = downstreamReaders(stepIndex)}
+        {@const readers = workflowReaders(lane, stepIndex)}
         <!-- Step header -->
         <div class="border-b bg-muted/20 px-6 py-4">
           <div class="flex items-start gap-4">
             <div
               class="flex size-11 shrink-0 items-center justify-center rounded-lg border bg-background font-mono text-sm font-semibold tabular-nums text-muted-foreground"
             >
-              {String(stepIndex + 1).padStart(2, '0')}
+              {lane === 'main' ? String(stepIndex + 1).padStart(2, '0') : `${lane === 'onFailure' ? 'F' : 'S'}${String(stepIndex + 1).padStart(2, '0')}`}
             </div>
             <div class="min-w-0 flex-1 space-y-1">
               <div class="flex flex-wrap items-center gap-2">
@@ -1193,17 +1301,28 @@
                 <span
                   class="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
                 >
-                  {cap.category}
+                  {lane === 'main' ? cap.category : lane === 'onFailure' ? 'On Failure' : 'On Success'}
                 </span>
               </div>
               {#if cap.description}
                 <p class="text-sm text-muted-foreground">{cap.description}</p>
               {/if}
-              <div class="pt-1 font-mono text-[10px] text-muted-foreground/70">
-                {cap.id}
-              </div>
+              {#if lane === 'main'}
+                <div class="pt-1 font-mono text-[10px] text-muted-foreground/70">
+                  {cap.id}
+                </div>
+              {/if}
+              <input
+                class="min-w-0 w-full bg-transparent pt-1 text-sm text-muted-foreground outline-none placeholder:text-muted-foreground/50 focus:text-foreground"
+                aria-label="Step name"
+                placeholder={cap.name}
+                value={step.label ?? cap.name}
+                oninput={(event) =>
+                  setWorkflowStepLabel(lane, stepIndex, (event.currentTarget as HTMLInputElement).value)}
+              />
             </div>
             <div class="flex shrink-0 items-center gap-1">
+              {#if lane === 'main'}
               <Button
                 variant="ghost"
                 size="sm"
@@ -1233,6 +1352,37 @@
               >
                 <Trash2 class="size-4" />
               </Button>
+              {:else}
+              <Button
+                variant="ghost"
+                size="sm"
+                class="size-8 p-0"
+                onclick={() => moveReactionStep(lane, stepIndex, -1)}
+                disabled={stepIndex === 0}
+                aria-label="Move step up"
+              >
+                <ArrowUp class="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="size-8 p-0"
+                onclick={() => moveReactionStep(lane, stepIndex, 1)}
+                disabled={stepIndex === draft.outcomeSteps[lane].length - 1}
+                aria-label="Move step down"
+              >
+                <ArrowDown class="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="size-8 p-0 text-muted-foreground hover:text-rose-500"
+                onclick={() => removeOutcomeStep(lane, stepIndex)}
+                aria-label="Remove step"
+              >
+                <Trash2 class="size-4" />
+              </Button>
+              {/if}
             </div>
           </div>
         </div>
@@ -1272,7 +1422,7 @@
                 {@const label = fieldLabel(inputName, meta.label)}
                 {@const optional = !isRequiredInput(meta)}
                 {@const currentSource = sourceOf(binding)}
-                {@const allowed = allowedSourcesFor(meta)}
+                {@const allowed = allowedSourcesFor(meta, lane === 'onFailure')}
                 <div
                   class="rounded-lg border border-l-[3px] bg-card {sourceBorderClass(
                     currentSource
@@ -1365,8 +1515,9 @@
                       <div class="flex items-center justify-between">
                         <span class="text-[11px] text-muted-foreground font-mono">Use <code>{'{{variable}}'}</code> to insert values.</span>
                         <BindingVariableInserter
-                          lane="main"
-                          mainSteps={draft.steps.slice(0, stepIndex)}
+                          lane={lane}
+                          mainSteps={lane === 'main' ? draft.steps.slice(0, stepIndex) : draft.steps}
+                          laneSteps={lane === 'main' ? [] : draft.outcomeSteps[lane].slice(0, stepIndex)}
                           prompts={draft.prompts}
                           siteFactFields={siteFactFieldsQuery.data ?? []}
                           {capIndex}
@@ -1398,6 +1549,13 @@
                           />
                           <span class="text-muted-foreground">{binding.value ? 'true' : 'false'}</span>
                         </label>
+                      {:else if meta.typeHint === 'stringArray' && meta.choices && meta.choices.length > 0}
+                        <MultiSelect
+                          options={meta.choices as { value: string; label: string }[]}
+                          selected={Array.isArray(binding.value) ? binding.value as string[] : []}
+                          placeholder="Choose one or more…"
+                          onchange={(v) => setBinding(stepIndex, inputName, { kind: 'literal', value: v })}
+                        />
                       {:else if meta.typeHint === 'stringArray'}
                         <Input
                           placeholder="value1, value2"
@@ -1406,6 +1564,13 @@
                             const arr = (e.target as HTMLInputElement).value.split(',').map((v) => v.trim()).filter(Boolean);
                             setBinding(stepIndex, inputName, { kind: 'literal', value: arr });
                           }}
+                        />
+                      {:else if meta.choices && meta.choices.length > 0}
+                        <SingleSelect
+                          options={meta.choices as { value: string; label: string }[]}
+                          selected={typeof binding.value === 'string' ? binding.value : ''}
+                          placeholder="Choose…"
+                          onchange={(v) => setBinding(stepIndex, inputName, { kind: 'literal', value: v })}
                         />
                       {:else}
                         <Input
@@ -1508,6 +1673,7 @@
                         </label>
                       </div>
                     {:else if binding?.kind === 'priorOutput'}
+                      {#if lane === 'main'}
                       {@const upstreamSteps = draft.steps.slice(0, stepIndex)}
                       {@const upstreamCap = capIndex.get(upstreamSteps[binding.stepPosition]?.capabilityId ?? '')}
                       {@const stepOpts = upstreamSteps.map((s, i) => ({ value: String(i), label: `Step ${String(i + 1).padStart(2, '0')}: ${s.label ?? capIndex.get(s.capabilityId)?.name ?? s.capabilityId}` }))}
@@ -1526,6 +1692,47 @@
                           <div class="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500">
                             The selected step has no compatible outputs for this input. Try a different step.
                           </div>
+                        {/if}
+                      {/if}
+                      {:else}
+                        {@const wireSteps = reactionWireSteps()}
+                        {@const sourceLane = binding.lane ?? 'main'}
+                        {@const selectedWireStep = `${sourceLane}:${binding.stepPosition}`}
+                        {@const outputOptions = reactionWireOutputs(binding, meta)}
+                        {#if wireSteps.length === 0}
+                          <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                            Add a main step or an earlier reaction before wiring this input.
+                          </div>
+                        {:else}
+                          <div class="grid gap-2 sm:grid-cols-2">
+                            <SingleSelect
+                              options={wireSteps.map(({ value, label }) => ({ value, label }))}
+                              selected={selectedWireStep}
+                              placeholder="Source step…"
+                              disableSort
+                              onchange={(v) => {
+                                const source = wireSteps.find((candidate) => candidate.value === v);
+                                if (!source) return;
+                                setBinding(stepIndex, inputName, {
+                                  ...binding,
+                                  lane: source.lane,
+                                  stepPosition: source.position,
+                                  path: '',
+                                });
+                              }}
+                            />
+                            <SingleSelect
+                              options={outputOptions}
+                              selected={binding.path}
+                              placeholder="Output field…"
+                              onchange={(path) => setBinding(stepIndex, inputName, { ...binding, path })}
+                            />
+                          </div>
+                          {#if outputOptions.length === 0}
+                            <p class="text-xs text-amber-700 dark:text-amber-400">
+                              The selected step has no compatible outputs for this input.
+                            </p>
+                          {/if}
                         {/if}
                       {/if}
                     {/if}
@@ -1553,8 +1760,8 @@
             </div>
           {/if}
 
-          <!-- Optional step toggle -->
-          {#if readers.size > 0}
+          <!-- Reactions are terminal workflow actions; only main steps may be optional. -->
+          {#if lane === 'main' && readers.size > 0}
             <div class="rounded-lg border p-4 space-y-2">
               <div class="flex items-center justify-between gap-3">
                 <div class="space-y-0.5">
@@ -1581,7 +1788,7 @@
                 </span>
               </div>
             </div>
-          {:else}
+          {:else if lane === 'main'}
             <div class="rounded-lg border p-4">
               <div class="flex items-center justify-between gap-3">
                 <div class="space-y-0.5">
@@ -1628,15 +1835,21 @@
                               {#each usedBy as u (u.toStep + ':' + u.toInput)}
                                 <button
                                   type="button"
-                                  onclick={() => (selected = { kind: 'step', index: u.toStep })}
+                                  onclick={() => {
+                                    selected = u.lane === 'main'
+                                      ? { kind: 'step', index: u.toStep }
+                                      : { kind: 'reaction', lane: u.lane, index: u.toStep };
+                                  }}
                                   class="inline-flex items-center gap-1.5 self-start rounded-sm bg-cyan-500/10 px-2 py-0.5 text-cyan-700 hover:bg-cyan-500/20 dark:text-cyan-400"
                                 >
                                   <CornerDownRight class="size-3" />
-                                  Step {String(u.toStep + 1).padStart(2, '0')} · {fieldLabel(
+                                  {u.lane === 'main' ? 'Step' : u.lane === 'onFailure' ? 'On failure' : 'On success'} {String(u.toStep + 1).padStart(2, '0')} · {fieldLabel(
                                     u.toInput,
-                                    capIndex.get(draft.steps[u.toStep]!.capabilityId)?.inputMeta[
-                                      u.toInput
-                                    ]?.label
+                                    capIndex.get(
+                                      (u.lane === 'main'
+                                        ? draft.steps[u.toStep]
+                                        : draft.outcomeSteps[u.lane][u.toStep])?.capabilityId ?? ''
+                                    )?.inputMeta[u.toInput]?.label
                                   )}
                                   <ArrowUpRight class="size-3" />
                                 </button>
@@ -1813,6 +2026,13 @@
                         <Checkbox checked={Boolean(binding.value)} onCheckedChange={(c) => setReactionBinding(inputName, { kind: 'literal', value: Boolean(c) })} />
                         <span class="text-muted-foreground">{binding.value ? 'true' : 'false'}</span>
                       </label>
+                    {:else if meta.typeHint === 'stringArray' && meta.choices && meta.choices.length > 0}
+                      <MultiSelect
+                        options={meta.choices as { value: string; label: string }[]}
+                        selected={Array.isArray(binding.value) ? binding.value as string[] : []}
+                        placeholder="Choose one or more…"
+                        onchange={(v) => setReactionBinding(inputName, { kind: 'literal', value: v })}
+                      />
                     {:else if meta.choices && meta.choices.length > 0}
                       <SingleSelect
                         options={meta.choices as { value: string; label: string }[]}

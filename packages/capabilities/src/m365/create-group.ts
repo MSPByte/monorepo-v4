@@ -5,27 +5,26 @@ import type { Capability } from '../types.js';
 const inputs = z.object({
   tenantLinkId: z.uuid(),
   displayName: z.string().min(1).max(256),
+  // MailEnabledSecurity is retained solely so saved package snapshots from
+  // before the two-option authoring experience remain executable.
   groupType: z.enum(['Security', 'Microsoft365', 'MailEnabledSecurity']),
   mailNickname: z.string().min(1).max(64).optional(),
   description: z.string().max(1024).optional(),
-  visibility: z.enum(['Private', 'Public']).optional(),
+  visibility: z.enum(['Private', 'Public']).optional()
 });
 
 const outputs = z.object({
   externalId: z.string(),
   internalId: z.string(),
-  name: z.string(),
+  name: z.string()
 });
 
-export const m365GroupCreate: Capability<
-  z.infer<typeof inputs>,
-  z.infer<typeof outputs>
-> = {
+export const m365GroupCreate: Capability<z.infer<typeof inputs>, z.infer<typeof outputs>> = {
   id: 'm365.group.create',
   vendor: 'microsoft-365',
   name: 'Create M365 Group',
   description:
-    'Create a Security, Microsoft 365, or mail-enabled security group in a tenant. Saves the group to the local DB immediately so downstream steps can wire it.',
+    'Create a Security or Microsoft 365 group in a tenant. Saves the group to the local DB immediately so downstream steps can wire it.',
   category: 'group',
   inputs,
   outputs,
@@ -35,13 +34,13 @@ export const m365GroupCreate: Capability<
       entityType: 'integration_link',
       typeHint: 'text',
       label: 'Tenant',
-      required: true,
+      required: true
     },
     displayName: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'text',
       label: 'Display name',
-      required: true,
+      required: true
     },
     groupType: {
       allowedBindings: ['literal', 'runtime'],
@@ -51,9 +50,8 @@ export const m365GroupCreate: Capability<
       required: true,
       choices: [
         { value: 'Security', label: 'Security Group' },
-        { value: 'Microsoft365', label: 'Microsoft 365 Group' },
-        { value: 'MailEnabledSecurity', label: 'Mail-enabled Security Group' },
-      ],
+        { value: 'Microsoft365', label: 'Microsoft 365 Group' }
+      ]
     },
     mailNickname: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
@@ -61,14 +59,14 @@ export const m365GroupCreate: Capability<
       label: 'Mail nickname',
       description: 'Optional — derived from the display name when not set.',
       required: false,
-      advanced: true,
+      advanced: true
     },
     description: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'text',
       label: 'Description',
       required: false,
-      advanced: true,
+      advanced: true
     },
     visibility: {
       allowedBindings: ['literal', 'runtime'],
@@ -79,14 +77,14 @@ export const m365GroupCreate: Capability<
       advanced: true,
       choices: [
         { value: 'Private', label: 'Private' },
-        { value: 'Public', label: 'Public' },
-      ],
-    },
+        { value: 'Public', label: 'Public' }
+      ]
+    }
   },
   outputMeta: {
     externalId: { label: 'Graph group id', outputType: 'm365_group_external_id' },
     internalId: { label: 'Internal group id', outputType: 'm365_group_internal_id' },
-    name: { label: 'Group display name' },
+    name: { label: 'Group display name' }
   },
   actionLabel: ActionLabels.M365GroupCreate,
   auditAction: 'create',
@@ -127,7 +125,7 @@ export const m365GroupCreate: Capability<
         mailEnabled,
         securityEnabled,
         description: input.description,
-        visibility: input.visibility,
+        visibility: input.visibility
       });
 
       // Write-through: persist immediately so the UI and downstream steps see it.
@@ -139,7 +137,7 @@ export const m365GroupCreate: Capability<
           name: result.displayName,
           description: input.description,
           mailEnabled,
-          securityEnabled,
+          securityEnabled
         });
         internalId = row.id;
       } catch {
@@ -148,7 +146,7 @@ export const m365GroupCreate: Capability<
 
       return {
         outcome: 'success',
-        outputs: { externalId: result.id, internalId, name: result.displayName },
+        outputs: { externalId: result.id, internalId, name: result.displayName }
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -164,8 +162,8 @@ export const m365GroupCreate: Capability<
         outcome: 'fail',
         errorClass,
         message,
-        retryable: errorClass === 'rate_limited' || errorClass === 'vendor_error',
+        retryable: errorClass === 'rate_limited' || errorClass === 'vendor_error'
       };
     }
-  },
+  }
 };

@@ -12,6 +12,7 @@
   import { Label } from '$lib/components/ui/label';
   import { Checkbox } from '$lib/components/ui/checkbox';
   import SingleSelect from '$lib/components/single-select.svelte';
+  import MultiSelect from '$lib/components/multi-select.svelte';
   import EntityPicker from './entity-picker.svelte';
   import { fieldLabel } from '$lib/utils/label';
   import Loader from '$lib/components/transition/loader.svelte';
@@ -372,7 +373,12 @@
     return controllingValue(field.visibleWhen.input) === field.visibleWhen.equals;
   }
 
-  const TENANT_SCOPED_ENTITY_TYPES = new Set(['m365_identity', 'm365_group', 'm365_license']);
+  const TENANT_SCOPED_ENTITY_TYPES = new Set([
+    'm365_identity',
+    'm365_group',
+    'm365_license',
+    'm365_role',
+  ]);
 
   const cascadeLinkId = $derived.by<string | undefined>(() => {
     for (const field of runtimeFields) {
@@ -398,7 +404,6 @@
     { value: '', label: 'None (root account)' },
     ...(covePartnersQuery.data ?? []).map((p) => ({ value: p.name, label: p.name })),
   ]);
-
   const domainsQuery = createQuery(() => ({
     queryKey: ['vendor.m365DomainOptions', cascadeLinkId],
     queryFn: () =>
@@ -917,6 +922,25 @@
                             options={covePartnerOptions}
                             selected={typeof values[field.promptKey] === 'string' ? values[field.promptKey] as string : ''}
                             placeholder={covePartnersQuery.isLoading ? 'Loading partners…' : 'Choose a Cove partner…'}
+                            onchange={(v) => (values[field.promptKey] = v)}
+                          />
+                        {:else if field.dynamicSource === 'm365DomainOptions'}
+                          <SingleSelect
+                            options={domainOptions}
+                            selected={typeof values[field.promptKey] === 'string' ? values[field.promptKey] as string : ''}
+                            placeholder={!cascadeLinkId
+                              ? 'Choose a tenant first…'
+                              : domainsQuery.isLoading
+                                ? 'Loading verified domains…'
+                                : 'Choose a verified domain…'}
+                            disabled={!cascadeLinkId}
+                            onchange={(v) => (values[field.promptKey] = v)}
+                          />
+                        {:else if field.typeHint === 'stringArray' && field.choices && field.choices.length > 0}
+                          <MultiSelect
+                            options={field.choices as { value: string; label: string }[]}
+                            selected={Array.isArray(values[field.promptKey]) ? values[field.promptKey] as string[] : []}
+                            placeholder="Choose one or more…"
                             onchange={(v) => (values[field.promptKey] = v)}
                           />
                         {:else if field.choices && field.choices.length > 0}

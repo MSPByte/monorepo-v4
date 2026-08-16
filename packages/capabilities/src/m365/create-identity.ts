@@ -5,7 +5,29 @@ import type { Capability } from '../types.js';
 const inputs = z.object({
   tenantLinkId: z.uuid(),
   displayName: z.string().min(1).max(256),
-  userPrincipalName: z.email(),
+  // A full UPN remains valid for a specific domain. A prefix (for example,
+  // "cstech") is completed with the tenant's default verified domain.
+  userPrincipalName: z
+    .string()
+    .trim()
+    .min(1)
+    .max(256)
+    .refine(
+      (value) =>
+        value.includes('@')
+          ? z.email().safeParse(value).success
+          : /^[A-Za-z0-9][A-Za-z0-9._'+-]{0,63}$/.test(value),
+      'Enter a UPN prefix (for example, cstech) or a complete email address.'
+    ),
+  // Optional override for prefix-only UPNs. The run form lists the tenant's
+  // current verified domains; a full UPN above always takes precedence.
+  upnDomain: z
+    .string()
+    .trim()
+    .min(3)
+    .max(253)
+    .regex(/^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/)
+    .optional(),
   // Optional — handler derives from displayName when omitted (strip
   // non-alphanumerics, lowercase, cap at 64 chars).
   mailNickname: z.string().min(1).max(64).optional(),
@@ -21,7 +43,7 @@ const inputs = z.object({
   officeLocation: z.string().max(128).optional(),
   mobilePhone: z.string().max(64).optional(),
   usageLocation: z.string().length(2).optional(),
-  preferredLanguage: z.string().max(16).optional(),
+  preferredLanguage: z.string().max(16).optional()
 });
 
 const outputs = z.object({
@@ -31,13 +53,10 @@ const outputs = z.object({
   email: z.string(),
   // Only populated when the worker generated the password — the user needs a
   // way to retrieve it. Sensitive → encrypted-at-rest + reveal-audited.
-  temporaryPassword: z.string().optional(),
+  temporaryPassword: z.string().optional()
 });
 
-export const m365IdentityCreate: Capability<
-  z.infer<typeof inputs>,
-  z.infer<typeof outputs>
-> = {
+export const m365IdentityCreate: Capability<z.infer<typeof inputs>, z.infer<typeof outputs>> = {
   id: 'm365.identity.create',
   vendor: 'microsoft-365',
   name: 'Create M365 Identity',
@@ -53,29 +72,40 @@ export const m365IdentityCreate: Capability<
       typeHint: 'text',
       label: 'Tenant',
       description: 'Which M365 tenant to create the user in.',
-      required: true,
+      required: true
     },
     displayName: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'text',
       label: 'Display name',
-      required: true,
+      required: true
     },
     userPrincipalName: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'upn',
-      label: 'User principal name',
-      description: 'The full sign-in address. Domain is picked from the tenant\'s verified list.',
-      required: true,
+      label: 'UPN prefix or full address',
+      description:
+        'Enter cstech to use the tenant default domain, or enter a complete address for a specific domain.',
+      required: true
+    },
+    upnDomain: {
+      allowedBindings: ['literal', 'runtime'],
+      typeHint: 'text',
+      label: 'UPN domain',
+      description:
+        'Optional for a prefix-only UPN. If asked at run time, choose a verified domain from the selected tenant.',
+      required: false,
+      advanced: true,
+      dynamicSource: 'm365DomainOptions'
     },
     mailNickname: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'text',
       label: 'Mail nickname',
       description:
-        'Optional — derived from the display name if you don\'t set one. Override when you need a specific alias.',
+        "Optional — derived from the display name if you don't set one. Override when you need a specific alias.",
       required: false,
-      advanced: true,
+      advanced: true
     },
     initialPassword: {
       allowedBindings: ['literal', 'runtime', 'generated'],
@@ -83,71 +113,72 @@ export const m365IdentityCreate: Capability<
       typeHint: 'password',
       label: 'Initial password',
       description: 'Generate a strong random password at run time, or supply your own.',
-      required: true,
+      required: true
     },
     forceChangeAtNextSignin: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'boolean',
       label: 'Force password change at next sign-in',
       required: true,
-      defaultValue: true,
+      defaultValue: true
     },
     givenName: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'text',
       label: 'First name',
       required: false,
-      advanced: true,
+      advanced: true
     },
     surname: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'text',
       label: 'Last name',
       required: false,
-      advanced: true,
+      advanced: true
     },
     jobTitle: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'text',
       label: 'Job title',
       required: false,
-      advanced: true,
+      advanced: true
     },
     department: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'text',
       label: 'Department',
       required: false,
-      advanced: true,
+      advanced: true
     },
     companyName: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'text',
       label: 'Company name',
       required: false,
-      advanced: true,
+      advanced: true
     },
     officeLocation: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'text',
       label: 'Office location',
       required: false,
-      advanced: true,
+      advanced: true
     },
     mobilePhone: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'text',
       label: 'Mobile phone',
       required: false,
-      advanced: true,
+      advanced: true
     },
     usageLocation: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
       typeHint: 'text',
       label: 'Usage location',
-      description: 'ISO 3166-1 alpha-2 country code (US, GB, DE…). Required before licenses can be assigned.',
+      description:
+        'ISO 3166-1 alpha-2 country code (US, GB, DE…). Required before licenses can be assigned.',
       required: false,
-      advanced: true,
+      advanced: true
     },
     preferredLanguage: {
       allowedBindings: ['literal', 'runtime', 'siteFact'],
@@ -155,8 +186,8 @@ export const m365IdentityCreate: Capability<
       label: 'Preferred language',
       description: 'BCP 47 language tag (en-US, fr-FR…).',
       required: false,
-      advanced: true,
-    },
+      advanced: true
+    }
   },
   outputMeta: {
     externalId: { label: 'Graph user id', outputType: 'm365_identity_external_id' },
@@ -166,8 +197,8 @@ export const m365IdentityCreate: Capability<
     temporaryPassword: {
       label: 'Temporary password',
       sensitive: true,
-      description: 'Populated only when the worker generated the password.',
-    },
+      description: 'Populated only when the worker generated the password.'
+    }
   },
   actionLabel: ActionLabels.M365IdentityResetPassword,
   auditAction: 'create',
@@ -193,9 +224,29 @@ export const m365IdentityCreate: Capability<
 
     try {
       const connector = await ctx.getM365Connector(input.tenantLinkId);
+      let userPrincipalName = input.userPrincipalName;
+      if (!userPrincipalName.includes('@')) {
+        let domain = input.upnDomain;
+        if (!domain) {
+          const domains = await connector.domains.listAll();
+          domain =
+            domains.find((candidate) => candidate.isVerified && candidate.isDefault)?.id ??
+            domains.find((candidate) => candidate.isVerified)?.id;
+        }
+        if (!domain) {
+          return {
+            outcome: 'fail',
+            errorClass: 'invalid_input',
+            message:
+              'No verified Microsoft 365 domain is available for this tenant. Provide a full UPN or verify a tenant domain.',
+            retryable: false
+          };
+        }
+        userPrincipalName = `${userPrincipalName}@${domain}`;
+      }
       const result = await connector.users.create({
         displayName: input.displayName,
-        userPrincipalName: input.userPrincipalName,
+        userPrincipalName,
         mailNickname,
         password,
         forceChangePasswordNextSignInWithMfa: input.forceChangeAtNextSignin,
@@ -208,7 +259,7 @@ export const m365IdentityCreate: Capability<
         officeLocation: input.officeLocation,
         mobilePhone: input.mobilePhone,
         usageLocation: input.usageLocation,
-        preferredLanguage: input.preferredLanguage,
+        preferredLanguage: input.preferredLanguage
       });
 
       // Write-through: persist immediately so downstream steps can wire internalId.
@@ -220,7 +271,7 @@ export const m365IdentityCreate: Capability<
           name: input.displayName,
           email: result.userPrincipalName,
           enabled: true,
-          type: 'member',
+          type: 'member'
         });
         internalId = row.id;
       } catch {
@@ -236,15 +287,15 @@ export const m365IdentityCreate: Capability<
           email: result.userPrincipalName,
           // Only expose the password if we generated it — a user-supplied one
           // isn't ours to echo.
-          temporaryPassword: generated ? password : undefined,
-        },
+          temporaryPassword: generated ? password : undefined
+        }
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (message.includes('already exist')) {
         return {
           outcome: 'skip',
-          reason: `User ${input.userPrincipalName} already exists in tenant`,
+          reason: `User ${input.userPrincipalName} already exists in tenant`
         };
       }
       // Graph returns 403 for tenant-consent or permission problems, 400 for
@@ -259,8 +310,8 @@ export const m365IdentityCreate: Capability<
         outcome: 'fail',
         errorClass,
         message,
-        retryable: errorClass === 'rate_limited' || errorClass === 'vendor_error',
+        retryable: errorClass === 'rate_limited' || errorClass === 'vendor_error'
       };
     }
-  },
+  }
 };
