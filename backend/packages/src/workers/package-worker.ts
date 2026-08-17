@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
 import {
   customerLogs,
@@ -199,6 +199,8 @@ export function createPackageWorker(
           loadSophosEndpoint(db, endpointId),
         getSophosConnector: (linkId: string) =>
           getSophosConnector(db, sophosConnectorCache, linkId, encryptionKey),
+        markSophosEndpointsUpgraded: (endpointIds: string[]) =>
+          markSophosEndpointsUpgraded(db, endpointIds),
         getSophosPartnerConnector: async () => {
           if (!sophosPartnerConnector) {
             sophosPartnerConnector = await getSophosPartnerConnector(db, encryptionKey);
@@ -1030,6 +1032,7 @@ async function loadSophosEndpoint(db: any, endpointId: string): Promise<SophosEn
       siteId: sophosEndpoints.siteId,
       externalId: sophosEndpoints.externalId,
       hostname: sophosEndpoints.hostname,
+      needsUpgrade: sophosEndpoints.needsUpgrade,
       tamperProtectionEnabled: sophosEndpoints.tamperProtectionEnabled,
       tenantId: integrationLinks.externalId,
       apiHost: integrationLinks.meta,
@@ -1047,6 +1050,14 @@ async function loadSophosEndpoint(db: any, endpointId: string): Promise<SophosEn
       ? (meta as Record<string, unknown>).apiHost as string | null
       : null;
   return { ...row, apiHost };
+}
+
+async function markSophosEndpointsUpgraded(db: any, endpointIds: string[]): Promise<void> {
+  if (endpointIds.length === 0) return;
+  await db
+    .update(sophosEndpoints)
+    .set({ needsUpgrade: false, updatedAt: new Date().toISOString() })
+    .where(inArray(sophosEndpoints.id, endpointIds));
 }
 
 async function getSophosConnector(

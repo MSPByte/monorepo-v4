@@ -17,6 +17,7 @@ import {
   sophosEndpointToggleTamper
 } from './sophos/enable-tamper.js';
 import { sophosEndpointDelete } from './sophos/delete-endpoint.js';
+import { sophosEndpointUpgrade } from './sophos/upgrade-endpoint.js';
 import { sophosCreateSite } from './sophos/create-site.js';
 import { dattoCreateSite } from './datto/create-site.js';
 import { coveCreateSite } from './cove/create-site.js';
@@ -38,6 +39,7 @@ export const CAPABILITIES = {
   [legacySophosEndpointDisableTamper.id]: legacySophosEndpointDisableTamper,
   [legacySophosEndpointsEnableTamper.id]: legacySophosEndpointsEnableTamper,
   [sophosEndpointDelete.id]: sophosEndpointDelete,
+  [sophosEndpointUpgrade.id]: sophosEndpointUpgrade,
   [sophosCreateSite.id]: sophosCreateSite,
   [dattoCreateSite.id]: dattoCreateSite,
   [coveCreateSite.id]: coveCreateSite

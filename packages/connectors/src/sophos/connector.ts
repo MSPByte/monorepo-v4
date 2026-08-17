@@ -59,6 +59,11 @@ export class SophosConnector {
   readonly endpoint: {
     list: (apiHost: string, tenantId?: string) => Promise<unknown[]>;
     delete: (apiHost: string, tenantId: string, endpointId: string) => Promise<void>;
+    upgradeDeviceSoftware: (
+      apiHost: string,
+      tenantId: string,
+      endpointIds: string[]
+    ) => Promise<void>;
     tamperProtection: {
       get: (
         apiHost: string,
@@ -125,6 +130,12 @@ export class SophosConnector {
         ),
       delete: (apiHost, tenantId, endpointId) =>
         this.client.delete<void>(`${apiHost}/endpoint/v1/endpoints/${endpointId}`, tenantId),
+      upgradeDeviceSoftware: (apiHost, tenantId, endpointIds) =>
+        this.client.patch<void>(
+          `${apiHost}/endpoint/v1/settings/device-software`,
+          { computer: { ids: endpointIds, protectionAssignedId: 'All' } },
+          tenantId
+        ),
       tamperProtection: {
         get: (apiHost, tenantId, endpointId) =>
           this.client.get<SophosTamperProtectionGet>(

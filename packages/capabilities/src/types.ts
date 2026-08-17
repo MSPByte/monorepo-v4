@@ -163,6 +163,7 @@ export interface SophosEndpointRow {
   siteId: string | null;
   externalId: string;
   hostname: string;
+  needsUpgrade: boolean;
   tamperProtectionEnabled: boolean | null;
   tenantId: string | null;
   apiHost: string | null;
@@ -248,6 +249,8 @@ export interface CapabilityCtx {
   // Returns a SophosConnector for a specific site-level integration link.
   // Used by endpoint capabilities where the link is resolved from the endpoint row.
   getSophosConnector: (linkId: string) => Promise<SophosConnector>;
+  // Records a completed software upgrade immediately, without waiting for ingestion.
+  markSophosEndpointsUpgraded: (endpointIds: string[]) => Promise<void>;
   // Returns a SophosConnector for the Sophos Partner integration (loaded by integration ID,
   // no link selection needed). Used by site-creation capabilities.
   getSophosPartnerConnector: () => Promise<SophosConnector>;

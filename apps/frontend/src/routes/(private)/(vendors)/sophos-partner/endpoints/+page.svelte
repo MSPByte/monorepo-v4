@@ -26,6 +26,7 @@
   import ShieldOffIcon from '@lucide/svelte/icons/shield-off';
   import Trash2Icon from '@lucide/svelte/icons/trash-2';
   import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
+  import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 
   import type { sophosEndpointsWithSite } from '@mspbyte/drizzle';
 
@@ -35,7 +36,12 @@
   type EndpointRow = typeof sophosEndpointsWithSite.$inferSelect & Record<string, unknown>;
 
   const siteLinkQuery = createQuery(() => ({
-    queryKey: ['integrationLinks.list', 'sophos-partner', scopeStore.currentSite, scopeStore.currentGroup],
+    queryKey: [
+      'integrationLinks.list',
+      'sophos-partner',
+      scopeStore.currentSite,
+      scopeStore.currentGroup,
+    ],
     queryFn: () =>
       trpc.integrationLinks.list.query({
         integrationId: 'sophos-partner',
@@ -45,7 +51,9 @@
     enabled: !!scopeStore.currentSite,
   }));
 
-  const currentLinkId = $derived(scopeStore.currentSite ? (siteLinkQuery.data?.[0]?.id ?? null) : undefined);
+  const currentLinkId = $derived(
+    scopeStore.currentSite ? (siteLinkQuery.data?.[0]?.id ?? null) : undefined
+  );
 
   const NOW = Date.now();
 
@@ -115,14 +123,21 @@
     ),
     boolBadgeColumn<EndpointRow>(
       'needsUpgrade',
-      'Upgrade',
+      'Upgradeable',
       {
-        trueLabel: 'Current',
-        falseLabel: 'Upgrade',
-        falseVariant: 'destructive',
-        evaluate: (value) => !value,
+        trueLabel: 'Available',
+        falseLabel: 'Current',
+        falseVariant: 'muted',
       },
-      { width: '110px' }
+      {
+        width: '110px',
+        filter: {
+          label: 'Upgradeable',
+          type: 'boolean',
+          operators: ['eq', 'neq'],
+          defaultOperator: 'eq',
+        },
+      }
     ),
     {
       key: 'health',
@@ -307,6 +322,40 @@
             },
           } satisfies RowAction<EndpointRow>,
           {
+            label: 'Upgrade Endpoints',
+            icon: ArrowUpIcon,
+            variant: 'outline',
+            disabled: (rows: EndpointRow[]) =>
+              rows.length === 0 || rows.every((row) => row['needsUpgrade'] !== true),
+            onclick: async (rows, fetchData, { setProgress }) => {
+              const ids = rows.map((row) => String(row['id'])).filter(Boolean);
+              if (ids.length === 0) return;
+              const upgradeable = rows.filter((row) => row['needsUpgrade'] === true).length;
+              setProgress(
+                `Requesting software upgrades for ${upgradeable} endpoint${upgradeable === 1 ? '' : 's'} across their Sophos sites...`
+              );
+              const result = await trpc.vendor.upgradeSophosEndpointSoftware.mutate({ ids });
+              setProgress('Refreshing endpoint data...');
+              await queryClient.invalidateQueries({ queryKey: ['vendor.tableData'] });
+              await fetchData();
+              if (result.failed > 0 && result.upgraded > 0) {
+                toast.warning(
+                  `Requested upgrades for ${result.upgraded} endpoint${result.upgraded === 1 ? '' : 's'}, ${result.failed} failed`
+                );
+              } else if (result.failed > 0) {
+                toast.error(
+                  `Failed to request upgrades for ${result.failed} endpoint${result.failed === 1 ? '' : 's'}`
+                );
+              } else if (result.upgraded > 0) {
+                toast.success(
+                  `Requested upgrades for ${result.upgraded} endpoint${result.upgraded === 1 ? '' : 's'}`
+                );
+              } else {
+                toast.info('No selected endpoints have an available software upgrade');
+              }
+            },
+          } satisfies RowAction<EndpointRow>,
+          {
             label: 'Disable Tamper',
             icon: ShieldOffIcon,
             variant: 'destructive',
@@ -319,7 +368,9 @@
               setProgress(
                 `Requesting tamper protection disablement for ${ids.length} endpoint${ids.length === 1 ? '' : 's'}...`
               );
-              const result = await trpc.vendor.disableSophosEndpointTamperProtection.mutate({ ids });
+              const result = await trpc.vendor.disableSophosEndpointTamperProtection.mutate({
+                ids,
+              });
               setProgress('Refreshing endpoint data...');
               await queryClient.invalidateQueries({ queryKey: ['vendor.tableData'] });
               await fetchData();

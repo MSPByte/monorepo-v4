@@ -173,6 +173,10 @@ type SophosEndpointTamperProtectionResult = SophosEndpointDeleteResult & {
   skipped?: boolean;
 };
 
+type SophosEndpointUpgradeResult = SophosEndpointDeleteResult & {
+  skipped?: boolean;
+};
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -1644,6 +1648,99 @@ export const vendorRouter = t.router({
         result: failed === 0 ? 'success' : updated === 0 ? 'failure' : 'partial',
         results
       };
+    }),
+
+  upgradeSophosEndpointSoftware: authProcedure
+    .input(z.object({ ids: z.array(z.uuid()).min(1).max(10_000) }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
+      }
+
+      const uniqueIds = [...new Set(input.ids)];
+      const rows = await ctx.db
+        .select({
+          id: sophosEndpoints.id,
+          linkId: sophosEndpoints.linkId,
+          siteId: sophosEndpoints.siteId,
+          externalId: sophosEndpoints.externalId,
+          hostname: sophosEndpoints.hostname,
+          needsUpgrade: sophosEndpoints.needsUpgrade,
+          tenantId: integrationLinks.externalId,
+          tenantName: integrationLinks.name,
+          linkMeta: integrationLinks.meta,
+          integrationConfig: integrations.config
+        })
+        .from(sophosEndpoints)
+        .innerJoin(integrationLinks, eq(sophosEndpoints.linkId, integrationLinks.id))
+        .innerJoin(integrations, eq(integrationLinks.integrationId, integrations.id))
+        .where(and(inArray(sophosEndpoints.id, uniqueIds), eq(integrationLinks.integrationId, 'sophos-partner')));
+
+      if (rows.length === 0) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'No Sophos endpoints found' });
+      }
+
+      const batchId = randomUUID();
+      const results: SophosEndpointUpgradeResult[] = [];
+      const upgradeableByLink = new Map<string, typeof rows>();
+      for (const row of rows) {
+        if (!row.needsUpgrade) {
+          results.push({ id: row.id, externalId: row.externalId, hostname: row.hostname, linkId: row.linkId, siteId: row.siteId, success: true, skipped: true });
+          continue;
+        }
+        const group = upgradeableByLink.get(row.linkId) ?? [];
+        group.push(row);
+        upgradeableByLink.set(row.linkId, group);
+      }
+
+      for (const siteRows of upgradeableByLink.values()) {
+        const first = siteRows[0]!;
+        const config = SophosConfigSchema.safeParse(first.integrationConfig);
+        const apiHost = first.linkMeta && typeof first.linkMeta === 'object' && !Array.isArray(first.linkMeta)
+          ? (first.linkMeta as Record<string, unknown>).apiHost : undefined;
+        let error: string | undefined;
+        try {
+          if (!config.success || !config.data.clientId || !config.data.clientSecret) throw new Error('Sophos integration credentials are missing');
+          if (!first.tenantId) throw new Error('Sophos tenant id is missing');
+          if (typeof apiHost !== 'string' || !apiHost) throw new Error('Sophos API host is missing');
+          const encryptionKey = ctx.encryptionKey ?? process.env.ENCRYPTION_KEY;
+          if (!encryptionKey) throw new Error('Encryption key is not configured');
+          const clientSecret = Encryption.decrypt(config.data.clientSecret, encryptionKey);
+          if (!clientSecret) throw new Error('Sophos client secret could not be decrypted');
+          const connector = new SophosConnector(config.data.clientId, clientSecret);
+          // The settings endpoint is tenant-scoped, so one PATCH is sent for every site.
+          await connector.endpoint.upgradeDeviceSoftware(apiHost, first.tenantId, siteRows.map((row) => row.externalId));
+        } catch (err) {
+          error = errorMessage(err);
+        }
+
+        for (const row of siteRows) {
+          const success = !error;
+          results.push({ id: row.id, externalId: row.externalId, hostname: row.hostname, linkId: row.linkId, siteId: row.siteId, success, error });
+          await ctx.db.insert(customerLogs).values({
+            siteId: row.siteId, actorType: 'user', actorId: ctx.user.id,
+            actorLabel: ctx.user.name || ctx.user.email, action: 'update',
+            actionLabel: ActionLabels.SophosEndpointUpgrade, targetType: 'sophos_endpoint',
+            targetId: row.id, targetLabel: row.hostname, result: success ? 'success' : 'failure',
+            errorMessage: error, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent,
+            metadata: { batchId, vendor: 'sophos', operation: 'deviceSoftwareUpgrade', externalId: row.externalId, linkId: row.linkId, tenantId: row.tenantId, tenantName: row.tenantName, apiHost: typeof apiHost === 'string' ? apiHost : null }
+          });
+        }
+      }
+
+      const upgraded = results.filter((result) => result.success && !result.skipped).length;
+      const upgradedIds = results
+        .filter((result) => result.success && !result.skipped)
+        .map((result) => result.id);
+      if (upgradedIds.length > 0) {
+        await ctx.db
+          .update(sophosEndpoints)
+          .set({ needsUpgrade: false, updatedAt: new Date().toISOString() })
+          .where(inArray(sophosEndpoints.id, upgradedIds));
+      }
+      const skipped = results.filter((result) => result.skipped).length;
+      const failed = results.filter((result) => !result.success).length;
+      return { batchId, requested: uniqueIds.length, found: rows.length, upgraded, skipped, failed, result: failed === 0 ? 'success' : upgraded === 0 ? 'failure' : 'partial', results };
     }),
 
   revokeM365IdentitySessions: authProcedure

@@ -3,6 +3,7 @@ export enum ActionLabels {
   SophosEndpointTamperEnable = 'sophos.endpoint.tamper_protection.enable',
   SophosEndpointTamperDisable = 'sophos.endpoint.tamper_protection.disable',
   SophosEndpointTamperSet = 'sophos.endpoint.tamper_protection.set',
+  SophosEndpointUpgrade = 'sophos.endpoint.upgrade',
   SophosEndpointMigrate = 'sophos.endpoint.migrate',
   PolicyCreate = 'policy.create',
   PolicyUpdate = 'policy.update',
@@ -128,6 +129,10 @@ export const ActionResources = {
   [ActionLabels.SophosEndpointTamperSet]: {
     label: ActionLabels.SophosEndpointTamperSet,
     name: 'Sophos endpoint set tamper protection'
+  },
+  [ActionLabels.SophosEndpointUpgrade]: {
+    label: ActionLabels.SophosEndpointUpgrade,
+    name: 'Sophos endpoint upgrade'
   },
   [ActionLabels.SophosEndpointMigrate]: {
     label: ActionLabels.SophosEndpointMigrate,

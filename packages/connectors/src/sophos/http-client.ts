@@ -146,6 +146,29 @@ export class SophosHttpClient {
     return res.json() as Promise<T>;
   }
 
+  async patch<T>(
+    url: string,
+    body: unknown,
+    tenantId?: string,
+    options?: SophosRequestOptions
+  ): Promise<T> {
+    const headers = await this.authHeaders(tenantId, options);
+    const res = await this.fetchRateLimitAware(url, {
+      method: 'PATCH',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) {
+      const result = await res.json().catch(() => ({}));
+      const detail = result.message ?? result.error ?? JSON.stringify(result);
+      throw new Error(`Sophos PATCH error ${res.status}: ${url} — ${detail}`);
+    }
+
+    // Sophos accepts this operation asynchronously and may return an empty body.
+    const text = await res.text();
+    return (text ? JSON.parse(text) : undefined) as T;
+  }
+
   async delete<T>(url: string, tenantId?: string, options?: SophosRequestOptions): Promise<T> {
     const headers = await this.authHeaders(tenantId, options);
     const res = await this.fetchRateLimitAware(url, {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getContext } from 'svelte';
+  import { getContext, untrack } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { ChevronDown, Layers } from '@lucide/svelte';
@@ -17,16 +17,26 @@
   let open = $state(false);
 
   // The URL decides which integration is active; all scope selection lives in scopeStore.
-  $effect(() => {
+  // This keeps the chip's selection in sync after navigation to /home.
+  const currentIntegration = $derived.by(() => {
     const pathname = page.url.pathname;
     const part = pathname.split('/')[1] as ProviderId | undefined;
-    const integration = (part && integrationIds.has(part) ? part : null) as ProviderId | null;
-    if (integration !== scopeStore.currentIntegration) {
-      scopeStore.currentIntegration = integration;
-    }
+    return (part && integrationIds.has(part) ? part : null) as ProviderId | null;
   });
 
-  const currentIntegration = $derived(scopeStore.currentIntegration);
+  $effect(() => {
+    const integration = currentIntegration;
+
+    // This effect is driven by the URL. Do not subscribe it to the scope store:
+    // setting the integration also clears the stored scope, which otherwise makes
+    // the effect reschedule itself during hydration.
+    untrack(() => {
+      if (integration !== scopeStore.currentIntegration) {
+        scopeStore.currentIntegration = integration;
+      }
+    });
+  });
+
   const currentScope = $derived(scopeStore.currentScope);
   const currentIntegrationLabel = $derived(
     currentIntegration ? INTEGRATIONS[currentIntegration]?.name : null
