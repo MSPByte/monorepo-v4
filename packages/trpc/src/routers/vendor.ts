@@ -77,7 +77,10 @@ const VENDOR_TABLE_SCOPE_COLUMNS: Record<
   VendorTableKey,
   { siteId: boolean; linkId: boolean }
 > = {
-  m365_identities: { siteId: true, linkId: true },
+  // Microsoft 365 identities are tenant resources. Individual rows may carry
+  // an optional site association for enrichment, but tenant selection must
+  // always be driven by link_id.
+  m365_identities: { siteId: false, linkId: true },
   m365_groups: { siteId: false, linkId: true },
   m365_policies: { siteId: false, linkId: true },
   m365_licenses: { siteId: false, linkId: true },

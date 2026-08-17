@@ -93,6 +93,10 @@
       cellProps: { roleMap },
     },
     relativeDateColumn<IdentityRow>('lastSignInAt', 'Last Sign-in'),
+    relativeDateColumn<IdentityRow>('lastNonInteractiveSignInAt', 'Last System Sign-in', {
+      hideable: true,
+      defaultHidden: true,
+    }),
   ]);
 
   const canWrite = $derived(authStore.isAllowed('Vendors.Write'));
