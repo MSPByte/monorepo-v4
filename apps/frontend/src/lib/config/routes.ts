@@ -79,7 +79,7 @@ const ROUTES: Route[] = [
   { label: 'Audit', href: '/setup/audit', permission: 'Audit.Read', group: 'Setup' },
   {
     label: 'Pipeline',
-    href: '/setup/pipeline',
+    href: '/dev/pipeline',
     permission: 'Assets.Read',
     group: 'Setup',
     devOnly: true,
