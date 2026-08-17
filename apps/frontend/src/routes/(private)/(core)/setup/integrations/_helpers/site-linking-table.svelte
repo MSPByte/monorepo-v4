@@ -175,11 +175,15 @@
   const mappedExternalIds = $derived(
     new Set(Object.values(pendingMappings).filter(Boolean) as string[])
   );
-  const unmappedExternal = $derived(
+  const availableUnmappedExternal = $derived(
     externalOptions
       .filter((o) => !mappedExternalIds.has(o.id))
-      .filter((o) => o.name.toLowerCase().includes(unmappedSearch.toLowerCase()))
       .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
+  );
+  const unmappedExternal = $derived(
+    availableUnmappedExternal.filter((o) =>
+      o.name.toLowerCase().includes(unmappedSearch.toLowerCase())
+    )
   );
 
   function setMapping(siteId: string, externalId: string | undefined) {
@@ -503,14 +507,14 @@
   </FadeIn>
 {/if}
 
-{#if !loadingExternal && unmappedExternal.length > 0}
+{#if !loadingExternal && availableUnmappedExternal.length > 0}
   <FadeIn class="shrink-0 flex flex-col border rounded-md overflow-hidden max-h-70">
     <div
       class="flex items-center justify-between px-4 py-2.5 bg-warning/5 border-b border-warning/20 shrink-0"
     >
       <div class="flex items-center gap-2">
         <span class="text-sm font-medium text-warning">
-          {unmappedExternal.length} unmapped {externalLabel}{unmappedExternal.length !== 1
+          {availableUnmappedExternal.length} unmapped {externalLabel}{availableUnmappedExternal.length !== 1
             ? 's'
             : ''}
         </span>
@@ -529,32 +533,38 @@
     </div>
 
     <div class="overflow-y-auto divide-y flex-1">
-      {#each unmappedExternal as opt (opt.id)}
-        <div
-          class="flex items-center justify-between px-4 py-2.5 hover:bg-muted/20 transition-colors"
-        >
-          <div class="flex flex-col gap-0.5 min-w-0 mr-3">
-            <span class="text-sm font-medium truncate">{opt.name}</span>
-            <span class="text-xs text-muted-foreground font-mono truncate">{opt.id}</span>
+      {#if unmappedExternal.length > 0}
+        {#each unmappedExternal as opt (opt.id)}
+          <div
+            class="flex items-center justify-between px-4 py-2.5 hover:bg-muted/20 transition-colors"
+          >
+            <div class="flex flex-col gap-0.5 min-w-0 mr-3">
+              <span class="text-sm font-medium truncate">{opt.name}</span>
+              <span class="text-xs text-muted-foreground font-mono truncate">{opt.id}</span>
+            </div>
+            {#if canWrite && canWriteSites}
+              <Button
+                variant="outline"
+                size="sm"
+                class="gap-1.5 shrink-0 text-xs h-7"
+                disabled={creatingFromVendor === opt.id}
+                onclick={() => createSiteFromVendor(opt)}
+              >
+                {#if creatingFromVendor === opt.id}
+                  <LoaderCircle class="size-3 animate-spin" />
+                {:else}
+                  <Plus class="size-3" />
+                {/if}
+                Create Site
+              </Button>
+            {/if}
           </div>
-          {#if canWrite && canWriteSites}
-            <Button
-              variant="outline"
-              size="sm"
-              class="gap-1.5 shrink-0 text-xs h-7"
-              disabled={creatingFromVendor === opt.id}
-              onclick={() => createSiteFromVendor(opt)}
-            >
-              {#if creatingFromVendor === opt.id}
-                <LoaderCircle class="size-3 animate-spin" />
-              {:else}
-                <Plus class="size-3" />
-              {/if}
-              Create Site
-            </Button>
-          {/if}
+        {/each}
+      {:else}
+        <div class="px-4 py-6 text-center text-sm text-muted-foreground">
+          No unmapped {externalLabel.toLowerCase()} match your search.
         </div>
-      {/each}
+      {/if}
     </div>
   </FadeIn>
 {/if}

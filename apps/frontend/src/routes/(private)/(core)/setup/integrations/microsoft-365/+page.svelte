@@ -30,6 +30,7 @@
   import FadeIn from '$lib/components/transition/fade-in.svelte';
   import type { inferRouterOutputs } from '@trpc/server';
   import type { AppRouter } from '@mspbyte/trpc';
+  import IntegrationHeader from '../_helpers/integration-header.svelte';
 
   type Link = inferRouterOutputs<AppRouter>['integrationLinks']['list'][number];
 
@@ -69,6 +70,7 @@
   }));
 
   const dbIntegration = $derived(integrationQuery.data ?? null);
+  const isConfigured = $derived(!!(dbIntegration && !dbIntegration.deletedAt));
   const loading = $derived(integrationQuery.isLoading || linksQuery.isLoading);
 
   const tenantLinks = $derived((linksQuery.data ?? []).filter((l) => !l.siteId));
@@ -91,8 +93,8 @@
       (l) => (l.meta as Record<string, unknown>)?.consentVersion !== CONSENT_VERSION
     ).length,
     totalUnmapped: activeLinks.reduce((acc, al) => {
-      const domainCount =
-        (((al.meta as Record<string, unknown>)?.domains as unknown[]) ?? []).length;
+      const domainCount = (((al.meta as Record<string, unknown>)?.domains as unknown[]) ?? [])
+        .length;
       return acc + Math.max(domainCount - mappedDomainCount(al), 0);
     }, 0),
     isConfigured: !!(dbIntegration && !dbIntegration.deletedAt),
@@ -149,8 +151,8 @@
         return (link.meta as Record<string, unknown> | null)?.source === 'manual';
       case 'Has Unmapped': {
         if (link.status !== 'active') return false;
-        const domainCount =
-          (((link.meta as Record<string, unknown>)?.domains as unknown[]) ?? []).length;
+        const domainCount = (((link.meta as Record<string, unknown>)?.domains as unknown[]) ?? [])
+          .length;
         return mappedDomainCount(link) < domainCount;
       }
       case 'Active':
@@ -360,20 +362,7 @@
 <div class="flex size-full flex-col gap-4 overflow-hidden p-4">
   <!-- Header -->
   <div class="flex shrink-0 items-start justify-between">
-    <div class="flex flex-col gap-0.5">
-      <div class="flex items-center gap-2">
-        <h1 class="text-lg font-semibold">{integration.name}</h1>
-        <Badge
-          variant="outline"
-          class="{metrics.isConfigured
-            ? 'border-success/30 bg-success/15 text-success'
-            : 'bg-muted text-muted-foreground'} text-xs"
-        >
-          {metrics.isConfigured ? 'Configured' : 'Not configured'}
-        </Badge>
-      </div>
-      <p class="text-xs text-muted-foreground">Manage Microsoft 365 tenant connections.</p>
-    </div>
+    <IntegrationHeader {integration} active={isConfigured} loading={integrationQuery.isLoading} />
     <div class="flex gap-2">
       {#if authStore.isAllowed('Integrations.Write')}
         <Button
