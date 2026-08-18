@@ -7,6 +7,7 @@ import {
   m365Identities,
   m365Licenses,
   m365Roles,
+  packageDependencies,
   packageRuns,
   packageSchedules,
   packages,
@@ -85,7 +86,13 @@ const bindingSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 
-const stepSchema = z.object({
+// Maximum sub-package nesting depth. A tree of packages A→B→C→D→E is depth 5;
+// adding one more level is rejected at save time. Keeps debugging tractable
+// and bounds the retryPath length used for leaf replay.
+export const MAX_SUBPACKAGE_DEPTH = 5;
+
+const capabilityStepSchema = z.object({
+  kind: z.literal('capability').default('capability'),
   capabilityId: z.string().min(1),
   label: z.string().optional(),
   optional: z.boolean().default(false),
@@ -93,7 +100,38 @@ const stepSchema = z.object({
   onFailure: z.enum(['halt', 'continue']).default('halt'),
   retryAttempts: z.number().int().min(0).max(5).default(0),
 });
+
+const subpackageStepSchema = z.object({
+  kind: z.literal('subpackage'),
+  packageId: z.uuid(),
+  label: z.string().optional(),
+  optional: z.boolean().default(false),
+  inputBindings: z.record(z.string(), bindingSchema),
+  onFailure: z.enum(['halt', 'continue']).default('halt'),
+  retryAttempts: z.number().int().min(0).max(5).default(0),
+});
+
+// Legacy step rows persisted before the discriminator existed carry no `kind`.
+// Preprocess normalizes them to `capability` so the union parses cleanly.
+const stepSchema = z.preprocess(
+  (raw) => {
+    if (raw && typeof raw === 'object' && !('kind' in (raw as Record<string, unknown>))) {
+      return { ...(raw as Record<string, unknown>), kind: 'capability' };
+    }
+    return raw;
+  },
+  z.discriminatedUnion('kind', [capabilityStepSchema, subpackageStepSchema]),
+);
 type ParsedStep = z.infer<typeof stepSchema>;
+
+const exposedOutputSchema = z.object({
+  name: z.string().min(1).max(160),
+  sourceStepPosition: z.number().int().min(0),
+  sourcePath: z.string().min(1),
+  outputType: z.string().max(120).optional(),
+  description: z.string().max(500).optional(),
+});
+type ParsedExposedOutput = z.infer<typeof exposedOutputSchema>;
 
 const promptSchema = z.object({
   id: z.string().min(1).max(160),
@@ -131,6 +169,7 @@ const packageInputSchema = z.object({
   prompts: z.array(promptSchema).default([]),
   outcomeSteps: outcomeStepsSchema.default({ onSuccess: [], onFailure: [] }),
   failureActions: z.array(failureActionSchema).default([]),
+  exposedOutputs: z.array(exposedOutputSchema).default([]),
   // Scope: empty arrays => global. Non-empty restricts which sites can run
   // this package (site direct-match, tenant direct-match, or any matching group).
   allowedSites: z.array(z.uuid()).default([]),
@@ -155,16 +194,74 @@ type EntityOption = {
   disabled?: boolean;
 };
 
+// Metadata about a sub-package's public contract used to type-check parent
+// bindings that reference it. Populated on demand from the DB in `validateSubpackageRefs`.
+type SubpackageMeta = {
+  packageId: string;
+  status: 'draft' | 'active' | 'archived';
+  name: string;
+  prompts: Array<z.infer<typeof promptSchema>>;
+  exposedOutputs: ParsedExposedOutput[];
+};
+
 // Rejects obviously broken bindings: unknown capabilityId, priorOutput
 // pointing forward, entity bindings whose entityType the capability doesn't
 // declare, etc. Real type-checking of literal values happens at run time via
 // zod on capability.inputs.
+//
+// Sub-package steps validate against the child's `prompts` (for inputBindings)
+// and `exposedOutputs` (for downstream priorOutput references). The child
+// metadata is provided by the caller after an async DB fetch — see
+// `validateSubpackageRefs`.
 function validateStepsAgainstRegistry(
   steps: ParsedStep[],
   lane: 'main' | 'onSuccess' | 'onFailure' = 'main',
+  subpackageMeta: Map<string, SubpackageMeta> = new Map(),
 ): string | null {
   for (let pos = 0; pos < steps.length; pos++) {
     const step = steps[pos]!;
+
+    // ---- Sub-package step branch -------------------------------------------
+    if (step.kind === 'subpackage') {
+      const child = subpackageMeta.get(step.packageId);
+      if (!child) {
+        return `Step ${pos + 1}: sub-package ${step.packageId} not found`;
+      }
+      if (child.status !== 'active') {
+        return `Step ${pos + 1}: sub-package "${child.name}" must be active (currently ${child.status})`;
+      }
+      const promptIds = new Set(child.prompts.map((p) => p.id));
+      for (const [inputName, binding] of Object.entries(step.inputBindings)) {
+        if (!promptIds.has(inputName)) {
+          return `Step ${pos + 1}: sub-package "${child.name}" has no prompt "${inputName}"`;
+        }
+        if (binding.kind === 'priorOutput') {
+          const sourceLane = binding.lane ?? 'main';
+          if (lane === 'main' && sourceLane !== 'main') {
+            return `Step ${pos + 1} main path cannot read from a terminal lane`;
+          }
+          if (sourceLane === lane && binding.stepPosition >= pos) {
+            return `Step ${pos + 1} priorOutput can only reference an earlier step in the same lane`;
+          }
+        }
+        if (binding.kind === 'failureContext' && lane !== 'onFailure') {
+          return `Step ${pos + 1} can only read failure context inside the On failure lane`;
+        }
+        if (binding.kind === 'generated') {
+          const generator = getGenerator(binding.generator);
+          if (!generator) {
+            return `Step ${pos + 1} input "${inputName}" references unknown generator "${binding.generator}"`;
+          }
+          const parsed = generator.paramsSchema.safeParse(binding.params);
+          if (!parsed.success) {
+            return `Step ${pos + 1} input "${inputName}" generator params invalid: ${parsed.error.message}`;
+          }
+        }
+      }
+      continue;
+    }
+
+    // ---- Capability step branch -------------------------------------------
     const cap = getCapability(step.capabilityId);
     if (!cap) return `Unknown capability at step ${pos + 1}: ${step.capabilityId}`;
     for (const [inputName, binding] of Object.entries(step.inputBindings)) {
@@ -190,6 +287,19 @@ function validateStepsAgainstRegistry(
         if (sourceLane === lane && binding.stepPosition >= pos) {
           return `Step ${pos + 1} priorOutput can only reference an earlier step in the same lane`;
         }
+        // If the source step is itself a sub-package, verify the referenced
+        // path is a declared exposed output. Downstream capability inputs
+        // that don't declare an outputType stay permissive as they do today.
+        const sourceStep = steps[binding.stepPosition];
+        if (sourceStep && sourceStep.kind === 'subpackage') {
+          const child = subpackageMeta.get(sourceStep.packageId);
+          if (child) {
+            const exposed = child.exposedOutputs.find((o) => o.name === binding.path);
+            if (!exposed) {
+              return `Step ${pos + 1} input "${inputName}" reads "${binding.path}" from sub-package "${child.name}" but that output is not exposed`;
+            }
+          }
+        }
       }
       if (binding.kind === 'failureContext' && lane !== 'onFailure') {
         return `Step ${pos + 1} can only read failure context inside the On failure lane`;
@@ -212,12 +322,227 @@ function validateStepsAgainstRegistry(
   return null;
 }
 
+// Validates the `exposedOutputs` contract on a package definition: each entry
+// must point at a real step position, and (for capability steps) a real output
+// name on that capability. Sub-package-sourced exposed outputs re-export a
+// name from the child's own exposed contract.
+function validateExposedOutputs(
+  exposedOutputs: ParsedExposedOutput[],
+  steps: ParsedStep[],
+  subpackageMeta: Map<string, SubpackageMeta>,
+): string | null {
+  const seen = new Set<string>();
+  for (const [idx, out] of exposedOutputs.entries()) {
+    if (seen.has(out.name)) {
+      return `Exposed output #${idx + 1}: duplicate name "${out.name}"`;
+    }
+    seen.add(out.name);
+    if (out.sourceStepPosition < 0 || out.sourceStepPosition >= steps.length) {
+      return `Exposed output "${out.name}" references step position ${out.sourceStepPosition + 1} which does not exist`;
+    }
+    const step = steps[out.sourceStepPosition]!;
+    if (step.kind === 'subpackage') {
+      const child = subpackageMeta.get(step.packageId);
+      if (!child) continue;
+      if (!child.exposedOutputs.some((c) => c.name === out.sourcePath)) {
+        return `Exposed output "${out.name}" reads "${out.sourcePath}" from sub-package "${child.name}" but that output is not exposed`;
+      }
+      continue;
+    }
+    const cap = getCapability(step.capabilityId);
+    if (!cap) continue;
+    const firstSegment = out.sourcePath.split('.')[0]!;
+    if (!(firstSegment in cap.outputMeta)) {
+      return `Exposed output "${out.name}" reads "${out.sourcePath}" from step ${out.sourceStepPosition + 1} but capability "${cap.name}" has no output "${firstSegment}"`;
+    }
+  }
+  return null;
+}
+
+// Fetches metadata for every sub-package referenced by the given step arrays.
+// Returns { ok, meta } for downstream validators. Any missing rows are
+// silently absent — the caller (validateStepsAgainstRegistry) treats that as
+// "sub-package not found" and rejects.
+async function fetchSubpackageMeta(
+  db: any,
+  stepArrays: ParsedStep[][],
+): Promise<Map<string, SubpackageMeta>> {
+  const ids = new Set<string>();
+  for (const arr of stepArrays) {
+    for (const step of arr) {
+      if (step.kind === 'subpackage') ids.add(step.packageId);
+    }
+  }
+  if (ids.size === 0) return new Map();
+  const rows = await db
+    .select({
+      id: packages.id,
+      status: packages.status,
+      name: packages.name,
+      prompts: packages.prompts,
+      exposedOutputs: packages.exposedOutputs,
+    })
+    .from(packages)
+    .where(inArray(packages.id, [...ids]));
+  const out = new Map<string, SubpackageMeta>();
+  for (const row of rows as Array<{
+    id: string;
+    status: 'draft' | 'active' | 'archived';
+    name: string;
+    prompts: unknown;
+    exposedOutputs: unknown;
+  }>) {
+    out.set(row.id, {
+      packageId: row.id,
+      status: row.status,
+      name: row.name,
+      prompts: (row.prompts as Array<z.infer<typeof promptSchema>>) ?? [],
+      exposedOutputs: (row.exposedOutputs as ParsedExposedOutput[]) ?? [],
+    });
+  }
+  return out;
+}
+
+// Extracts the flat list of sub-package children referenced by the given
+// steps (both main and terminal lanes), preserving `stepPosition` for the
+// package_dependencies row rewrite.
+function collectSubpackageRefs(
+  steps: ParsedStep[],
+): Array<{ childPackageId: string; stepPosition: number }> {
+  const refs: Array<{ childPackageId: string; stepPosition: number }> = [];
+  for (const [pos, step] of steps.entries()) {
+    if (step.kind === 'subpackage') {
+      refs.push({ childPackageId: step.packageId, stepPosition: pos });
+    }
+  }
+  return refs;
+}
+
+// Recursive descent from `startIds` through package_dependencies. Returns the
+// set of every reachable child (transitive closure). Guarded by a depth cap
+// far larger than MAX_SUBPACKAGE_DEPTH so a corrupt row can't spin forever.
+async function collectDescendants(
+  db: any,
+  startIds: string[],
+): Promise<Set<string>> {
+  if (startIds.length === 0) return new Set();
+  const query = sql`
+    WITH RECURSIVE d(node) AS (
+      SELECT unnest(${sql.raw(`ARRAY['${startIds.join("','")}']::uuid[]`)}) AS node
+      UNION
+      SELECT pd.child_package_id
+        FROM packages.package_dependencies pd
+        JOIN d ON pd.parent_package_id = d.node
+    )
+    SELECT DISTINCT node::text AS node FROM d
+  `;
+  const res = await db.execute(query);
+  const rows = (Array.isArray(res) ? res : (res?.rows ?? [])) as Array<{ node: string }>;
+  return new Set(rows.map((r) => r.node));
+}
+
+// Height of the subtree rooted at `rootId` using the current package_dependencies
+// table. A leaf (no subpackage children) has height 1. Bounded search — returns
+// (MAX_SUBPACKAGE_DEPTH + 2) as a sentinel if depth exceeds the cap.
+async function subtreeHeight(db: any, rootId: string): Promise<number> {
+  const query = sql`
+    WITH RECURSIVE d(node, depth) AS (
+      SELECT ${rootId}::uuid, 1
+      UNION ALL
+      SELECT pd.child_package_id, d.depth + 1
+        FROM packages.package_dependencies pd
+        JOIN d ON pd.parent_package_id = d.node
+        WHERE d.depth <= ${MAX_SUBPACKAGE_DEPTH + 1}
+    )
+    SELECT COALESCE(MAX(depth), 1)::int AS h FROM d
+  `;
+  const res = await db.execute(query);
+  const rows = (Array.isArray(res) ? res : (res?.rows ?? [])) as Array<{ h: number }>;
+  return rows[0]?.h ?? 1;
+}
+
+// Max hop-distance from any ancestor down to `packageId`. Used to bound the
+// height that this package's new subtree can add without pushing any root
+// above MAX_SUBPACKAGE_DEPTH.
+async function maxAncestorDistance(db: any, packageId: string): Promise<number> {
+  const query = sql`
+    WITH RECURSIVE a(node, depth) AS (
+      SELECT parent_package_id, 1
+        FROM packages.package_dependencies
+        WHERE child_package_id = ${packageId}::uuid
+      UNION
+      SELECT pd.parent_package_id, a.depth + 1
+        FROM packages.package_dependencies pd
+        JOIN a ON pd.child_package_id = a.node
+        WHERE a.depth <= ${MAX_SUBPACKAGE_DEPTH + 1}
+    )
+    SELECT COALESCE(MAX(depth), 0)::int AS d FROM a
+  `;
+  const res = await db.execute(query);
+  const rows = (Array.isArray(res) ? res : (res?.rows ?? [])) as Array<{ d: number }>;
+  return rows[0]?.d ?? 0;
+}
+
+// Full save-time guard for a package's sub-package references. Runs the cycle
+// check + depth cap against the CURRENT state of package_dependencies (which
+// the caller must have locked via serializable isolation or FOR UPDATE), then
+// rewrites this package's dependency rows.
+async function checkAndRewriteDependencies(
+  db: any,
+  packageId: string,
+  refs: Array<{ childPackageId: string; stepPosition: number }>,
+): Promise<string | null> {
+  // Self-reference is a trivial cycle — reject before hitting the DB.
+  for (const ref of refs) {
+    if (ref.childPackageId === packageId) {
+      return `A package cannot include itself as a sub-package (step ${ref.stepPosition + 1})`;
+    }
+  }
+
+  // Cycle: if the current package appears anywhere in any new child's descendants,
+  // adding that edge would close a loop.
+  const childIds = [...new Set(refs.map((r) => r.childPackageId))];
+  const descendants = await collectDescendants(db, childIds);
+  if (descendants.has(packageId)) {
+    return 'Adding this sub-package would create a dependency cycle';
+  }
+
+  // Depth check: subtree height rooted at this package with the new refs, plus
+  // the deepest ancestor distance, must not exceed MAX_SUBPACKAGE_DEPTH.
+  let newSubtreeHeight = 1;
+  for (const cid of childIds) {
+    const h = await subtreeHeight(db, cid);
+    if (1 + h > newSubtreeHeight) newSubtreeHeight = 1 + h;
+  }
+  const ancestorDistance = await maxAncestorDistance(db, packageId);
+  if (ancestorDistance + newSubtreeHeight > MAX_SUBPACKAGE_DEPTH) {
+    return `Sub-package nesting exceeds the maximum depth of ${MAX_SUBPACKAGE_DEPTH}`;
+  }
+
+  // Rewrite this package's dependency rows atomically. Delete-then-insert is
+  // safe inside the caller's transaction.
+  await db.delete(packageDependencies).where(eq(packageDependencies.parentPackageId, packageId));
+  if (refs.length > 0) {
+    await db.insert(packageDependencies).values(
+      refs.map((r) => ({
+        parentPackageId: packageId,
+        childPackageId: r.childPackageId,
+        stepPosition: r.stepPosition,
+      })),
+    );
+  }
+  return null;
+}
+
 function validatePromptBindings(
   steps: ParsedStep[],
   prompts: Array<z.infer<typeof promptSchema>>,
 ): string | null {
   const promptIds = new Set(prompts.map((prompt) => prompt.id));
   for (const [position, step] of steps.entries()) {
+    // Sub-package steps target the child's prompts (validated separately in
+    // validateStepsAgainstRegistry). Skip them here to avoid false positives.
+    if (step.kind === 'subpackage') continue;
     for (const [inputName, binding] of Object.entries(step.inputBindings)) {
       if (binding.kind !== 'runtime') continue;
       // Legacy packages predate authored prompts. Keep them runnable and only
@@ -307,14 +632,6 @@ export const packagesRouter = t.router({
       if (!ctx.can('Packages.Write')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Write required' });
       }
-      const err = validateStepsAgainstRegistry(input.steps);
-      if (err) throw new TRPCError({ code: 'BAD_REQUEST', message: err });
-      const promptError = validatePromptBindings(allPackageSteps(input), input.prompts);
-      if (promptError) throw new TRPCError({ code: 'BAD_REQUEST', message: promptError });
-      const successOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onSuccess, 'onSuccess');
-      if (successOutcomeError) throw new TRPCError({ code: 'BAD_REQUEST', message: `On success: ${successOutcomeError}` });
-      const failureOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onFailure, 'onFailure');
-      if (failureOutcomeError) throw new TRPCError({ code: 'BAD_REQUEST', message: `On failure: ${failureOutcomeError}` });
       const directLinkScope = await assertTenantScopedIntegrationLinks(
         ctx.db,
         input.allowedIntegrationLinks
@@ -323,24 +640,70 @@ export const packagesRouter = t.router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: directLinkScope.message });
       }
 
-      const inserted = await ctx.db
-        .insert(packages)
-        .values({
-          name: input.name,
-          description: input.description ?? null,
-          status: input.status,
-          version: 1,
-          steps: input.steps,
-          prompts: input.prompts,
-          outcomeSteps: input.outcomeSteps,
-          failureActions: input.failureActions,
-          allowedSites: input.allowedSites,
-          allowedSiteGroups: input.allowedSiteGroups,
-          allowedIntegrationLinks: input.allowedIntegrationLinks,
-          authorUserId: ctx.user.id,
-        })
-        .returning({ id: packages.id });
-      const row = inserted[0]!;
+      // Serializable txn: the cycle + depth check reads package_dependencies
+      // and any concurrent save on any package in the touched subgraph will
+      // either serialize behind us or abort with a retryable error.
+      const result = await ctx.db.transaction(async (tx: any) => {
+        const subMeta = await fetchSubpackageMeta(tx, [
+          input.steps,
+          input.outcomeSteps.onSuccess,
+          input.outcomeSteps.onFailure,
+        ]);
+        const err = validateStepsAgainstRegistry(input.steps, 'main', subMeta);
+        if (err) return { error: err };
+        const successOutcomeError = validateStepsAgainstRegistry(
+          input.outcomeSteps.onSuccess,
+          'onSuccess',
+          subMeta,
+        );
+        if (successOutcomeError) return { error: `On success: ${successOutcomeError}` };
+        const failureOutcomeError = validateStepsAgainstRegistry(
+          input.outcomeSteps.onFailure,
+          'onFailure',
+          subMeta,
+        );
+        if (failureOutcomeError) return { error: `On failure: ${failureOutcomeError}` };
+        const promptError = validatePromptBindings(allPackageSteps(input), input.prompts);
+        if (promptError) return { error: promptError };
+        const exposedError = validateExposedOutputs(input.exposedOutputs, input.steps, subMeta);
+        if (exposedError) return { error: exposedError };
+
+        const inserted = await tx
+          .insert(packages)
+          .values({
+            name: input.name,
+            description: input.description ?? null,
+            status: input.status,
+            version: 1,
+            steps: input.steps,
+            prompts: input.prompts,
+            outcomeSteps: input.outcomeSteps,
+            failureActions: input.failureActions,
+            exposedOutputs: input.exposedOutputs,
+            allowedSites: input.allowedSites,
+            allowedSiteGroups: input.allowedSiteGroups,
+            allowedIntegrationLinks: input.allowedIntegrationLinks,
+            authorUserId: ctx.user.id,
+          })
+          .returning({ id: packages.id });
+        const row = inserted[0]!;
+
+        // Depth / cycle check considers refs across every lane (main + terminal
+        // lanes) so a chain hidden inside onFailure still counts.
+        const refs = collectSubpackageRefs([
+          ...input.steps,
+          ...input.outcomeSteps.onSuccess,
+          ...input.outcomeSteps.onFailure,
+        ]);
+        const depErr = await checkAndRewriteDependencies(tx, row.id, refs);
+        if (depErr) return { error: depErr };
+
+        return { id: row.id as string };
+      }, { isolationLevel: 'serializable' });
+
+      if ('error' in result) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: result.error });
+      }
 
       await ctx.db.insert(customerLogs).values({
         siteId: null,
@@ -350,14 +713,14 @@ export const packagesRouter = t.router({
         action: 'create',
         actionLabel: ActionLabels.PackageCreate,
         targetType: 'package',
-        targetId: row.id,
+        targetId: result.id,
         targetLabel: input.name,
         result: 'success',
         ipAddress: ctx.ipAddress,
         userAgent: ctx.userAgent,
       });
 
-      return { id: row.id };
+      return { id: result.id };
     }),
 
   update: authProcedure
@@ -371,6 +734,7 @@ export const packagesRouter = t.router({
         prompts: z.array(promptSchema).optional(),
         outcomeSteps: outcomeStepsSchema.optional(),
         failureActions: z.array(failureActionSchema).optional(),
+        exposedOutputs: z.array(exposedOutputSchema).optional(),
         allowedSites: z.array(z.uuid()).optional(),
         allowedSiteGroups: z.array(z.uuid()).optional(),
         allowedIntegrationLinks: z.array(z.uuid()).optional(),
@@ -379,33 +743,6 @@ export const packagesRouter = t.router({
     .mutation(async ({ ctx, input }) => {
       if (!ctx.can('Packages.Write')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Write required' });
-      }
-      const [current] = await ctx.db
-        .select()
-        .from(packages)
-        .where(eq(packages.id, input.id))
-        .limit(1);
-      if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Package not found' });
-
-      if (input.steps) {
-        const err = validateStepsAgainstRegistry(input.steps);
-        if (err) throw new TRPCError({ code: 'BAD_REQUEST', message: err });
-      }
-      if (input.steps || input.prompts || input.outcomeSteps) {
-        const promptError = validatePromptBindings(
-          allPackageSteps({
-            steps: input.steps ?? (current.steps as ParsedStep[]),
-            outcomeSteps: input.outcomeSteps ?? (current.outcomeSteps as z.infer<typeof outcomeStepsSchema>),
-          }),
-          input.prompts ?? (current.prompts as Array<z.infer<typeof promptSchema>>),
-        );
-        if (promptError) throw new TRPCError({ code: 'BAD_REQUEST', message: promptError });
-      }
-      if (input.outcomeSteps) {
-        const successOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onSuccess, 'onSuccess');
-        if (successOutcomeError) throw new TRPCError({ code: 'BAD_REQUEST', message: `On success: ${successOutcomeError}` });
-        const failureOutcomeError = validateStepsAgainstRegistry(input.outcomeSteps.onFailure, 'onFailure');
-        if (failureOutcomeError) throw new TRPCError({ code: 'BAD_REQUEST', message: `On failure: ${failureOutcomeError}` });
       }
       if (input.allowedIntegrationLinks) {
         const directLinkScope = await assertTenantScopedIntegrationLinks(
@@ -417,28 +754,176 @@ export const packagesRouter = t.router({
         }
       }
 
-      const stepsChanged =
-        input.steps !== undefined &&
-        JSON.stringify(input.steps) !== JSON.stringify(current.steps);
+      const result = await ctx.db.transaction(async (tx: any) => {
+        const [current] = await tx
+          .select()
+          .from(packages)
+          .where(eq(packages.id, input.id))
+          .limit(1);
+        if (!current) return { notFound: true as const };
 
-      await ctx.db
-        .update(packages)
-        .set({
-          name: input.name ?? current.name,
-          description: input.description === undefined ? current.description : input.description,
-          status: input.status ?? current.status,
-          steps: input.steps ?? current.steps,
-          prompts: input.prompts ?? current.prompts,
-          outcomeSteps: input.outcomeSteps ?? current.outcomeSteps,
-          failureActions: input.failureActions ?? current.failureActions,
-          allowedSites: input.allowedSites ?? current.allowedSites,
-          allowedSiteGroups: input.allowedSiteGroups ?? current.allowedSiteGroups,
-          allowedIntegrationLinks:
-            input.allowedIntegrationLinks ?? current.allowedIntegrationLinks,
-          version: stepsChanged ? current.version + 1 : current.version,
-          updatedAt: new Date().toISOString(),
-        })
-        .where(eq(packages.id, input.id));
+        const nextSteps = (input.steps ?? current.steps) as ParsedStep[];
+        const nextOutcome = (input.outcomeSteps ??
+          current.outcomeSteps) as z.infer<typeof outcomeStepsSchema>;
+        const nextPrompts = (input.prompts ??
+          current.prompts) as Array<z.infer<typeof promptSchema>>;
+        const nextExposed = (input.exposedOutputs ??
+          current.exposedOutputs) as ParsedExposedOutput[];
+
+        const subMeta = await fetchSubpackageMeta(tx, [
+          nextSteps,
+          nextOutcome.onSuccess,
+          nextOutcome.onFailure,
+        ]);
+
+        if (input.steps) {
+          const err = validateStepsAgainstRegistry(input.steps, 'main', subMeta);
+          if (err) return { error: err };
+        }
+        if (input.steps || input.prompts || input.outcomeSteps) {
+          const promptError = validatePromptBindings(
+            allPackageSteps({ steps: nextSteps, outcomeSteps: nextOutcome }),
+            nextPrompts,
+          );
+          if (promptError) return { error: promptError };
+        }
+        if (input.outcomeSteps) {
+          const successOutcomeError = validateStepsAgainstRegistry(
+            input.outcomeSteps.onSuccess,
+            'onSuccess',
+            subMeta,
+          );
+          if (successOutcomeError) return { error: `On success: ${successOutcomeError}` };
+          const failureOutcomeError = validateStepsAgainstRegistry(
+            input.outcomeSteps.onFailure,
+            'onFailure',
+            subMeta,
+          );
+          if (failureOutcomeError) return { error: `On failure: ${failureOutcomeError}` };
+        }
+        if (input.exposedOutputs !== undefined || input.steps !== undefined) {
+          const exposedError = validateExposedOutputs(nextExposed, nextSteps, subMeta);
+          if (exposedError) return { error: exposedError };
+        }
+
+        // Block removal of any exposed output this package's parents wire to.
+        // Conservative: even a rename counts as removal from the parent's view.
+        if (input.exposedOutputs !== undefined) {
+          const previousNames = new Set(
+            ((current.exposedOutputs ?? []) as ParsedExposedOutput[]).map((o) => o.name),
+          );
+          const nextNames = new Set(nextExposed.map((o) => o.name));
+          const removed = [...previousNames].filter((n) => !nextNames.has(n));
+          if (removed.length > 0) {
+            const parents = await tx
+              .select({
+                parentPackageId: packageDependencies.parentPackageId,
+                parentName: packages.name,
+                stepPosition: packageDependencies.stepPosition,
+                parentSteps: packages.steps,
+              })
+              .from(packageDependencies)
+              .innerJoin(packages, eq(packageDependencies.parentPackageId, packages.id))
+              .where(eq(packageDependencies.childPackageId, input.id));
+            for (const parent of parents as Array<{
+              parentPackageId: string;
+              parentName: string;
+              stepPosition: number;
+              parentSteps: ParsedStep[];
+            }>) {
+              for (const s of parent.parentSteps) {
+                if (s.kind !== 'capability') continue;
+                for (const [inputName, binding] of Object.entries(s.inputBindings)) {
+                  if (binding.kind !== 'priorOutput') continue;
+                  if (binding.stepPosition !== parent.stepPosition) continue;
+                  if (removed.includes(binding.path)) {
+                    return {
+                      error: `Cannot remove exposed output "${binding.path}" — parent package "${parent.parentName}" wires it into input "${inputName}". Update or remove the parent reference first.`,
+                    };
+                  }
+                }
+              }
+              const parentExposedRows = await tx
+                .select({ exposedOutputs: packages.exposedOutputs })
+                .from(packages)
+                .where(eq(packages.id, parent.parentPackageId))
+                .limit(1);
+              const parentExposed = ((parentExposedRows[0]?.exposedOutputs ?? []) as ParsedExposedOutput[]);
+              for (const eo of parentExposed) {
+                if (eo.sourceStepPosition !== parent.stepPosition) continue;
+                if (removed.includes(eo.sourcePath)) {
+                  return {
+                    error: `Cannot remove exposed output "${eo.sourcePath}" — parent package "${parent.parentName}" re-exports it as "${eo.name}".`,
+                  };
+                }
+              }
+            }
+          }
+        }
+
+        // Block archiving a package that any active parent depends on.
+        if (input.status === 'archived' && current.status !== 'archived') {
+          const parentRows = await tx
+            .select({ parentPackageId: packageDependencies.parentPackageId, parentName: packages.name })
+            .from(packageDependencies)
+            .innerJoin(packages, eq(packageDependencies.parentPackageId, packages.id))
+            .where(eq(packageDependencies.childPackageId, input.id));
+          if (parentRows.length > 0) {
+            const names = (parentRows as Array<{ parentName: string }>)
+              .map((r) => `"${r.parentName}"`)
+              .slice(0, 3)
+              .join(', ');
+            return {
+              error: `Cannot archive — referenced by ${parentRows.length} parent package${parentRows.length === 1 ? '' : 's'}: ${names}${parentRows.length > 3 ? ', ...' : ''}`,
+            };
+          }
+        }
+
+        const stepsChanged =
+          input.steps !== undefined &&
+          JSON.stringify(input.steps) !== JSON.stringify(current.steps);
+
+        await tx
+          .update(packages)
+          .set({
+            name: input.name ?? current.name,
+            description: input.description === undefined ? current.description : input.description,
+            status: input.status ?? current.status,
+            steps: input.steps ?? current.steps,
+            prompts: input.prompts ?? current.prompts,
+            outcomeSteps: input.outcomeSteps ?? current.outcomeSteps,
+            failureActions: input.failureActions ?? current.failureActions,
+            exposedOutputs: nextExposed,
+            allowedSites: input.allowedSites ?? current.allowedSites,
+            allowedSiteGroups: input.allowedSiteGroups ?? current.allowedSiteGroups,
+            allowedIntegrationLinks:
+              input.allowedIntegrationLinks ?? current.allowedIntegrationLinks,
+            version: stepsChanged ? current.version + 1 : current.version,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(packages.id, input.id));
+
+        // Rewrite dependency rows whenever steps changed. `stepsChanged` covers
+        // both a subpackage step added/removed and a position shift.
+        if (stepsChanged) {
+          const refs = collectSubpackageRefs([
+            ...nextSteps,
+            ...nextOutcome.onSuccess,
+            ...nextOutcome.onFailure,
+          ]);
+          const depErr = await checkAndRewriteDependencies(tx, input.id, refs);
+          if (depErr) return { error: depErr };
+        }
+
+        return { ok: true as const, stepsChanged, previousVersion: current.version };
+      }, { isolationLevel: 'serializable' });
+
+      if ('notFound' in result) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Package not found' });
+      }
+      if ('error' in result) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: result.error });
+      }
 
       await ctx.db.insert(customerLogs).values({
         siteId: null,
@@ -449,14 +934,15 @@ export const packagesRouter = t.router({
         actionLabel: ActionLabels.PackageUpdate,
         targetType: 'package',
         targetId: input.id,
-        targetLabel: input.name ?? current.name,
+        targetLabel: input.name ?? '',
         result: 'success',
         ipAddress: ctx.ipAddress,
         userAgent: ctx.userAgent,
-        metadata: { stepsChanged, previousVersion: current.version },
+        metadata: { stepsChanged: result.stepsChanged, previousVersion: result.previousVersion },
       });
 
-      return { id: input.id, version: stepsChanged ? current.version + 1 : current.version };
+      const nextVersion = result.stepsChanged ? result.previousVersion + 1 : result.previousVersion;
+      return { id: input.id, version: nextVersion };
     }),
 
   archive: authProcedure
@@ -471,6 +957,23 @@ export const packagesRouter = t.router({
         .where(eq(packages.id, input.id))
         .limit(1);
       if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Package not found' });
+
+      // Block if any parent package still references this one as a sub-package.
+      const parentRows = await ctx.db
+        .select({ parentName: packages.name })
+        .from(packageDependencies)
+        .innerJoin(packages, eq(packageDependencies.parentPackageId, packages.id))
+        .where(eq(packageDependencies.childPackageId, input.id));
+      if (parentRows.length > 0) {
+        const names = (parentRows as Array<{ parentName: string }>)
+          .map((r) => `"${r.parentName}"`)
+          .slice(0, 3)
+          .join(', ');
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: `Cannot archive — referenced by ${parentRows.length} parent package${parentRows.length === 1 ? '' : 's'}: ${names}${parentRows.length > 3 ? ', ...' : ''}`,
+        });
+      }
 
       await ctx.db
         .update(packages)
@@ -534,6 +1037,25 @@ export const packagesRouter = t.router({
         });
       }
 
+      // Same rule as archive: block if any parent still references this one.
+      // Without this, the ON DELETE RESTRICT on package_dependencies would
+      // reject the delete with an unfriendly pg error.
+      const parentDependents = await ctx.db
+        .select({ parentName: packages.name })
+        .from(packageDependencies)
+        .innerJoin(packages, eq(packageDependencies.parentPackageId, packages.id))
+        .where(eq(packageDependencies.childPackageId, input.id));
+      if (parentDependents.length > 0) {
+        const names = (parentDependents as Array<{ parentName: string }>)
+          .map((r) => `"${r.parentName}"`)
+          .slice(0, 3)
+          .join(', ');
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: `Cannot delete — referenced by ${parentDependents.length} parent package${parentDependents.length === 1 ? '' : 's'}: ${names}${parentDependents.length > 3 ? ', ...' : ''}`,
+        });
+      }
+
       await ctx.db.delete(packages).where(eq(packages.id, input.id));
 
       await ctx.db.insert(customerLogs).values({
@@ -568,21 +1090,44 @@ export const packagesRouter = t.router({
         .limit(1);
       if (!source) throw new TRPCError({ code: 'NOT_FOUND', message: 'Package not found' });
 
-      const inserted = await ctx.db
-        .insert(packages)
-        .values({
-          name: `${source.name} (copy)`,
-          description: source.description,
-          status: 'draft',
-          version: 1,
-          steps: source.steps,
-          prompts: source.prompts,
-          outcomeSteps: source.outcomeSteps,
-          failureActions: source.failureActions,
-          authorUserId: ctx.user.id,
-        })
-        .returning({ id: packages.id });
-      const row = inserted[0]!;
+      const row = await ctx.db.transaction(async (tx: any) => {
+        const inserted = await tx
+          .insert(packages)
+          .values({
+            name: `${source.name} (copy)`,
+            description: source.description,
+            status: 'draft',
+            version: 1,
+            steps: source.steps,
+            prompts: source.prompts,
+            outcomeSteps: source.outcomeSteps,
+            failureActions: source.failureActions,
+            exposedOutputs: source.exposedOutputs,
+            authorUserId: ctx.user.id,
+          })
+          .returning({ id: packages.id });
+        const created = inserted[0]!;
+
+        // Duplicated packages inherit sub-package references. Populate the
+        // reverse index so cycle checks and archive blocks see them.
+        const outcomeSteps = source.outcomeSteps as z.infer<typeof outcomeStepsSchema>;
+        const allSteps = [
+          ...(source.steps as ParsedStep[]),
+          ...outcomeSteps.onSuccess,
+          ...outcomeSteps.onFailure,
+        ];
+        const refs = collectSubpackageRefs(allSteps);
+        if (refs.length > 0) {
+          await tx.insert(packageDependencies).values(
+            refs.map((r) => ({
+              parentPackageId: created.id,
+              childPackageId: r.childPackageId,
+              stepPosition: r.stepPosition,
+            })),
+          );
+        }
+        return created;
+      });
 
       await ctx.db.insert(customerLogs).values({
         siteId: null,

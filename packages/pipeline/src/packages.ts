@@ -1,6 +1,6 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Redis } from "ioredis";
-import { packageRuns } from "@mspbyte/drizzle";
+import { packageRuns, packages as packagesTable } from "@mspbyte/drizzle";
 import {
   assertBullMqName,
   orgQueueName,
@@ -18,6 +18,95 @@ export type PackageJobData = {
   orgId: string;
   packageRunId: string;
 };
+
+// Frozen shape of a sub-package embedded inside a parent snapshot. Mirrors
+// the parent's snapshot shape recursively so the worker can descend without
+// re-querying the DB.
+export type EmbeddedPackageSnapshot = {
+  id: string;
+  name: string;
+  version: number;
+  steps: unknown[];
+  prompts: unknown[];
+  outcomeSteps: { onSuccess: unknown[]; onFailure: unknown[] };
+  failureActions: unknown[];
+  exposedOutputs: unknown[];
+  children: Record<string, EmbeddedPackageSnapshot>;
+};
+
+// Transitively resolves every sub-package step referenced by `rootSteps` (and
+// their descendants) into a keyed map { childPackageId -> embedded snapshot }.
+// Dispatch-time freeze: a later edit to the child cannot change what the run
+// executes. Guarded by a depth cap so a stale row can't spin forever.
+export async function buildEmbeddedChildren(
+  db: Db,
+  rootSteps: unknown[],
+  outcomeSteps?: { onSuccess?: unknown[]; onFailure?: unknown[] },
+  depthBudget: number = 6,
+): Promise<Record<string, EmbeddedPackageSnapshot>> {
+  const collectRefs = (arr: unknown[]): string[] => {
+    const ids: string[] = [];
+    for (const raw of arr) {
+      if (raw && typeof raw === 'object' && (raw as { kind?: string }).kind === 'subpackage') {
+        const pid = (raw as { packageId?: string }).packageId;
+        if (typeof pid === 'string') ids.push(pid);
+      }
+    }
+    return ids;
+  };
+
+  const out: Record<string, EmbeddedPackageSnapshot> = {};
+  const queue: Array<{ ids: string[]; depth: number }> = [
+    {
+      ids: [
+        ...collectRefs(rootSteps),
+        ...collectRefs(outcomeSteps?.onSuccess ?? []),
+        ...collectRefs(outcomeSteps?.onFailure ?? []),
+      ],
+      depth: 1,
+    },
+  ];
+
+  while (queue.length > 0) {
+    const { ids, depth } = queue.shift()!;
+    if (depth > depthBudget) break;
+    const unseen = ids.filter((id) => !(id in out));
+    if (unseen.length === 0) continue;
+    const rows = await db
+      .select()
+      .from(packagesTable)
+      .where(inArray(packagesTable.id, unseen));
+    for (const row of rows as Array<{
+      id: string;
+      name: string;
+      version: number;
+      steps: unknown[];
+      prompts: unknown[];
+      outcomeSteps: { onSuccess: unknown[]; onFailure: unknown[] } | null;
+      failureActions: unknown[];
+      exposedOutputs: unknown[];
+    }>) {
+      out[row.id] = {
+        id: row.id,
+        name: row.name,
+        version: row.version,
+        steps: row.steps ?? [],
+        prompts: row.prompts ?? [],
+        outcomeSteps: row.outcomeSteps ?? { onSuccess: [], onFailure: [] },
+        failureActions: row.failureActions ?? [],
+        exposedOutputs: row.exposedOutputs ?? [],
+        children: {}, // populated by the flat map at the top level; kept for shape parity
+      };
+      const nextRefs = [
+        ...collectRefs(row.steps ?? []),
+        ...collectRefs(row.outcomeSteps?.onSuccess ?? []),
+        ...collectRefs(row.outcomeSteps?.onFailure ?? []),
+      ];
+      if (nextRefs.length > 0) queue.push({ ids: nextRefs, depth: depth + 1 });
+    }
+  }
+  return out;
+}
 
 export type CreatePendingPackageRunParams = {
   packageId: string;

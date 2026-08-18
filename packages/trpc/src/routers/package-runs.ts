@@ -12,7 +12,7 @@ import {
 } from '@mspbyte/drizzle';
 import { TRPCError } from '@trpc/server';
 import { generatePassword, getCapability } from '@mspbyte/capabilities';
-import { createPendingPackageRun } from '@mspbyte/pipeline';
+import { buildEmbeddedChildren, createPendingPackageRun } from '@mspbyte/pipeline';
 import { Encryption } from '@mspbyte/encryption';
 import { ActionLabels } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
@@ -228,6 +228,11 @@ export const packageRunsRouter = t.router({
         })),
         capturedAt: new Date().toISOString(),
       };
+      const children = await buildEmbeddedChildren(
+        ctx.db,
+        (pkg.steps as unknown[]) ?? [],
+        (pkg.outcomeSteps as { onSuccess?: unknown[]; onFailure?: unknown[] } | null) ?? undefined,
+      );
       const packageSnapshot = {
         id: pkg.id,
         name: pkg.name,
@@ -236,6 +241,8 @@ export const packageRunsRouter = t.router({
         prompts: pkg.prompts ?? [],
         outcomeSteps: pkg.outcomeSteps ?? { onSuccess: [], onFailure: [] },
         failureActions: pkg.failureActions ?? [],
+        exposedOutputs: pkg.exposedOutputs ?? [],
+        children,
         skippedStepIndexes: input.runInputState.skippedStepIndexes,
         runInputState: input.runInputState,
         scheduledBy: ctx.user.name || ctx.user.email || ctx.user.id,
@@ -477,6 +484,32 @@ export const packageRunsRouter = t.router({
         .limit(input.limit);
     }),
 
+  // Direct children of a run — used by the run detail view to render an
+  // "expand into sub-run" link for each sub-package step (which carries its
+  // parent position in triggerRef).
+  listChildren: authProcedure
+    .input(z.object({ parentRunId: z.uuid() }))
+    .query(async ({ ctx, input }) => {
+      if (!ctx.can('Packages.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Read required' });
+      }
+      return ctx.db
+        .select({
+          id: packageRuns.id,
+          packageId: packageRuns.packageId,
+          packageName: packagesTable.name,
+          status: packageRuns.status,
+          triggerRef: packageRuns.triggerRef,
+          startedAt: packageRuns.startedAt,
+          finishedAt: packageRuns.finishedAt,
+          executionAttempt: packageRuns.executionAttempt,
+        })
+        .from(packageRuns)
+        .leftJoin(packagesTable, eq(packageRuns.packageId, packagesTable.id))
+        .where(eq(packageRuns.parentRunId, input.parentRunId))
+        .orderBy(desc(packageRuns.createdAt));
+    }),
+
   get: authProcedure.input(z.object({ id: z.uuid() })).query(async ({ ctx, input }) => {
     if (!ctx.can('Packages.Read')) {
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Read required' });
@@ -640,6 +673,11 @@ export const packageRunsRouter = t.router({
         capturedAt: new Date().toISOString()
       };
 
+      const children = await buildEmbeddedChildren(
+        ctx.db,
+        (pkg.steps as unknown[]) ?? [],
+        (pkg.outcomeSteps as { onSuccess?: unknown[]; onFailure?: unknown[] } | null) ?? undefined,
+      );
       const packageSnapshot = {
         id: pkg.id,
         name: pkg.name,
@@ -648,6 +686,8 @@ export const packageRunsRouter = t.router({
         prompts: pkg.prompts ?? [],
         outcomeSteps: pkg.outcomeSteps ?? { onSuccess: [], onFailure: [] },
         failureActions: pkg.failureActions ?? [],
+        exposedOutputs: pkg.exposedOutputs ?? [],
+        children,
         skippedStepIndexes: input.skippedStepIndexes
       };
 
@@ -748,72 +788,125 @@ export const packageRunsRouter = t.router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Run required' });
       }
 
-      const [original] = await ctx.db
+      const [target] = await ctx.db
         .select()
         .from(packageRuns)
         .where(eq(packageRuns.id, input.runId))
         .limit(1);
-      if (!original) throw new TRPCError({ code: 'NOT_FOUND', message: 'Run not found' });
+      if (!target) throw new TRPCError({ code: 'NOT_FOUND', message: 'Run not found' });
 
       const terminalStatuses = new Set(['completed', 'failed', 'halted', 'partial']);
-      if (!terminalStatuses.has(original.status)) {
+      if (!terminalStatuses.has(target.status)) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: `Cannot retry a run in status ${original.status}`
+          message: `Cannot retry a run in status ${target.status}`
         });
       }
-      // Retry-from-step-N > 0 needs sensitive fields on prior steps to still be
-      // decryptable. Refuse rather than silently fail deep in the worker.
-      if (input.stepPosition > 0 && original.sensitiveOutputsPurgedAt) {
+
+      const targetSnapshot = target.packageSnapshot as {
+        steps: Array<{
+          capabilityId: string;
+          inputBindings?: Record<string, { kind: string; promptKey?: string }>;
+        }>;
+      };
+      if (input.stepPosition >= targetSnapshot.steps.length) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Step position out of range' });
+      }
+
+      // Cascading leaf-replay: walk up the parentRunId chain to the root run.
+      // At each level we collect the parent-step position that spawned this
+      // sub-run (from triggerRef.parentPosition). The resulting retryPath
+      // starts at the root and ends at the leaf position the user picked.
+      const chain: Array<{ run: typeof target; parentPosition: number | null }> = [
+        { run: target, parentPosition: null },
+      ];
+      let cursor = target;
+      const MAX_WALK = 8;
+      let walked = 0;
+      while (cursor.parentRunId && walked < MAX_WALK) {
+        const [parent] = await ctx.db
+          .select()
+          .from(packageRuns)
+          .where(eq(packageRuns.id, cursor.parentRunId))
+          .limit(1);
+        if (!parent) break;
+        const trigger = (cursor.triggerRef ?? {}) as { parentPosition?: number };
+        chain.push({
+          run: parent,
+          parentPosition: typeof trigger.parentPosition === 'number' ? trigger.parentPosition : null,
+        });
+        cursor = parent;
+        walked++;
+      }
+      // chain[0] = leaf (target), chain[last] = root. Reverse to walk root→leaf.
+      chain.reverse();
+      const root = chain[0]!.run;
+
+      // Build retryPath: root's own position (chain[1].parentPosition), then
+      // each intermediate parentPosition, ending with the leaf's stepPosition.
+      const retryPath: number[] = [];
+      for (let i = 1; i < chain.length; i++) {
+        const pos = chain[i]!.parentPosition;
+        if (pos === null || pos === undefined) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Could not resolve retry path — parent linkage is incomplete',
+          });
+        }
+        retryPath.push(pos);
+      }
+      retryPath.push(input.stepPosition);
+
+      // Sensitive-outputs purge check applies at the root — the whole cascade
+      // needs to be able to seed prior outputs during replay.
+      if ((retryPath[0]! > 0 || retryPath.length > 1) && root.sensitiveOutputsPurgedAt) {
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'Original run outputs have been purged and cannot be replayed'
         });
       }
 
-      const snapshot = original.packageSnapshot as {
+      const rootSnapshot = root.packageSnapshot as {
         steps: Array<{
           capabilityId: string;
           inputBindings?: Record<string, { kind: string; promptKey?: string }>;
         }>;
       };
-      if (input.stepPosition >= snapshot.steps.length) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Step position out of range' });
-      }
+      const rootStartStepIndex = retryPath[0]!;
 
-      const originalRuntimeInputs = (original.runtimeInputs ?? {}) as Record<string, unknown>;
+      const originalRuntimeInputs = (root.runtimeInputs ?? {}) as Record<string, unknown>;
       const materializedOverrides = materializeGeneratedRuntimeInputs(
         input.overrideRuntimeInputs,
-        snapshot.steps as Array<{ capabilityId: string; inputBindings?: Record<string, unknown> }>
+        rootSnapshot.steps as Array<{ capabilityId: string; inputBindings?: Record<string, unknown> }>
       );
-      // Runtime inputs are already encrypted-at-rest for sensitive fields;
-      // encrypt any newly overridden sensitive ones the same way.
       const encryptedOverrides = encryptRuntimeInputs(
         materializedOverrides,
-        snapshot.steps,
+        rootSnapshot.steps,
         ctx.encryptionKey ?? ''
       );
       const mergedRuntimeInputs = { ...originalRuntimeInputs, ...encryptedOverrides };
 
-      const executionAttempt = original.executionAttempt + 1;
-      // A retry is a new execution attempt of this same job, never a new
-      // package_run. Keep earlier successful steps as the run context, clear
-      // the selected step and everything after it, then let the poller queue
-      // this record with a unique attempt-specific BullMQ id. The transaction
-      // prevents a worker from seeing a pending run before its stale steps
-      // have been removed.
+      const executionAttempt = root.executionAttempt + 1;
+      // A retry is a new execution attempt of the ROOT run — even for a leaf
+      // deep in a sub-package. The worker cascades the retryPath through
+      // sub-package children, mutating each prior child run in place at the
+      // matching position (see executeSubpackageStep). Only the root row's
+      // stale steps are cleared here; nested cleanup happens inline in the
+      // worker so we don't need to know the entire descendant graph upfront.
       await ctx.db.transaction(async (tx) => {
         const [updated] = await tx
           .update(packageRuns)
           .set({
             status: 'pending',
-            startStepIndex: input.stepPosition,
+            startStepIndex: rootStartStepIndex,
             runtimeInputs: mergedRuntimeInputs,
             triggerRef: {
-              ...(typeof original.triggerRef === 'object' && original.triggerRef !== null
-                ? original.triggerRef
+              ...(typeof root.triggerRef === 'object' && root.triggerRef !== null
+                ? root.triggerRef
                 : {}),
+              retryPath,
               retriedFromStep: input.stepPosition,
+              retriedFromRunId: input.runId,
               retriedBy: ctx.user.id,
               retriedAt: new Date().toISOString()
             },
@@ -822,12 +915,10 @@ export const packageRunsRouter = t.router({
             startedAt: null,
             finishedAt: null,
             billingTotal: '0',
-            // This is a new execution window. For step > 0 we already refused
-            // a retry whose retained sensitive context was purged.
             outputsExpiresAt: new Date(Date.now() + 48 * 60 * 60 * 1_000).toISOString(),
             sensitiveOutputsPurgedAt: null
           })
-          .where(and(eq(packageRuns.id, original.id), eq(packageRuns.status, original.status)))
+          .where(and(eq(packageRuns.id, root.id), eq(packageRuns.status, root.status)))
           .returning({ id: packageRuns.id });
         if (!updated) {
           throw new TRPCError({
@@ -840,29 +931,34 @@ export const packageRunsRouter = t.router({
           .delete(packageRunSteps)
           .where(
             and(
-              eq(packageRunSteps.packageRunId, original.id),
-              gte(packageRunSteps.position, input.stepPosition)
+              eq(packageRunSteps.packageRunId, root.id),
+              gte(packageRunSteps.position, rootStartStepIndex)
             )
           );
 
         await tx.insert(customerLogs).values({
-          siteId: original.siteId,
+          siteId: root.siteId,
           actorType: 'user',
           actorId: ctx.user.id,
           actorLabel: ctx.user.name || ctx.user.email || ctx.user.id,
           action: 'update',
           actionLabel: ActionLabels.PackageRunStart,
           targetType: 'package_run',
-          targetId: original.id,
+          targetId: root.id,
           targetLabel: 'retry',
           result: 'success',
           ipAddress: ctx.ipAddress,
           userAgent: ctx.userAgent,
-          metadata: { retryFromStep: input.stepPosition, executionAttempt }
+          metadata: {
+            retryFromStep: input.stepPosition,
+            retryPath,
+            retriedFromRunId: input.runId,
+            executionAttempt,
+          }
         });
       });
 
-      return { packageRunId: original.id, executionAttempt };
+      return { packageRunId: root.id, executionAttempt };
     }),
 
   revealOutput: authProcedure

@@ -14,12 +14,34 @@
     | { kind: 'siteFact'; key: string; required: boolean }
     | { kind: 'template'; template: string };
 
-  export type Step = {
+  export type CapabilityStep = {
+    kind: 'capability';
     capabilityId: string;
     label?: string;
     optional?: boolean;
     inputBindings: Record<string, Binding>;
   };
+
+  export type SubpackageStep = {
+    kind: 'subpackage';
+    // Reference to a saved active package by id. Its prompts become this
+    // step's configurable inputs; its exposedOutputs are wire-source options
+    // for downstream steps in the parent package.
+    packageId: string;
+    // Synthetic display id (`subpackage:<packageId>`) — carried in the UI
+    // shape so existing rendering paths that key on `step.capabilityId` keep
+    // working. Stripped at save time by the backend Zod schema.
+    capabilityId: string;
+    label?: string;
+    optional?: boolean;
+    inputBindings: Record<string, Binding>;
+  };
+
+  export type Step = CapabilityStep | SubpackageStep;
+
+  export function subpackageCapabilityId(packageId: string): string {
+    return `subpackage:${packageId}`;
+  }
 
   export type PackagePrompt = {
     id: string;
@@ -28,6 +50,14 @@
     required: boolean;
     section?: string;
     order: number;
+  };
+
+  export type ExposedOutput = {
+    name: string;
+    sourceStepPosition: number;
+    sourcePath: string;
+    outputType?: string;
+    description?: string;
   };
 
   export type OutcomeSteps = {
@@ -42,12 +72,32 @@
     steps: Step[];
     prompts: PackagePrompt[];
     outcomeSteps: OutcomeSteps;
+    exposedOutputs: ExposedOutput[];
     // Empty arrays => global. Non-empty restricts which sites, groups, or
     // tenant links this package can run against.
     allowedSites: string[];
     allowedSiteGroups: string[];
     allowedIntegrationLinks: string[];
   };
+
+  // Helpers usable by nested editor components.
+  export function isSubpackageStep(step: Step): step is SubpackageStep {
+    return step.kind === 'subpackage';
+  }
+  export function isCapabilityStep(step: Step): step is CapabilityStep {
+    return step.kind !== 'subpackage';
+  }
+  export function stepDisplayLabel(
+    step: Step,
+    lookups: {
+      capName?: string | undefined;
+      subpackageName?: string | undefined;
+    },
+  ): string {
+    if (step.label) return step.label;
+    if (step.kind === 'subpackage') return lookups.subpackageName ?? 'Sub-package';
+    return lookups.capName ?? step.capabilityId;
+  }
 </script>
 
 <script lang="ts">
@@ -67,6 +117,7 @@
   import MultiSelect from '$lib/components/multi-select.svelte';
   import BindingVariableInserter from '$lib/components/binding-variable-inserter.svelte';
   import CapabilityPicker from './_capability-picker.svelte';
+  import SubpackagePicker from './_subpackage-picker.svelte';
   import PackageDetails from './_package-details.svelte';
   import {
     inputTypeLabel,
@@ -111,11 +162,14 @@
 
   type Props = {
     initial: PackageDraft;
+    // Present when editing an existing package. Used to exclude self from the
+    // sub-package picker (a package cannot reference itself).
+    currentPackageId?: string;
     saving: boolean;
     onSave: (draft: PackageDraft) => void;
   };
 
-  let { initial, saving, onSave }: Props = $props();
+  let { initial, currentPackageId, saving, onSave }: Props = $props();
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
 
@@ -124,6 +178,53 @@
     queryFn: () => trpc.packages.capabilities.query(),
     staleTime: 5 * 60_000,
   }));
+
+  // Available packages that can be referenced as sub-packages. The list mutation
+  // and the sub-package step editor both consume this; the query stays live so
+  // renames / prompts changes surface without a page reload.
+  const subpackagesQuery = createQuery(() => ({
+    queryKey: ['packages.list.forSubpackageRef'],
+    queryFn: () => trpc.packages.list.query({}),
+    staleTime: 30_000,
+  }));
+  const subpackageIndex = $derived(
+    new Map((subpackagesQuery.data ?? []).map((p) => [p.id, p]))
+  );
+
+  // `packages.list` returns steps + prompts but not exposedOutputs. Every
+  // referenced sub-package gets fetched lazily via `packages.get` so downstream
+  // priorOutput pickers know what child outputs exist. Cached in a $state map;
+  // an $effect drives fetches for any newly-referenced child.
+  let subpackageDetails = $state(new Map<string, { exposedOutputs: ExposedOutput[]; prompts: PackagePrompt[] }>());
+  $effect(() => {
+    const ids = new Set<string>();
+    const collect = (steps: Step[]) => {
+      for (const s of steps) if (s.kind === 'subpackage') ids.add(s.packageId);
+    };
+    collect(draft.steps);
+    collect(draft.outcomeSteps.onSuccess);
+    collect(draft.outcomeSteps.onFailure);
+    for (const id of ids) {
+      if (subpackageDetails.has(id)) continue;
+      trpc.packages.get
+        .query({ id })
+        .then((pkg) => {
+          const next = new Map(subpackageDetails);
+          next.set(id, {
+            exposedOutputs: ((pkg as { exposedOutputs?: unknown }).exposedOutputs as ExposedOutput[]) ?? [],
+            prompts: (pkg.prompts as PackagePrompt[]) ?? [],
+          });
+          subpackageDetails = next;
+        })
+        .catch(() => {
+          // Silently ignore — the child may have been archived. The editor
+          // will surface the missing-child state; save will fail-safe.
+        });
+    }
+  });
+  function subpackageExposedOutputsFor(packageId: string): ExposedOutput[] {
+    return subpackageDetails.get(packageId)?.exposedOutputs ?? [];
+  }
 
   const generatorsQuery = createQuery(() => ({
     queryKey: ['packages.metadata.generators'],
@@ -199,6 +300,7 @@
     steps: structuredClone(initial.steps),
     prompts: structuredClone(initial.prompts ?? []),
     outcomeSteps: structuredClone(initial.outcomeSteps ?? { onSuccess: [], onFailure: [] }),
+    exposedOutputs: structuredClone(initial.exposedOutputs ?? []),
     allowedSites: [...(initial.allowedSites ?? [])],
     allowedSiteGroups: [...(initial.allowedSiteGroups ?? [])],
     allowedIntegrationLinks: [...(initial.allowedIntegrationLinks ?? [])],
@@ -208,9 +310,61 @@
   let selected = $state<Selection>(initial.steps.length > 0 ? { kind: 'step', index: 0 } : { kind: 'details' });
   let capabilityPickerOpen = $state(false);
   let capabilityPickerTarget = $state<'main' | 'onSuccess' | 'onFailure'>('main');
+  let subpackagePickerOpen = $state(false);
   let activeTemplateRef = $state<HTMLTextAreaElement | null>(null);
 
-  const capIndex = $derived(new Map((capabilitiesQuery.data ?? []).map((c) => [c.id, c])));
+  // Real capability registry plus a synthetic entry per referenced sub-package
+  // so the existing rendering paths (which look up `capIndex.get(step.capabilityId)`
+  // for a `name`, `outputMeta`, etc.) work uniformly for both kinds. Sub-package
+  // synthetic entries project child prompts as inputMeta and — where the list
+  // endpoint hasn't returned exposedOutputs — leave outputMeta empty (the
+  // dedicated sub-package inspector renders the wire choices directly).
+  const capIndex = $derived.by(() => {
+    // `any` here because the map mixes the tRPC-inferred capability shape with
+    // hand-rolled sub-package placeholders; every consumer only reads a subset
+    // (name, description, category, inputMeta, outputMeta).
+    const map = new Map<string, any>();
+    for (const cap of capabilitiesQuery.data ?? []) {
+      map.set(cap.id, cap);
+    }
+    const referencedPackageIds = new Set<string>();
+    const collectRefs = (steps: Step[]) => {
+      for (const step of steps) {
+        if (step.kind === 'subpackage') referencedPackageIds.add(step.packageId);
+      }
+    };
+    collectRefs(draft.steps);
+    collectRefs(draft.outcomeSteps.onSuccess);
+    collectRefs(draft.outcomeSteps.onFailure);
+    for (const pid of referencedPackageIds) {
+      const pkg = subpackageIndex.get(pid);
+      if (!pkg) continue;
+      const inputMeta: Record<string, {
+        allowedBindings: readonly string[];
+        required?: boolean;
+        label?: string;
+        description?: string;
+      }> = {};
+      for (const prompt of (pkg.prompts as PackagePrompt[]) ?? []) {
+        inputMeta[prompt.id] = {
+          allowedBindings: ['literal', 'runtime', 'priorOutput', 'generated', 'siteFact'],
+          required: prompt.required,
+          label: prompt.label,
+          description: prompt.description,
+        };
+      }
+      map.set(subpackageCapabilityId(pid), {
+        id: subpackageCapabilityId(pid),
+        vendor: 'sub-package',
+        name: pkg.name,
+        description: pkg.description ?? undefined,
+        category: 'sub-package',
+        inputMeta,
+        outputMeta: {},
+      });
+    }
+    return map;
+  });
 
 
   function allowedSourcesFor(meta: {
@@ -385,11 +539,51 @@
     const cap = capIndex.get(capabilityId);
     if (!cap) return null;
     const inputBindings: Record<string, Binding> = {};
-    for (const [name, meta] of Object.entries(cap.inputMeta)) {
+    for (const [name, meta] of Object.entries(cap.inputMeta as Record<string, {
+      allowedBindings: readonly string[];
+      required?: boolean;
+      entityType?: string;
+      typeHint?: string;
+      label?: string;
+      description?: string;
+    }>)) {
       if (!isRequiredInput(meta)) continue;
       inputBindings[name] = runtimeBindingForLane(defaultForInput(name, meta), name, meta, lane);
     }
-    return { capabilityId: cap.id, label: cap.name, optional: false, inputBindings };
+    return { kind: 'capability', capabilityId: cap.id, label: cap.name, optional: false, inputBindings };
+  }
+
+  // Builds a sub-package step for a picked child package. Every required
+  // prompt on the child becomes a runtime-bound input on this step by default;
+  // the author flips sources on individual prompts in the sub-package inspector.
+  function buildSubpackageStep(packageId: string, lane: 'main' | 'onSuccess' | 'onFailure' = 'main'): SubpackageStep | null {
+    if (!packageId) return null;
+    const pkg = subpackageIndex.get(packageId);
+    if (!pkg) return null;
+    const prompts = (pkg.prompts as PackagePrompt[]) ?? [];
+    const inputBindings: Record<string, Binding> = {};
+    for (const prompt of prompts) {
+      if (!prompt.required) continue;
+      const meta = { allowedBindings: ['literal', 'runtime', 'priorOutput'] as const, required: true, label: prompt.label, description: prompt.description };
+      inputBindings[prompt.id] = runtimeBindingForLane(defaultForInput(prompt.id, meta), prompt.id, meta, lane);
+    }
+    return {
+      kind: 'subpackage',
+      packageId,
+      capabilityId: subpackageCapabilityId(packageId),
+      label: pkg.name,
+      optional: false,
+      inputBindings,
+    };
+  }
+
+  function addSubpackageStep(packageId: string) {
+    const step = buildSubpackageStep(packageId, 'main');
+    if (!step) return;
+    const nextIndex = draft.steps.length;
+    draft.steps = [...draft.steps, step];
+    selected = { kind: 'step', index: nextIndex };
+    subpackagePickerOpen = false;
   }
 
   function addStep(capabilityId: string) {
@@ -594,9 +788,18 @@
     const source = reactionWireSteps().find(
       (candidate) => candidate.lane === sourceLane && candidate.position === binding.stepPosition,
     );
-    const cap = source ? capIndex.get(source.step.capabilityId) : undefined;
+    if (!source) return [];
+    // Sub-package sources publish their exposedOutputs; capability outputMeta
+    // is empty in the synthetic index entry.
+    if (source.step.kind === 'subpackage') {
+      return subpackageExposedOutputsFor(source.step.packageId).map((eo) => ({
+        value: eo.name,
+        label: eo.name,
+      }));
+    }
+    const cap = capIndex.get(source.step.capabilityId);
     if (!cap) return [];
-    return Object.entries(cap.outputMeta)
+    return Object.entries(cap.outputMeta as Record<string, { outputType?: string; label?: string }>)
       .filter(([, meta]) => {
         if (!inputMeta.priorOutputCompat || inputMeta.priorOutputCompat.length === 0) return true;
         return !!meta.outputType && inputMeta.priorOutputCompat.includes(meta.outputType);
@@ -808,6 +1011,20 @@
       ...draft.outcomeSteps.onFailure,
     ];
     for (const step of allSteps) {
+      // Sub-package steps: child metadata may not be loaded yet — treat as
+      // saveable and let the backend cycle/depth/prompt checks reject if the
+      // referenced package became invalid.
+      if (step.kind === 'subpackage') {
+        if (!step.packageId) return false;
+        for (const [, binding] of Object.entries(step.inputBindings)) {
+          if (binding.kind === 'runtime' && !binding.promptKey.trim()) return false;
+          if (binding.kind === 'priorOutput' && !binding.path.trim()) return false;
+          if (binding.kind === 'generated' && !binding.generator.trim()) return false;
+          if (binding.kind === 'siteFact' && !binding.key.trim()) return false;
+          if (binding.kind === 'template' && !binding.template.trim()) return false;
+        }
+        continue;
+      }
       const cap = capIndex.get(step.capabilityId);
       if (!cap) return false;
       for (const [name, binding] of Object.entries(step.inputBindings)) {
@@ -1076,8 +1293,8 @@
           </ol>
         {/if}
 
-        <!-- Add step control -->
-        <div class="border-t bg-background/60 p-3">
+        <!-- Add step controls: capability and sub-package -->
+        <div class="space-y-2 border-t bg-background/60 p-3">
           <Button
             variant="outline"
             class="h-auto w-full items-center justify-between gap-3 overflow-hidden px-3 py-3 text-left"
@@ -1094,6 +1311,25 @@
             >
               <SlidersHorizontal class="size-3" />
               {capabilitiesQuery.data?.length ?? 0}
+            </span>
+          </Button>
+          <Button
+            variant="outline"
+            class="h-auto w-full items-center justify-between gap-3 overflow-hidden px-3 py-3 text-left"
+            onclick={() => (subpackagePickerOpen = true)}
+          >
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-sm font-medium text-foreground">
+                Add sub-package
+              </span>
+              <span class="block text-[11px] text-muted-foreground">
+                Embed an existing package
+              </span>
+            </span>
+            <span
+              class="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[10px] font-mono text-muted-foreground"
+            >
+              {(subpackagesQuery.data ?? []).filter((p) => p.status === 'active').length}
             </span>
           </Button>
         </div>
@@ -1260,6 +1496,21 @@
     <!-- Inspector -->
     <section class="flex min-h-0 flex-col overflow-y-auto">
       {#if selected.kind === 'details'}
+        {@const subpackageOutputsByPackageId = new Map(
+          [...subpackageDetails.entries()].map(([id, detail]) => [
+            id,
+            (detail.exposedOutputs ?? []).map((eo) => ({ name: eo.name })),
+          ]),
+        )}
+        {@const capabilityOutputsByCapabilityId = new Map(
+          (capabilitiesQuery.data ?? []).map((cap) => [
+            cap.id,
+            Object.entries(cap.outputMeta as Record<string, { label?: string }>).map(([key, m]) => ({
+              key,
+              label: m.label,
+            })),
+          ]),
+        )}
         <PackageDetails
           bind:draft
           {siteOptions}
@@ -1267,6 +1518,8 @@
           {tenantLinkOptions}
           {normalPublishedPrompts}
           {failurePublishedPrompts}
+          {subpackageOutputsByPackageId}
+          {capabilityOutputsByCapabilityId}
           onUpdatePrompt={updatePrompt}
           onSetPromptRequired={setPromptRequired}
         />
@@ -1280,11 +1533,11 @@
           const bGroup = inputGroupFor(cap, b);
           return aGroup.order - bGroup.order || aGroup.inputOrder - bGroup.inputOrder || a.localeCompare(b);
         })}
-        {@const availableOptional = Object.entries(cap.inputMeta)
+        {@const availableOptional = Object.entries(cap.inputMeta as Record<string, { required?: boolean; label?: string }>)
           .filter(([name, meta]) => !isRequiredInput(meta) && !(name in step.inputBindings))
           .map(([name, meta]) => ({
             value: name,
-            label: fieldLabel(name, (meta as { label?: string }).label),
+            label: fieldLabel(name, meta.label),
           }))}
         {@const readers = workflowReaders(lane, stepIndex)}
         <!-- Step header -->
@@ -1675,10 +1928,14 @@
                     {:else if binding?.kind === 'priorOutput'}
                       {#if lane === 'main'}
                       {@const upstreamSteps = draft.steps.slice(0, stepIndex)}
-                      {@const upstreamCap = capIndex.get(upstreamSteps[binding.stepPosition]?.capabilityId ?? '')}
+                      {@const upstreamStep = upstreamSteps[binding.stepPosition]}
+                      {@const upstreamIsSub = upstreamStep?.kind === 'subpackage'}
+                      {@const upstreamCap = capIndex.get(upstreamStep?.capabilityId ?? '')}
                       {@const stepOpts = upstreamSteps.map((s, i) => ({ value: String(i), label: `Step ${String(i + 1).padStart(2, '0')}: ${s.label ?? capIndex.get(s.capabilityId)?.name ?? s.capabilityId}` }))}
                       {@const compatTypes = (meta as { priorOutputCompat?: string[] }).priorOutputCompat}
-                      {@const outputOpts = upstreamCap ? Object.entries(upstreamCap.outputMeta).filter(([, m]) => { if (!compatTypes || compatTypes.length === 0) return true; const t = (m as { outputType?: string }).outputType; return t ? compatTypes.includes(t) : false; }).map(([k, m]) => ({ value: k, label: fieldLabel(k, (m as { label?: string }).label) })) : []}
+                      {@const outputOpts = upstreamIsSub
+                        ? subpackageExposedOutputsFor((upstreamStep as SubpackageStep).packageId).map((eo) => ({ value: eo.name, label: eo.name }))
+                        : upstreamCap ? Object.entries(upstreamCap.outputMeta as Record<string, { outputType?: string; label?: string }>).filter(([, m]) => { if (!compatTypes || compatTypes.length === 0) return true; const t = m.outputType; return t ? compatTypes.includes(t) : false; }).map(([k, m]) => ({ value: k, label: fieldLabel(k, m.label) })) : []}
                       {#if upstreamSteps.length === 0}
                         <div class="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500">
                           No earlier steps to wire from. Add one before this step or pick a different source.
@@ -1875,9 +2132,9 @@
           const bGroup = inputGroupFor(reactionCap, b);
           return aGroup.order - bGroup.order || aGroup.inputOrder - bGroup.inputOrder || a.localeCompare(b);
         })}
-        {@const availableOptionalReaction = Object.entries(reactionCap.inputMeta)
+        {@const availableOptionalReaction = Object.entries(reactionCap.inputMeta as Record<string, { required?: boolean; label?: string }>)
           .filter(([name, meta]) => !isRequiredInput(meta) && !(name in reaction.inputBindings))
-          .map(([name, meta]) => ({ value: name, label: fieldLabel(name, (meta as { label?: string }).label) }))}
+          .map(([name, meta]) => ({ value: name, label: fieldLabel(name, meta.label) }))}
 
         <!-- Reaction header -->
         <div class="border-b bg-muted/20 px-6 py-4">
@@ -2142,4 +2399,11 @@
   target={capabilityPickerTarget}
   capabilities={capabilitiesQuery.data ?? []}
   onAdd={addStep}
+/>
+
+<SubpackagePicker
+  bind:open={subpackagePickerOpen}
+  packages={subpackagesQuery.data ?? []}
+  excludeIds={currentPackageId ? [currentPackageId] : []}
+  onAdd={addSubpackageStep}
 />

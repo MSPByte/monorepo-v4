@@ -2,8 +2,28 @@
   import { Input } from '$lib/components/ui/input';
   import { Textarea } from '$lib/components/ui/textarea';
   import { Checkbox } from '$lib/components/ui/checkbox';
+  import Button from '$lib/components/ui/button/button.svelte';
   import MultiSelect from '$lib/components/multi-select.svelte';
-  import { Info, Sparkles } from '@lucide/svelte';
+  import SingleSelect from '$lib/components/single-select.svelte';
+  import { Info, Sparkles, Plus, Trash2 } from '@lucide/svelte';
+  import type { ExposedOutput, PackageDraft, PackagePrompt, Step } from './_package-builder.svelte';
+
+  type Option = { value: string; label: string; subLabel?: string };
+  type Props = {
+    draft: PackageDraft;
+    siteOptions: Option[];
+    siteGroupOptions: Option[];
+    tenantLinkOptions: Option[];
+    normalPublishedPrompts: PackagePrompt[];
+    failurePublishedPrompts: PackagePrompt[];
+    onUpdatePrompt: (id: string, patch: Partial<PackagePrompt>) => void;
+    onSetPromptRequired: (id: string, required: boolean) => void;
+    // Sub-package output previews: keyed by referenced child packageId.
+    subpackageOutputsByPackageId?: Map<string, Array<{ name: string }>>;
+    // Real-capability outputMeta so exposed-output source pickers can list
+    // available output keys for capability steps.
+    capabilityOutputsByCapabilityId?: Map<string, Array<{ key: string; label?: string }>>;
+  };
 
   let {
     draft = $bindable(),
@@ -14,13 +34,58 @@
     failurePublishedPrompts,
     onUpdatePrompt,
     onSetPromptRequired,
-  } = $props();
+    subpackageOutputsByPackageId = new Map(),
+    capabilityOutputsByCapabilityId = new Map(),
+  }: Props = $props();
 
   const isGlobalScope = $derived(
     draft.allowedSites.length === 0 &&
       draft.allowedSiteGroups.length === 0 &&
       draft.allowedIntegrationLinks.length === 0
   );
+
+  // Options for the "source step" dropdown in the exposed-outputs editor.
+  // Only main-lane steps are exposable — terminal-lane outputs are lane-local.
+  const stepOptions = $derived(
+    (draft.steps as Step[]).map((step, i) => ({
+      value: String(i),
+      label: `Step ${String(i + 1).padStart(2, '0')}: ${step.label ?? (step.kind === 'subpackage' ? 'Sub-package' : step.capabilityId)}`,
+    })),
+  );
+
+  function sourcePathOptionsFor(pos: number): Array<{ value: string; label: string }> {
+    const step = (draft.steps as Step[])[pos];
+    if (!step) return [];
+    if (step.kind === 'subpackage') {
+      return (subpackageOutputsByPackageId.get(step.packageId) ?? []).map((o) => ({
+        value: o.name,
+        label: o.name,
+      }));
+    }
+    return (capabilityOutputsByCapabilityId.get(step.capabilityId) ?? []).map((o) => ({
+      value: o.key,
+      label: o.label ?? o.key,
+    }));
+  }
+
+  function addExposedOutput() {
+    const next: ExposedOutput = {
+      name: '',
+      sourceStepPosition: 0,
+      sourcePath: '',
+    };
+    draft.exposedOutputs = [...(draft.exposedOutputs ?? []), next];
+  }
+
+  function updateExposedOutput(index: number, patch: Partial<ExposedOutput>) {
+    draft.exposedOutputs = (draft.exposedOutputs ?? []).map((eo: ExposedOutput, i: number) =>
+      i === index ? { ...eo, ...patch } : eo,
+    );
+  }
+
+  function removeExposedOutput(index: number) {
+    draft.exposedOutputs = (draft.exposedOutputs ?? []).filter((_: ExposedOutput, i: number) => i !== index);
+  }
 </script>
 
 <div class="mx-auto w-full max-w-2xl space-y-6 p-6">
@@ -204,6 +269,97 @@
       {/if}
     </div>
   {/if}
+
+  <div class="space-y-3 rounded-lg border bg-muted/10 p-4">
+    <div class="flex items-baseline justify-between gap-3">
+      <div>
+        <h3 class="text-sm font-medium">Exposed outputs</h3>
+        <p class="mt-0.5 text-xs text-muted-foreground">
+          Only relevant when another package embeds this one as a sub-package step. Each entry
+          publishes a step output under a stable name that the parent package can wire to.
+        </p>
+      </div>
+      <span class="font-mono text-[11px] text-muted-foreground">
+        {(draft.exposedOutputs ?? []).length}
+      </span>
+    </div>
+    {#if (draft.exposedOutputs ?? []).length === 0}
+      <p class="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+        No outputs exposed. This package can still be embedded, but parent packages won't be able to
+        wire from its step outputs.
+      </p>
+    {:else}
+      <div class="space-y-2">
+        {#each draft.exposedOutputs ?? [] as eo, i (i)}
+          {@const pathOptions = sourcePathOptionsFor(eo.sourceStepPosition)}
+          <div class="space-y-2 rounded-md border bg-background p-3">
+            <div class="flex items-start gap-2">
+              <div class="min-w-0 flex-1 space-y-2">
+                <Input
+                  value={eo.name}
+                  placeholder="Exposed name (e.g. breakglass_user_id)"
+                  aria-label={`Exposed output name ${i + 1}`}
+                  oninput={(event) =>
+                    updateExposedOutput(i, { name: (event.target as HTMLInputElement).value })}
+                  class="h-8 text-sm font-medium"
+                />
+                <div class="grid gap-2 sm:grid-cols-2">
+                  <SingleSelect
+                    options={stepOptions}
+                    selected={String(eo.sourceStepPosition)}
+                    placeholder="Source step…"
+                    disableSort
+                    onchange={(v) =>
+                      updateExposedOutput(i, { sourceStepPosition: Number(v), sourcePath: '' })}
+                  />
+                  {#if pathOptions.length > 0}
+                    <SingleSelect
+                      options={pathOptions}
+                      selected={eo.sourcePath}
+                      placeholder="Output field…"
+                      onchange={(v) => updateExposedOutput(i, { sourcePath: v })}
+                    />
+                  {:else}
+                    <Input
+                      value={eo.sourcePath}
+                      placeholder="output path (e.g. userId or user.id)"
+                      aria-label={`Exposed output path ${i + 1}`}
+                      oninput={(event) =>
+                        updateExposedOutput(i, {
+                          sourcePath: (event.target as HTMLInputElement).value,
+                        })}
+                      class="h-8 text-xs font-mono"
+                    />
+                  {/if}
+                </div>
+                <Input
+                  value={eo.description ?? ''}
+                  placeholder="Optional description for the parent-package author"
+                  aria-label={`Exposed output description ${i + 1}`}
+                  oninput={(event) =>
+                    updateExposedOutput(i, {
+                      description: (event.target as HTMLInputElement).value || undefined,
+                    })}
+                  class="h-8 text-xs"
+                />
+              </div>
+              <button
+                type="button"
+                class="text-muted-foreground transition-colors hover:text-rose-500"
+                onclick={() => removeExposedOutput(i)}
+                aria-label={`Remove exposed output ${i + 1}`}
+              >
+                <Trash2 class="size-3.5" />
+              </button>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+    <Button variant="outline" size="sm" onclick={addExposedOutput}>
+      <Plus class="mr-1 size-3.5" /> Add exposed output
+    </Button>
+  </div>
 
   <div class="rounded-lg border bg-muted/10 p-4">
     <div class="flex items-start gap-3">

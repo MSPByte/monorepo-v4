@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, gte, inArray } from "drizzle-orm";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
 import {
   customerLogs,
@@ -44,12 +44,49 @@ import { purgeExpiredSensitiveOutputs } from "./ttl-cleanup.js";
 
 export const TTL_CLEANUP_JOB_NAME = "ttl-cleanup";
 
-type StepDefinition = {
+// A step is either a capability invocation (existing behavior) or a sub-package
+// reference. Legacy rows without `kind` are treated as `capability` at read time.
+type CapabilityStep = {
+  kind?: 'capability';
   capabilityId: string;
   label?: string;
   inputBindings: Record<string, Binding>;
   onFailure?: StepOnFailure;
   retryAttempts?: number;
+};
+
+type SubpackageStep = {
+  kind: 'subpackage';
+  packageId: string;
+  label?: string;
+  inputBindings: Record<string, Binding>;
+  onFailure?: StepOnFailure;
+  retryAttempts?: number;
+};
+
+type StepDefinition = CapabilityStep | SubpackageStep;
+
+// Sub-package's public output contract as embedded in the parent snapshot.
+type ExposedOutput = {
+  name: string;
+  sourceStepPosition: number;
+  sourcePath: string;
+  outputType?: string;
+  description?: string;
+};
+
+// Frozen shape of a sub-package embedded inside a parent snapshot. Mirrors
+// the top-level `PackageSnapshot` so the worker can descend recursively
+// without touching the packages table again mid-run.
+type EmbeddedPackageSnapshot = {
+  id: string;
+  name: string;
+  version: number;
+  steps: StepDefinition[];
+  prompts?: unknown[];
+  outcomeSteps?: { onSuccess?: StepDefinition[]; onFailure?: StepDefinition[] };
+  failureActions?: FailureAction[];
+  exposedOutputs?: ExposedOutput[];
 };
 
 type PackageSnapshot = {
@@ -59,7 +96,12 @@ type PackageSnapshot = {
   steps: StepDefinition[];
   outcomeSteps?: { onSuccess?: StepDefinition[]; onFailure?: StepDefinition[] };
   failureActions?: FailureAction[];
+  exposedOutputs?: ExposedOutput[];
   skippedStepIndexes?: number[];
+  // Populated by the enqueue path (see pipeline/packages.ts:buildEmbeddedChildren).
+  // Keyed by child package id; contains the frozen definition + its own children
+  // at dispatch time. Sub-package steps look up their execution target here.
+  children?: Record<string, EmbeddedPackageSnapshot>;
 };
 
 export function createPackageWorker(
@@ -112,138 +154,198 @@ export function createPackageWorker(
         return;
       }
 
-      const snapshot = run.packageSnapshot as PackageSnapshot;
-      const runtimeInputs = (run.runtimeInputs ?? {}) as Record<string, unknown>;
+      // Cascading leaf-replay reads its remaining path from triggerRef. The
+      // top-level entry consumes the head (which equals run.startStepIndex) and
+      // threads the tail into sub-package children.
+      const retryPath = extractRetryPath(run.triggerRef);
 
+      const result = await runPackageRun({
+        db,
+        orgId,
+        run,
+        encryptionKey,
+        retryPathTail: retryPath,
+      });
+
+      logger.info("Package run completed", {
+        orgId,
+        packageRunId,
+        status: result.finalStatus,
+      });
+    },
+    {
+      connection: redis as never,
+      concurrency: env.WORKER_CONCURRENCY,
+      lockDuration: env.WORKER_LOCK_DURATION_MS,
+    },
+  ).on("failed", (job, error) => {
+    logger.error("Package job failed", {
+      orgId,
+      jobId: job?.id,
+      error: serializeError(error),
+    });
+  });
+}
+
+function extractRetryPath(triggerRef: unknown): number[] {
+  if (!triggerRef || typeof triggerRef !== 'object') return [];
+  const path = (triggerRef as { retryPath?: unknown }).retryPath;
+  if (!Array.isArray(path)) return [];
+  return path.filter((n): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0);
+}
+
+// Full execution of one package_runs row: main loop + terminal lane +
+// finalization. Reentrant: sub-package steps recurse into this same helper for
+// their child run, threading connector caches through `parentCtxBase` and
+// leaf-retry paths through `retryPathTail`.
+async function runPackageRun(args: {
+  db: any;
+  orgId: string;
+  run: any;
+  encryptionKey: string;
+  parentCtxBase?: Omit<CapabilityCtx, "packageRunStepId" | "generatedInputs">;
+  retryPathTail: number[];
+}): Promise<{
+  finalStatus: 'canceled' | 'halted' | 'partial' | 'completed';
+  stepOutputs: Map<number, Record<string, unknown>>;
+}> {
+  const { db, orgId, run, encryptionKey, parentCtxBase, retryPathTail } = args;
+  const packageRunId = run.id as string;
+  const snapshot = run.packageSnapshot as PackageSnapshot;
+  const runtimeInputs = (run.runtimeInputs ?? {}) as Record<string, unknown>;
+
+  await db
+    .update(packageRuns)
+    .set({ status: "running", startedAt: new Date().toISOString() })
+    .where(eq(packageRuns.id, packageRunId));
+
+  const stepOutputs = new Map<number, Record<string, unknown>>();
+
+  // Retry-from-step-N keeps the same job. Seed its retained prior step
+  // outputs so downstream priorOutput bindings retain full context. The
+  // parent fallback preserves compatibility with historic retry records.
+  if (run.startStepIndex > 0) {
+    try {
+      await seedPriorOutputs({
+        db,
+        parentRunId: run.parentRunId ?? packageRunId,
+        upToPosition: run.startStepIndex,
+        snapshot,
+        encryptionKey,
+        stepOutputs,
+      });
+    } catch (err) {
+      logger.error("Failed to seed prior outputs for retry", {
+        orgId,
+        packageRunId,
+        parentRunId: run.parentRunId,
+        error: serializeError(err),
+      });
       await db
         .update(packageRuns)
-        .set({ status: "running", startedAt: new Date().toISOString() })
+        .set({
+          status: "failed",
+          finishedAt: new Date().toISOString(),
+        })
         .where(eq(packageRuns.id, packageRunId));
+      return { finalStatus: 'halted', stepOutputs };
+    }
+  }
 
-      // Per-linkId connector cache — one M365Connector per link for the run.
-      const connectorCache = new Map<string, M365Connector>();
-      const stepOutputs = new Map<number, Record<string, unknown>>();
-
-      // Retry-from-step-N keeps the same job. Seed its retained prior step
-      // outputs so downstream priorOutput bindings retain full context. The
-      // parent fallback preserves compatibility with historic retry records.
-      if (run.startStepIndex > 0) {
-        try {
-          await seedPriorOutputs({
-            db,
-            parentRunId: run.parentRunId ?? packageRunId,
-            upToPosition: run.startStepIndex,
-            snapshot,
-            encryptionKey,
-            stepOutputs,
-          });
-        } catch (err) {
-          logger.error("Failed to seed prior outputs for retry", {
-            orgId,
-            packageRunId,
-            parentRunId: run.parentRunId,
-            error: serializeError(err),
-          });
-          await db
-            .update(packageRuns)
-            .set({
-              status: "failed",
-              finishedAt: new Date().toISOString(),
-            })
-            .where(eq(packageRuns.id, packageRunId));
-          return;
-        }
+  // Build ctxBase or inherit from parent. Reusing the parent's ctxBase reuses
+  // its connector caches / site-fact map across nested runs. The only field
+  // that must change per run is packageRunId — capability audit rows use it.
+  let ctxBase: Omit<CapabilityCtx, "packageRunStepId" | "generatedInputs">;
+  if (parentCtxBase) {
+    ctxBase = { ...parentCtxBase, packageRunId };
+  } else {
+    // Load site facts once per run — packages with several `siteFact`
+    // bindings then read from an in-memory map. Empty map if the run has
+    // no siteId (siteFact bindings will fail resolution with a clear error).
+    const siteFacts = new Map<string, unknown>();
+    if (run.siteId) {
+      const factRows = await db
+        .select({
+          key: siteProfileFacts.key,
+          value: siteProfileFacts.value,
+          applicable: siteProfileFacts.applicable,
+        })
+        .from(siteProfileFacts)
+        .where(eq(siteProfileFacts.siteId, run.siteId));
+      for (const row of factRows) {
+        if (row.applicable === "not_applicable") continue;
+        siteFacts.set(row.key, row.value);
       }
+    }
+    const connectorCache = new Map<string, M365Connector>();
+    const sophosConnectorCache = new Map<string, SophosConnector>();
+    let sophosPartnerConnector: SophosConnector | null = null;
+    let dattoConnectorSingleton: DattoConnector | null = null;
+    let coveConnectorSingleton: { connector: CoveConnector; rootPartnerId: number } | null = null;
+    let haloConnectorSingleton: { connector: HaloPSAConnector; haloSiteId: number } | null = null;
 
-      // Load site facts once per run — packages with several `siteFact`
-      // bindings then read from an in-memory map. Empty map if the run has
-      // no siteId (siteFact bindings will fail resolution with a clear error).
-      const siteFacts = new Map<string, unknown>();
-      if (run.siteId) {
-        const factRows = await db
-          .select({
-            key: siteProfileFacts.key,
-            value: siteProfileFacts.value,
-            applicable: siteProfileFacts.applicable,
-          })
-          .from(siteProfileFacts)
-          .where(eq(siteProfileFacts.siteId, run.siteId));
-        for (const row of factRows) {
-          // Facts explicitly marked not_applicable are treated as absent.
-          if (row.applicable === "not_applicable") continue;
-          siteFacts.set(row.key, row.value);
+    ctxBase = {
+      encryptionKey,
+      user: {
+        id: run.triggeredByUserId ?? "system",
+        name: null,
+        email: null,
+      },
+      packageRunId,
+      siteFacts,
+      loadM365Identity: (id: string) => loadIdentity(db, id),
+      getM365Connector: (linkId: string) =>
+        getConnector(db, connectorCache, linkId, encryptionKey),
+      loadSophosEndpoint: (endpointId: string) =>
+        loadSophosEndpoint(db, endpointId),
+      getSophosConnector: (linkId: string) =>
+        getSophosConnector(db, sophosConnectorCache, linkId, encryptionKey),
+      markSophosEndpointsUpgraded: (endpointIds: string[]) =>
+        markSophosEndpointsUpgraded(db, endpointIds),
+      getSophosPartnerConnector: async () => {
+        if (!sophosPartnerConnector) {
+          sophosPartnerConnector = await getSophosPartnerConnector(db, encryptionKey);
         }
-      }
+        return sophosPartnerConnector;
+      },
+      getDattoConnector: async () => {
+        if (!dattoConnectorSingleton) {
+          dattoConnectorSingleton = await getDattoConnector(db, encryptionKey);
+        }
+        return dattoConnectorSingleton;
+      },
+      getCoveConnector: async () => {
+        if (!coveConnectorSingleton) {
+          coveConnectorSingleton = await getCoveConnector(db, encryptionKey);
+        }
+        return coveConnectorSingleton;
+      },
+      getHaloPSAConnector: async () => {
+        if (!haloConnectorSingleton) {
+          if (!run.siteId) throw new Error("HaloPSA ticket creation requires a site-scoped package run");
+          haloConnectorSingleton = await getHaloPSAConnector(db, run.siteId, encryptionKey);
+        }
+        return haloConnectorSingleton;
+      },
+      lookupSite: (siteId: string) =>
+        lookupSite(db, siteId),
+      createSite: (name: string, description?: string) =>
+        createSite(db, name, description),
+      createIntegrationLink: (opts: CreateIntegrationLinkOpts) =>
+        createIntegrationLink(db, opts),
+      upsertM365Group: (data: UpsertM365GroupData) => upsertM365Group(db, data),
+      upsertM365Identity: (data: UpsertM365IdentityData) => upsertM365Identity(db, data),
+      upsertM365Policy: (data: UpsertM365PolicyData) => upsertM365Policy(db, data),
+    };
+  }
 
-      // Per-link Sophos connector cache for site-level endpoint operations.
-      const sophosConnectorCache = new Map<string, SophosConnector>();
-      // Integration-level singletons — loaded once per run, no linkId required.
-      let sophosPartnerConnector: SophosConnector | null = null;
-      let dattoConnectorSingleton: DattoConnector | null = null;
-      let coveConnectorSingleton: { connector: CoveConnector; rootPartnerId: number } | null = null;
-      let haloConnectorSingleton: { connector: HaloPSAConnector; haloSiteId: number } | null = null;
+  let halted = false;
+  let canceled = false;
+  let anyStepFailed = false;
 
-      const ctxBase: Omit<CapabilityCtx, "packageRunStepId" | "generatedInputs"> = {
-        encryptionKey,
-        user: {
-          id: run.triggeredByUserId ?? "system",
-          name: null,
-          email: null,
-        },
-        packageRunId,
-        siteFacts,
-        loadM365Identity: (id: string) => loadIdentity(db, id),
-        getM365Connector: (linkId: string) =>
-          getConnector(db, connectorCache, linkId, encryptionKey),
-        loadSophosEndpoint: (endpointId: string) =>
-          loadSophosEndpoint(db, endpointId),
-        getSophosConnector: (linkId: string) =>
-          getSophosConnector(db, sophosConnectorCache, linkId, encryptionKey),
-        markSophosEndpointsUpgraded: (endpointIds: string[]) =>
-          markSophosEndpointsUpgraded(db, endpointIds),
-        getSophosPartnerConnector: async () => {
-          if (!sophosPartnerConnector) {
-            sophosPartnerConnector = await getSophosPartnerConnector(db, encryptionKey);
-          }
-          return sophosPartnerConnector;
-        },
-        getDattoConnector: async () => {
-          if (!dattoConnectorSingleton) {
-            dattoConnectorSingleton = await getDattoConnector(db, encryptionKey);
-          }
-          return dattoConnectorSingleton;
-        },
-        getCoveConnector: async () => {
-          if (!coveConnectorSingleton) {
-            coveConnectorSingleton = await getCoveConnector(db, encryptionKey);
-          }
-          return coveConnectorSingleton;
-        },
-        getHaloPSAConnector: async () => {
-          if (!haloConnectorSingleton) {
-            if (!run.siteId) throw new Error("HaloPSA ticket creation requires a site-scoped package run");
-            haloConnectorSingleton = await getHaloPSAConnector(db, run.siteId, encryptionKey);
-          }
-          return haloConnectorSingleton;
-        },
-        lookupSite: (siteId: string) =>
-          lookupSite(db, siteId),
-        createSite: (name: string, description?: string) =>
-          createSite(db, name, description),
-        createIntegrationLink: (opts: CreateIntegrationLinkOpts) =>
-          createIntegrationLink(db, opts),
-        upsertM365Group: (data: UpsertM365GroupData) => upsertM365Group(db, data),
-        upsertM365Identity: (data: UpsertM365IdentityData) => upsertM365Identity(db, data),
-        upsertM365Policy: (data: UpsertM365PolicyData) => upsertM365Policy(db, data),
-      };
+  const operatorSkippedPositions = new Set(snapshot.skippedStepIndexes ?? []);
 
-      let halted = false;
-      let canceled = false;
-      let anyStepFailed = false;
-
-      const operatorSkippedPositions = new Set(snapshot.skippedStepIndexes ?? []);
-
-      for (let position = run.startStepIndex; position < snapshot.steps.length; position++) {
+  for (let position = run.startStepIndex; position < snapshot.steps.length; position++) {
         // Cancellation window: re-read the run's status between steps so an
         // in-flight cancel from tRPC takes effect at the next boundary. We
         // deliberately don't interrupt an in-progress capability handler —
@@ -259,13 +361,16 @@ export function createPackageWorker(
         }
 
         const step = snapshot.steps[position]!;
+        const stepKindLabel = step.kind === 'subpackage'
+          ? `subpackage:${step.packageId}`
+          : step.capabilityId;
 
         // Operator chose to skip this step at run time.
         if (operatorSkippedPositions.has(position)) {
           await db.insert(packageRunSteps).values({
             packageRunId,
             position,
-            capabilityId: step.capabilityId,
+            capabilityId: stepKindLabel,
             status: "skip",
             skipReason: "operator_skipped",
             startedAt: new Date().toISOString(),
@@ -273,6 +378,32 @@ export function createPackageWorker(
           });
           continue;
         }
+
+        if (step.kind === 'subpackage') {
+          const childOutcome = await executeSubpackageStep({
+            db,
+            orgId,
+            parentRun: run,
+            parentRunId: packageRunId,
+            parentSnapshot: snapshot,
+            parentRuntimeInputs: runtimeInputs,
+            parentStepOutputs: stepOutputs,
+            parentCtxBase: ctxBase,
+            encryptionKey,
+            position,
+            step,
+            retryPathTail,
+          });
+          if (childOutcome === 'success') continue;
+          anyStepFailed = true;
+          const stepOnFailure: StepOnFailure = step.onFailure ?? "halt";
+          if (stepOnFailure === "halt") {
+            halted = true;
+            break;
+          }
+          continue;
+        }
+
         const capability = getCapability(step.capabilityId);
         if (!capability) {
           await recordStepFailure(db, packageRunId, position, step.capabilityId, {
@@ -303,7 +434,7 @@ export function createPackageWorker(
           step.inputBindings,
           runtimeInputs,
           stepOutputs,
-          { siteId: run.siteId, siteFacts },
+          { siteId: run.siteId, siteFacts: ctxBase.siteFacts },
         );
         if (!resolveResult.ok) {
           await failStep(db, stepRow.id, {
@@ -439,94 +570,76 @@ export function createPackageWorker(
         }
         // stepOnFailure === 'continue' — proceed to the next step. The run's
         // final status will be 'partial' if we reach the end this way.
-      }
+  }
 
-      // Derive final status:
-      //   canceled: user asked us to stop
-      //   halted: a step failed with onFailure='halt' before the end
-      //   partial: ran to the end but at least one step failed on continue
-      //   completed: every step succeeded (or was benignly skipped)
-      const finalStatus: 'canceled' | 'halted' | 'partial' | 'completed' = canceled
-        ? "canceled"
-        : halted
-          ? "halted"
-          : anyStepFailed
-            ? "partial"
-            : "completed";
-      // Terminal lanes are deliberately one-way reactions. They run only
-      // after the main path settles and cannot alter its terminal status.
-      const outcomeLane = finalStatus === 'completed'
-        ? 'on_success' as const
-        : finalStatus === 'halted' || finalStatus === 'partial'
-          ? 'on_failure' as const
-          : null;
-      const outcomeSteps = outcomeLane === 'on_success'
-        ? snapshot.outcomeSteps?.onSuccess ?? []
-        : outcomeLane === 'on_failure'
-          ? snapshot.outcomeSteps?.onFailure ?? []
-          : [];
-      const failureContext = finalStatus === 'halted' || finalStatus === 'partial'
-        ? await loadFailureContext(db, packageRunId, finalStatus, run.siteId)
-        : undefined;
-      if (outcomeLane && outcomeSteps.length > 0) {
-        await executeOutcomeLane({
-          db,
-          run,
-          runId: packageRunId,
-          lane: outcomeLane,
-          steps: outcomeSteps,
-          runtimeInputs,
-          siteFacts,
-          ctxBase,
-          encryptionKey,
-          // A failed main path cannot provide a dependable output contract.
-          // Failure reactions may only consume earlier failure-reaction outputs.
-          mainOutputs: outcomeLane === 'on_success' ? stepOutputs : new Map(),
-          failureContext,
-        });
-      }
-
-      const totalBillable = await sumBillable(db, packageRunId);
-      await db
-        .update(packageRuns)
-        .set({
-          status: finalStatus,
-          billingTotal: totalBillable.toFixed(4),
-          finishedAt: new Date().toISOString(),
-        })
-        .where(eq(packageRuns.id, packageRunId));
-
-      // Package-level failure notifications fire on any terminal non-success
-      // state. Actions are described declaratively; the worker just logs the
-      // intent today — email + PSA senders land in a follow-up.
-      if (finalStatus === "halted" || finalStatus === "partial") {
-        await executeFailureActions({
-          actions: snapshot.failureActions ?? [],
-          orgId,
-          packageRunId,
-          finalStatus,
-        });
-      }
-
-      logger.info("Package run completed", {
-        orgId,
-        packageRunId,
-        status: finalStatus,
-        totalBillable,
-      });
-    },
-    {
-      connection: redis as never,
-      concurrency: env.WORKER_CONCURRENCY,
-      lockDuration: env.WORKER_LOCK_DURATION_MS,
-    },
-  ).on("failed", (job, error) => {
-    logger.error("Package job failed", {
-      orgId,
-      jobId: job?.id,
-      error: serializeError(error),
+  // Derive final status:
+  //   canceled: user asked us to stop
+  //   halted: a step failed with onFailure='halt' before the end
+  //   partial: ran to the end but at least one step failed on continue
+  //   completed: every step succeeded (or was benignly skipped)
+  const finalStatus: 'canceled' | 'halted' | 'partial' | 'completed' = canceled
+    ? "canceled"
+    : halted
+      ? "halted"
+      : anyStepFailed
+        ? "partial"
+        : "completed";
+  // Terminal lanes are deliberately one-way reactions. They run only
+  // after the main path settles and cannot alter its terminal status.
+  const outcomeLane = finalStatus === 'completed'
+    ? 'on_success' as const
+    : finalStatus === 'halted' || finalStatus === 'partial'
+      ? 'on_failure' as const
+      : null;
+  const outcomeSteps = outcomeLane === 'on_success'
+    ? snapshot.outcomeSteps?.onSuccess ?? []
+    : outcomeLane === 'on_failure'
+      ? snapshot.outcomeSteps?.onFailure ?? []
+      : [];
+  const failureContext = finalStatus === 'halted' || finalStatus === 'partial'
+    ? await loadFailureContext(db, packageRunId, finalStatus, run.siteId)
+    : undefined;
+  if (outcomeLane && outcomeSteps.length > 0) {
+    await executeOutcomeLane({
+      db,
+      run,
+      runId: packageRunId,
+      lane: outcomeLane,
+      steps: outcomeSteps,
+      runtimeInputs,
+      siteFacts: ctxBase.siteFacts,
+      ctxBase,
+      encryptionKey,
+      // A failed main path cannot provide a dependable output contract.
+      // Failure reactions may only consume earlier failure-reaction outputs.
+      mainOutputs: outcomeLane === 'on_success' ? stepOutputs : new Map(),
+      failureContext,
     });
-  });
+  }
+
+  const totalBillable = await sumBillable(db, packageRunId);
+  await db
+    .update(packageRuns)
+    .set({
+      status: finalStatus,
+      billingTotal: totalBillable.toFixed(4),
+      finishedAt: new Date().toISOString(),
+    })
+    .where(eq(packageRuns.id, packageRunId));
+
+  // Package-level failure notifications fire on any terminal non-success
+  // state. Actions are described declaratively; the worker just logs the
+  // intent today — email + PSA senders land in a follow-up.
+  if (finalStatus === "halted" || finalStatus === "partial") {
+    await executeFailureActions({
+      actions: snapshot.failureActions ?? [],
+      orgId,
+      packageRunId,
+      finalStatus,
+    });
+  }
+
+  return { finalStatus, stepOutputs };
 }
 
 function stripUndefined(obj: Record<string, unknown>): Record<string, unknown> {
@@ -535,6 +648,254 @@ function stripUndefined(obj: Record<string, unknown>): Record<string, unknown> {
     if (v !== undefined) out[k] = v;
   }
   return out;
+}
+
+function subpackageCapabilityLabel(packageId: string): string {
+  return `subpackage:${packageId}`;
+}
+
+// Encrypt every string value in a sub-package step's outputs. Phase 1 is
+// conservative here: rather than walk the child's snapshot to determine
+// per-field sensitivity (nested re-exports make that recursive), we treat all
+// string outputs as sensitive-at-rest. Non-string values pass through.
+function encryptSubpackageOutputs(
+  values: Record<string, unknown>,
+  encryptionKey: string,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(values)) {
+    if (typeof v === 'string' && v.length > 0) {
+      out[k] = Encryption.encrypt(JSON.stringify(v), encryptionKey);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+// Inverse of encryptSubpackageOutputs. Used by seedPriorOutputs when a retry
+// needs to reload a sub-package step's outputs into memory. Attempts to decrypt
+// each string; falls back to the raw value if it isn't a valid ciphertext.
+function decryptSubpackageOutputs(
+  values: Record<string, unknown>,
+  encryptionKey: string,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(values)) {
+    if (typeof v === 'string' && v.length > 0) {
+      const raw = Encryption.decrypt(v, encryptionKey);
+      if (raw === undefined) {
+        out[k] = v;
+      } else {
+        try {
+          out[k] = JSON.parse(raw);
+        } catch {
+          out[k] = raw;
+        }
+      }
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+// Executes a sub-package step: creates (or reuses) the child packageRuns row,
+// runs it via `runPackageRun`, and extracts the child's exposed outputs so
+// downstream priorOutput bindings in the parent can wire to them.
+//
+// Retry cascade: when the caller's `retryPathTail[0]` equals this step's
+// position, we reuse the most recent prior child run (mutate it to `pending`,
+// reset startStepIndex, delete stale steps at that position and beyond) and
+// thread the retryPath tail into it. Outside the retry path a fresh child
+// row is created every time.
+async function executeSubpackageStep(args: {
+  db: any;
+  orgId: string;
+  parentRun: any;
+  parentRunId: string;
+  parentSnapshot: PackageSnapshot;
+  parentRuntimeInputs: Record<string, unknown>;
+  parentStepOutputs: Map<number, Record<string, unknown>>;
+  parentCtxBase: Omit<CapabilityCtx, "packageRunStepId" | "generatedInputs">;
+  encryptionKey: string;
+  position: number;
+  step: SubpackageStep;
+  retryPathTail: number[];
+}): Promise<'success' | 'fail'> {
+  const {
+    db, orgId, parentRun, parentRunId, parentSnapshot, parentRuntimeInputs,
+    parentStepOutputs, parentCtxBase, encryptionKey, position, step, retryPathTail,
+  } = args;
+  const childCapabilityLabel = subpackageCapabilityLabel(step.packageId);
+
+  const childSnapshot = parentSnapshot.children?.[step.packageId];
+  if (!childSnapshot) {
+    await recordStepFailure(db, parentRunId, position, childCapabilityLabel, {
+      errorClass: 'capability_missing',
+      message: `Sub-package snapshot missing for ${step.packageId}. Re-run may be needed after re-dispatch.`,
+    });
+    return 'fail';
+  }
+
+  // Resolve parent step's inputBindings — these keys are the child's prompt IDs.
+  const resolveResult = resolveBindings(
+    step.inputBindings,
+    parentRuntimeInputs,
+    parentStepOutputs,
+    { siteId: parentRun.siteId, siteFacts: parentCtxBase.siteFacts },
+  );
+
+  const [stepRow] = await db
+    .insert(packageRunSteps)
+    .values({
+      packageRunId: parentRunId,
+      position,
+      capabilityId: childCapabilityLabel,
+      status: 'running',
+      startedAt: new Date().toISOString(),
+    })
+    .returning({ id: packageRunSteps.id });
+
+  if (!resolveResult.ok) {
+    await failStep(db, stepRow.id, {
+      errorClass: 'binding_unresolved',
+      message: resolveResult.error,
+      resolvedInputs: {},
+    });
+    return 'fail';
+  }
+  const childRuntimeInputs = stripUndefined(resolveResult.value);
+
+  const onRetryPath = retryPathTail.length > 0 && retryPathTail[0] === position;
+  const childRetryPathTail = onRetryPath ? retryPathTail.slice(1) : [];
+  const childStartStepIndex = childRetryPathTail[0] ?? 0;
+
+  // Look up the most recent prior child run for this (parent, position) pair.
+  // Reuse it when we're on the retry path; otherwise create a fresh child.
+  let childRun: any = null;
+  if (onRetryPath) {
+    const priorChildren = await db
+      .select()
+      .from(packageRuns)
+      .where(eq(packageRuns.parentRunId, parentRunId));
+    const matches = (priorChildren as Array<{ id: string; triggerRef: unknown; createdAt: string }>).filter((c) => {
+      const tr = c.triggerRef as { parentPosition?: number } | null;
+      return tr?.parentPosition === position;
+    });
+    matches.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    const prior = matches[0];
+    if (prior) {
+      const priorId = prior.id;
+      const nextTriggerRef = {
+        ...((prior.triggerRef as Record<string, unknown> | null) ?? {}),
+        parentRunId,
+        parentPosition: position,
+        retryPath: childRetryPathTail,
+      };
+      await db
+        .update(packageRuns)
+        .set({
+          status: 'pending',
+          startStepIndex: childStartStepIndex,
+          startedAt: null,
+          finishedAt: null,
+          billingTotal: '0',
+          triggerRef: nextTriggerRef,
+          runtimeInputs: childRuntimeInputs,
+          packageSnapshot: childSnapshot,
+        })
+        .where(eq(packageRuns.id, priorId));
+      await db
+        .delete(packageRunSteps)
+        .where(
+          and(
+            eq(packageRunSteps.packageRunId, priorId),
+            gte(packageRunSteps.position, childStartStepIndex),
+          ),
+        );
+      const [reloaded] = await db
+        .select()
+        .from(packageRuns)
+        .where(eq(packageRuns.id, priorId))
+        .limit(1);
+      childRun = reloaded;
+    }
+  }
+
+  if (!childRun) {
+    const triggerRef = {
+      parentRunId,
+      parentPosition: position,
+      ...(childRetryPathTail.length > 0 ? { retryPath: childRetryPathTail } : {}),
+    };
+    const [inserted] = await db
+      .insert(packageRuns)
+      .values({
+        packageId: childSnapshot.id,
+        packageVersion: childSnapshot.version,
+        packageSnapshot: childSnapshot,
+        parentRunId,
+        siteId: parentRun.siteId,
+        linkId: parentRun.linkId,
+        triggerType: parentRun.triggerType,
+        triggerRef,
+        triggeredByUserId: parentRun.triggeredByUserId,
+        triggerSourceLabel: parentRun.triggerSourceLabel,
+        runtimeInputs: childRuntimeInputs,
+        status: 'pending',
+        startStepIndex: childStartStepIndex,
+      })
+      .returning({ id: packageRuns.id });
+    const [reloaded] = await db
+      .select()
+      .from(packageRuns)
+      .where(eq(packageRuns.id, inserted.id))
+      .limit(1);
+    childRun = reloaded;
+  }
+
+  const childResult = await runPackageRun({
+    db,
+    orgId,
+    run: childRun,
+    encryptionKey,
+    parentCtxBase,
+    retryPathTail: childRetryPathTail,
+  });
+
+  const exposedOutputs = childSnapshot.exposedOutputs ?? [];
+  const stepOutput: Record<string, unknown> = {};
+  for (const eo of exposedOutputs) {
+    const src = childResult.stepOutputs.get(eo.sourceStepPosition);
+    if (src === undefined) continue;
+    stepOutput[eo.name] = getByPath(src, eo.sourcePath);
+  }
+
+  if (childResult.finalStatus === 'completed') {
+    const encrypted = encryptSubpackageOutputs(stepOutput, encryptionKey);
+    await db
+      .update(packageRunSteps)
+      .set({
+        status: 'success',
+        outputs: encrypted,
+        finishedAt: new Date().toISOString(),
+      })
+      .where(eq(packageRunSteps.id, stepRow.id));
+    parentStepOutputs.set(position, stepOutput);
+    return 'success';
+  }
+
+  await db
+    .update(packageRunSteps)
+    .set({
+      status: 'fail',
+      errorClass: 'handler_threw',
+      errorMessage: `Sub-package "${childSnapshot.name}" ended in ${childResult.finalStatus}`,
+      finishedAt: new Date().toISOString(),
+    })
+    .where(eq(packageRunSteps.id, stepRow.id));
+  return 'fail';
 }
 
 async function executeFailureActions(args: {
@@ -574,6 +935,15 @@ async function executeOutcomeLane(args: {
   const outputs = new Map<number, Record<string, unknown>>();
 
   for (const [position, step] of args.steps.entries()) {
+    // Sub-package steps in terminal lanes are rejected at save time; guard
+    // defensively at runtime so a legacy snapshot cannot smuggle one through.
+    if (step.kind === 'subpackage') {
+      await dbInsertOutcomeFailure(args, position, `subpackage:${step.packageId}`, {
+        errorClass: 'handler_threw',
+        message: 'Sub-package steps are not supported inside terminal lanes',
+      });
+      continue;
+    }
     const capability = getCapability(step.capabilityId);
     if (!capability) {
       await dbInsertOutcomeFailure(args, position, step.capabilityId, {
@@ -1333,9 +1703,18 @@ async function seedPriorOutputs(args: {
   }>) {
     if (step.position >= args.upToPosition) continue;
     if (step.status !== "success") continue;
+    const encrypted = (step.outputs ?? {}) as Record<string, unknown>;
+
+    // Sub-package steps store their exposed outputs under capabilityId
+    // `subpackage:<childId>`. There's no capability meta to consult; use the
+    // symmetric decrypter that mirrors encryptSubpackageOutputs.
+    if (step.capabilityId.startsWith('subpackage:')) {
+      args.stepOutputs.set(step.position, decryptSubpackageOutputs(encrypted, args.encryptionKey));
+      continue;
+    }
+
     const capability = getCapability(step.capabilityId);
     if (!capability) continue;
-    const encrypted = (step.outputs ?? {}) as Record<string, unknown>;
     const decrypted: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(encrypted)) {
       const meta = capability.outputMeta[key];

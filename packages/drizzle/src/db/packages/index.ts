@@ -43,6 +43,11 @@ export const packages = packagesSchema.table(
     // Ordered list of package-level FailureAction records (see @mspbyte/capabilities).
     // Worker executes them after any terminal failed/halted/partial state.
     failureActions: jsonb('failure_actions').notNull().default(sql`'[]'::jsonb`),
+    // The package's public output contract: array of { name, sourceStepPosition,
+    // sourcePath, outputType, description? } entries that a parent package can
+    // wire to via priorOutput bindings when this package is referenced as a
+    // sub-package step.
+    exposedOutputs: jsonb('exposed_outputs').notNull().default(sql`'[]'::jsonb`),
     // Scoping: uuid arrays of sites/site-groups/integration-links this
     // package is allowed to run against. All empty => global.
     allowedSites: jsonb('allowed_sites').notNull().default(sql`'[]'::jsonb`),
@@ -243,6 +248,33 @@ export const packageRunSteps = packagesSchema.table(
   ],
 );
 
+// Reverse-index for sub-package references. One row per (parent, step_position)
+// pair; supports cycle checks and "who references me" lookups without scanning
+// every parent's steps jsonb. Rewritten atomically on every parent save.
+export const packageDependencies = packagesSchema.table(
+  'package_dependencies',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    parentPackageId: uuid('parent_package_id')
+      .notNull()
+      .references(() => packages.id, { onDelete: 'cascade' }),
+    childPackageId: uuid('child_package_id')
+      .notNull()
+      .references(() => packages.id, { onDelete: 'restrict' }),
+    stepPosition: integer('step_position').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('package_dependencies_parent_idx').on(t.parentPackageId),
+    index('package_dependencies_child_idx').on(t.childPackageId),
+    unique('package_dependencies_parent_step_unique').on(t.parentPackageId, t.stepPosition),
+    authoredRls,
+  ],
+);
+
 export type PackageDefinition = typeof packages.$inferSelect;
 export type PackageRun = typeof packageRuns.$inferSelect;
 export type PackageRunStep = typeof packageRunSteps.$inferSelect;
+export type PackageDependency = typeof packageDependencies.$inferSelect;

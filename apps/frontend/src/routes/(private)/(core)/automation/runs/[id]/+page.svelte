@@ -13,7 +13,7 @@
   import Loader from '$lib/components/transition/loader.svelte';
   import StepNode, { type StepStatus } from '$lib/components/domain/step-node.svelte';
   import { toast } from 'svelte-sonner';
-  import { ArrowLeft, Clock, DollarSign, RotateCcw, ShieldAlert, Eye, UserRound } from '@lucide/svelte';
+  import { ArrowLeft, Clock, DollarSign, RotateCcw, ShieldAlert, Eye, UserRound, CornerDownRight, ArrowUpRight } from '@lucide/svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
@@ -29,6 +29,31 @@
       return status === 'queued' || status === 'running' || status === 'pending' ? 2_000 : false;
     },
   }));
+
+  // Direct child runs of this run — indexed below by triggerRef.parentPosition
+  // so each sub-package step row can link to the child run it spawned. The
+  // query refreshes on the same cadence as the parent when it's live.
+  const children = createQuery(() => ({
+    queryKey: ['packageRuns.listChildren', runId],
+    queryFn: () => trpc.packageRuns.listChildren.query({ parentRunId: runId }),
+    refetchInterval: (query) => {
+      const parentStatus = detail.data?.run.status;
+      return parentStatus === 'queued' || parentStatus === 'running' || parentStatus === 'pending'
+        ? 2_000
+        : false;
+    },
+  }));
+  const childrenByPosition = $derived.by(() => {
+    const map = new Map<number, Array<{ id: string; status: string; packageName: string | null }>>();
+    for (const child of children.data ?? []) {
+      const pos = (child.triggerRef as { parentPosition?: number } | null)?.parentPosition;
+      if (typeof pos !== 'number') continue;
+      const arr = map.get(pos) ?? [];
+      arr.push({ id: child.id, status: child.status, packageName: child.packageName });
+      map.set(pos, arr);
+    }
+    return map;
+  });
 
   const revealed = $state<Record<string, unknown>>({});
 
@@ -125,7 +150,7 @@
 </script>
 
 <div class="flex size-full flex-col overflow-hidden">
-  <div class="border-b px-6 py-4">
+  <div class="flex flex-wrap items-center gap-3 border-b px-6 py-4">
     <button
       type="button"
       class="flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -134,6 +159,17 @@
       <ArrowLeft class="size-3.5" />
       All runs
     </button>
+    {#if detail.data?.run.parentRunId}
+      <span class="text-muted-foreground/40">·</span>
+      <button
+        type="button"
+        class="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        onclick={() => goto(`/automation/runs/${detail.data!.run.parentRunId}`)}
+      >
+        <CornerDownRight class="size-3.5" />
+        Parent run
+      </button>
+    {/if}
   </div>
 
   <div class="flex-1 overflow-auto">
@@ -234,6 +270,8 @@
               {@const outputs = (step.outputs ?? {}) as Record<string, unknown>}
               {@const inputs = (step.resolvedInputs ?? {}) as Record<string, unknown>}
               {@const isLast = index === steps.length - 1}
+              {@const isSubpackageStep = step.capabilityId.startsWith('subpackage:')}
+              {@const childRuns = isSubpackageStep && lane === 'main' ? (childrenByPosition.get(step.position) ?? []) : []}
               <div class="grid grid-cols-[36px_1fr] gap-4">
                 <div class="flex flex-col items-center">
                   <StepNode status={stepStatus(step.status)} number={step.position + 1} />
@@ -247,6 +285,11 @@
                         <div class="space-y-0.5">
                         <div class="flex items-center gap-2">
                           <div class="font-medium">{snapshotStep?.label ?? step.capabilityId}</div>
+                          {#if isSubpackageStep}
+                            <span class="rounded-sm bg-primary/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-primary">
+                              Sub-package
+                            </span>
+                          {/if}
                           {#if lane !== 'main'}
                             <span class="rounded-sm px-1.5 py-0.5 text-[10px] uppercase tracking-wide {lane === 'on_success' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' : 'bg-rose-500/10 text-rose-700 dark:text-rose-400'}">
                               {lane === 'on_success' ? 'On success' : 'On failure'}
@@ -259,6 +302,17 @@
                       </div>
                       <div class="flex items-center gap-3 text-xs text-muted-foreground">
                         {#if stepDuration}<span>{stepDuration}</span>{/if}
+                        {#if childRuns.length > 0}
+                          <button
+                            type="button"
+                            class="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            onclick={() => goto(`/automation/runs/${childRuns[0]!.id}`)}
+                            title={childRuns[0]!.packageName ?? undefined}
+                          >
+                            View sub-run
+                            <ArrowUpRight class="size-3" />
+                          </button>
+                        {/if}
                         {#if lane === 'main' && canRun && canRetry(run.status, purged, step.position)}
                           <Button
                             variant="outline"
