@@ -7,6 +7,7 @@ export * from "./db/canonical/index.js";
 export * from "./db/ingestor/index.js";
 export * from "./db/packages/index.js";
 export * from "./db/policy/index.js";
+export * from "./db/reports/index.js";
 export * from "./db/vendors/index.js";
 export * from "./db/vendors/registry.js";
 export * from "./db/wiki/index.js";

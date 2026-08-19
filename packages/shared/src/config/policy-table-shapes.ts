@@ -18,6 +18,17 @@ export type PolicyTableShape = {
     path: string;
     searchField: string;
   };
+  /**
+   * How the Reports engine resolves this table's rows to a `site_id` for scope
+   * filtering. `direct` = column on the base table (e.g. canonical.assets.site_id);
+   * `link` = join through public.integration_links via `column` (the FK to
+   * integration_links.id) and filter on integration_links.site_id. Omit for
+   * tables that are not scope-filterable at the site level.
+   */
+  siteScope?: {
+    via: 'direct' | 'link';
+    column: string;
+  };
   shape: SchemaFields;
 };
 
@@ -168,6 +179,7 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     label: 'Assets',
     resourceType: 'asset',
     targetType: 'asset',
+    siteScope: { via: 'direct', column: 'siteId' },
     shape: CanonicalAssetsShape
   },
   {
@@ -185,6 +197,7 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     providerId: 'microsoft-365',
     facet: ProviderFacet.M365Identities,
     route: { path: '/microsoft-365/identities', searchField: 'externalId' },
+    siteScope: { via: 'link', column: 'linkId' },
     shape: getFacetShape(ProviderFacet.M365Identities)
   },
   {
@@ -195,6 +208,7 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     providerId: 'microsoft-365',
     facet: ProviderFacet.M365CAPolicies,
     route: { path: '/microsoft-365/policies', searchField: 'externalId' },
+    siteScope: { via: 'link', column: 'linkId' },
     shape: getFacetShape(ProviderFacet.M365CAPolicies)
   },
   {
@@ -205,6 +219,7 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     providerId: 'microsoft-365',
     facet: ProviderFacet.M365Devices,
     route: { path: '/microsoft-365/devices', searchField: 'externalId' },
+    siteScope: { via: 'link', column: 'linkId' },
     shape: getFacetShape(ProviderFacet.M365Devices)
   },
   {
@@ -215,6 +230,7 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     providerId: 'sophos-partner',
     facet: ProviderFacet.SophosEndpoints,
     route: { path: '/sophos-partner/endpoints', searchField: 'externalId' },
+    siteScope: { via: 'link', column: 'linkId' },
     shape: getFacetShape(ProviderFacet.SophosEndpoints)
   },
   {
@@ -225,6 +241,7 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     providerId: 'sophos-partner',
     facet: ProviderFacet.SophosFirewalls,
     route: { path: '/sophos-partner/firewalls', searchField: 'externalId' },
+    siteScope: { via: 'link', column: 'linkId' },
     shape: getFacetShape(ProviderFacet.SophosFirewalls)
   },
   {
@@ -235,6 +252,7 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     providerId: 'dattormm',
     facet: ProviderFacet.DattoEndpoints,
     route: { path: '/dattormm/endpoints', searchField: 'externalId' },
+    siteScope: { via: 'link', column: 'linkId' },
     shape: getFacetShape(ProviderFacet.DattoEndpoints)
   },
   {
@@ -245,6 +263,7 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     providerId: 'cove',
     facet: ProviderFacet.CoveEndpoints,
     route: { path: '/cove/endpoints', searchField: 'externalId' },
+    siteScope: { via: 'link', column: 'linkId' },
     shape: getFacetShape(ProviderFacet.CoveEndpoints)
   }
 ];

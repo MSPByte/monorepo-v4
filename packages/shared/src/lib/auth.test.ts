@@ -200,7 +200,7 @@ describe('SYSTEM_ROLES catalog', () => {
     expect(admin?.permissions).toEqual(['*']);
   });
 
-  test('Support has Delete on all 9 operational resources, none on config', () => {
+  test('Support has Delete on all 10 operational resources, none on config', () => {
     const support = SYSTEM_ROLES.find((r) => r.name === 'Support')!;
     const grants = grantsOf(...support.permissions);
     // Operational resources — all Delete-capable.
@@ -213,7 +213,8 @@ describe('SYSTEM_ROLES catalog', () => {
       'Policies',
       'Frameworks',
       'Billing',
-      'Findings'
+      'Findings',
+      'Reports'
     ]) {
       expect(hasPermission(grants, `${res}.Delete` as never)).toBe(true);
     }
@@ -236,7 +237,8 @@ describe('SYSTEM_ROLES catalog', () => {
       'Policies',
       'Frameworks',
       'Billing',
-      'Findings'
+      'Findings',
+      'Reports'
     ]) {
       expect(hasPermission(grants, `${res}.Read` as never)).toBe(true);
     }
@@ -263,7 +265,8 @@ describe('SYSTEM_ROLES catalog', () => {
       'Policies',
       'Frameworks',
       'Billing',
-      'Findings'
+      'Findings',
+      'Reports'
     ]) {
       expect(hasPermission(grants, `${res}.Read` as never)).toBe(true);
       expect(hasPermission(grants, `${res}.Write` as never)).toBe(false);

@@ -6,5 +6,6 @@ export * from './canonical/index.js';
 export * from './ingestor/index.js';
 export * from './packages/index.js';
 export * from './policy/index.js';
+export * from './reports/index.js';
 export * from './vendors/index.js';
 export * from './wiki/index.js';

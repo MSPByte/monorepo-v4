@@ -65,6 +65,8 @@ const ROUTES: Route[] = [
     children: [
       { label: 'Billing', href: '/billing', permission: 'Billing.Read' },
       { label: 'Wiki', href: '/wiki', permission: 'Wiki.Read' },
+      { label: 'Reports', href: '/reports', permission: 'Reports.Read' },
+      { label: 'Dashboards', href: '/dashboards', permission: 'Reports.Read' },
     ],
   },
   { label: 'Users', href: '/setup/users', permission: 'Users.Read', group: 'Setup' },
