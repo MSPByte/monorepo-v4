@@ -77,15 +77,25 @@
   type SiteOption = { id: string; name: string };
   type SiteGroupOption = { id: string; name: string; siteIds?: string[] };
   type EditingRule = Omit<RuleInput, 'scopes'> & { scopes?: ScopeInput[] };
+  type RuleCreationSeed = {
+    psaItemId: string;
+    psaItemName: string;
+    siteId: string | null;
+    siteName: string;
+    billedQuantity: number;
+    unitPrice: number;
+  };
 
   let {
     open = $bindable(),
     editingRule,
+    creationSeed = null,
     sites: siteList,
     siteGroups: siteGroupList,
   }: {
     open: boolean;
     editingRule: EditingRule | null;
+    creationSeed?: RuleCreationSeed | null;
     sites: SiteOption[];
     siteGroups: SiteGroupOption[];
   } = $props();
@@ -228,7 +238,11 @@
     }
   }
 
-  function seedFromRule(rule: EditingRule | null, facets: FacetConfig[]) {
+  function seedFromRule(
+    rule: EditingRule | null,
+    facets: FacetConfig[],
+    seed: RuleCreationSeed | null,
+  ) {
     if (rule) {
       editingId = rule.id;
       name = rule.name;
@@ -247,16 +261,16 @@
       }));
     } else {
       editingId = undefined;
-      name = '';
+      name = seed?.psaItemName ?? '';
       enabled = true;
-      includeAll = true;
-      includeSiteIds = [];
+      includeAll = !seed?.siteId;
+      includeSiteIds = seed?.siteId ? [seed.siteId] : [];
       includeGroupIds = [];
       excludeSiteIds = [];
       excludeGroupIds = [];
       psaField = 'itemName';
-      psaOperator = 'contains';
-      psaValue = '';
+      psaOperator = seed ? 'eq' : 'contains';
+      psaValue = seed?.psaItemName ?? '';
       const first = facets[0] ?? null;
       vendorProvider = first?.providerId ?? '';
       vendorFacet = first?.facet ?? '';
@@ -267,7 +281,7 @@
   let openTrack = $state(false);
   $effect(() => {
     if (open && !openTrack && allFacets.length > 0) {
-      seedFromRule(editingRule, allFacets);
+      seedFromRule(editingRule, allFacets, creationSeed);
     }
     openTrack = open;
   });
@@ -421,14 +435,40 @@
     <Sheet.Overlay />
     <Sheet.Content side="right" class="flex w-full flex-col gap-0 p-0 sm:max-w-3xl! md:max-w-4xl!">
       <Sheet.Header class="border-b p-5">
-        <Sheet.Title>{editingId ? 'Edit rule' : 'New reconciliation rule'}</Sheet.Title>
+        <Sheet.Title>{editingId ? 'Edit rule' : creationSeed ? 'Create rule from line' : 'New reconciliation rule'}</Sheet.Title>
         <Sheet.Description>
-          Match a PSA billing line to vendor inventory, then reconcile counts and revenue.
+          {editingId
+            ? 'Refine how this PSA billing line is reconciled against vendor inventory.'
+            : 'Confirm the billing line, choose what to count, then review the projected result.'}
         </Sheet.Description>
       </Sheet.Header>
 
       <div class="flex-1 overflow-y-auto">
         <div class="space-y-6 p-6">
+          {#if creationSeed}
+            <section class="rounded-lg border border-primary/25 bg-primary/5 p-4">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p class="text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">
+                    Starting from uncovered billing line
+                  </p>
+                  <p class="mt-1 text-sm font-semibold">{creationSeed.psaItemName}</p>
+                  <p class="mt-0.5 text-xs text-muted-foreground">
+                    {creationSeed.siteId ? creationSeed.siteName : 'Unmapped line'} · billed
+                    {creationSeed.billedQuantity} · {formatMoney(creationSeed.unitPrice)} per unit
+                  </p>
+                </div>
+                <span class="rounded-full border border-primary/20 bg-background px-2.5 py-1 text-[11px] font-medium text-primary">
+                  Match seeded
+                </span>
+              </div>
+              <p class="mt-3 text-xs leading-5 text-muted-foreground">
+                We started with an exact item-name match{creationSeed.siteId ? ` at ${creationSeed.siteName}` : ''}.
+                Adjust it below only if this line should cover a wider set of billing items or sites.
+              </p>
+            </section>
+          {/if}
+
           <section class="space-y-3">
             <div class="flex items-center justify-between">
               <div>
@@ -449,9 +489,9 @@
 
           <section class="space-y-3">
             <div>
-              <h3 class="text-sm font-semibold">PSA line item match</h3>
+              <h3 class="text-sm font-semibold">1 · Identify the billing line</h3>
               <p class="text-xs text-muted-foreground">
-                Identifies the PSA billing row this rule applies to.
+                This tells the report which PSA lines belong to this rule.
               </p>
             </div>
 
@@ -490,9 +530,9 @@
 
           <section class="space-y-3">
             <div>
-              <h3 class="text-sm font-semibold">Site scope</h3>
+              <h3 class="text-sm font-semibold">2 · Choose where it applies</h3>
               <p class="text-xs text-muted-foreground">
-                Effective sites = union of includes, minus union of excludes.
+                Start narrow for customer-specific lines; expand when this item is standardized.
               </p>
             </div>
 
@@ -555,9 +595,9 @@
 
           <section class="space-y-3">
             <div>
-              <h3 class="text-sm font-semibold">Vendor source</h3>
+              <h3 class="text-sm font-semibold">3 · Choose what to count</h3>
               <p class="text-xs text-muted-foreground">
-                Choose which vendor facet supplies the actual quantity.
+                Pick the vendor inventory category that represents the actual quantity.
               </p>
             </div>
             <div class="grid grid-cols-2 gap-3">
@@ -587,7 +627,7 @@
           <section class="space-y-3">
             <div class="flex items-center justify-between">
               <div>
-                <h3 class="text-sm font-semibold">Vendor filters</h3>
+                <h3 class="text-sm font-semibold">Refine the inventory count</h3>
                 <p class="text-xs text-muted-foreground">
                   Applied when counting rows in {selectedFacet?.label ?? 'the vendor facet'}.
                 </p>

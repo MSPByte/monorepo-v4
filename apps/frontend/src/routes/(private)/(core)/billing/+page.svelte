@@ -34,6 +34,7 @@
   import CircleCheck from '@lucide/svelte/icons/circle-check';
   import FileWarning from '@lucide/svelte/icons/file-warning';
   import Sigma from '@lucide/svelte/icons/sigma';
+  import WandSparkles from '@lucide/svelte/icons/wand-sparkles';
 
   import RuleEditorSheet from './_components/rule-editor-sheet.svelte';
   import RuleCard from './_components/rule-card.svelte';
@@ -72,9 +73,18 @@
   type ReportRow = ReportResponse['rows'][number];
   type EnrichedRow = ReportRow & { id: string };
   type Rule = NonNullable<typeof rulesQuery.data>[number];
+  type RuleCreationSeed = {
+    psaItemId: string;
+    psaItemName: string;
+    siteId: string | null;
+    siteName: string;
+    billedQuantity: number;
+    unitPrice: number;
+  };
 
   let sheetOpen = $state(false);
   let editingRule = $state<any>(null);
+  let creationSeed = $state<RuleCreationSeed | null>(null);
   let activeTab = $state('reconciliation');
 
   // Scope filters are compound and forwarded to the server as report input
@@ -190,10 +200,25 @@
 
   function openNewRule() {
     editingRule = null;
+    creationSeed = null;
     sheetOpen = true;
   }
   function openEditRule(rule: Rule) {
     editingRule = rule;
+    creationSeed = null;
+    sheetOpen = true;
+  }
+  function openRuleFromLine(row: EnrichedRow) {
+    if (!row.psaItemId || row.status !== 'missing_rule') return;
+    editingRule = null;
+    creationSeed = {
+      psaItemId: row.psaItemId,
+      psaItemName: row.psaItemName,
+      siteId: row.siteId,
+      siteName: row.siteName,
+      billedQuantity: row.billedQuantity,
+      unitPrice: row.unitPrice,
+    };
     sheetOpen = true;
   }
 
@@ -334,6 +359,13 @@
         ],
       },
       cell: statusCell,
+    },
+    {
+      key: 'createRule',
+      title: '',
+      width: '132px',
+      hideable: false,
+      cell: createRuleCell,
     },
   ]);
 
@@ -489,6 +521,23 @@
   {/if}
 {/snippet}
 
+{#snippet createRuleCell({ row }: { row: EnrichedRow; value: unknown })}
+  {#if row.status === 'missing_rule' && row.psaItemId}
+    <Button
+      size="sm"
+      variant="outline"
+      class="h-7 gap-1.5 px-2 text-xs"
+      onclick={(event) => {
+        event.stopPropagation();
+        openRuleFromLine(row);
+      }}
+    >
+      <WandSparkles class="size-3.5" />
+      Create rule
+    </Button>
+  {/if}
+{/snippet}
+
 {#snippet numberCell({ value }: { row: EnrichedRow; value: number })}
   <span class="font-mono tabular-nums">{value}</span>
 {/snippet}
@@ -637,7 +686,7 @@
   </span>
 {/snippet}
 
-<RuleEditorSheet bind:open={sheetOpen} {editingRule} {sites} {siteGroups} />
+<RuleEditorSheet bind:open={sheetOpen} {editingRule} {creationSeed} {sites} {siteGroups} />
 
 <div class="flex size-full flex-col overflow-hidden">
   <div class="flex flex-col gap-5 border-b p-6 pb-4">
