@@ -57,22 +57,20 @@
 
   // -- derived ---------------------------------------------------------------
 
-  const currentKind = $derived<ScopeKind>(
-    (prefsQuery.data?.scopeKind as ScopeKind) ?? 'all',
-  );
+  const currentKind = $derived<ScopeKind>((prefsQuery.data?.scopeKind as ScopeKind) ?? 'all');
   const currentIds = $derived<string[]>(prefsQuery.data?.scopeIds ?? []);
 
   const siteOptions = $derived(
-    (sitesQuery.data ?? []).map((s) => ({ value: s.id, label: s.name })),
+    (sitesQuery.data ?? []).map((s) => ({ value: s.id, label: s.name }))
   );
   const groupOptions = $derived(
-    (groupsQuery.data ?? []).map((g) => ({ value: g.id, label: g.name })),
+    (groupsQuery.data ?? []).map((g) => ({ value: g.id, label: g.name }))
   );
   const linkOptions = $derived(
     (linksQuery.data ?? []).map((l) => ({
       value: l.id,
       label: l.name || l.externalId || l.id,
-    })),
+    }))
   );
 
   const draftOptions = $derived(
@@ -82,18 +80,14 @@
         ? groupOptions
         : draftKind === 'links'
           ? linkOptions
-          : [],
+          : []
   );
 
   const chipLabel = $derived.by(() => {
     if (currentKind === 'all') return 'All sites';
     if (currentIds.length === 0) return `No ${currentKind}`;
     const source =
-      currentKind === 'sites'
-        ? siteOptions
-        : currentKind === 'groups'
-          ? groupOptions
-          : linkOptions;
+      currentKind === 'sites' ? siteOptions : currentKind === 'groups' ? groupOptions : linkOptions;
     if (currentIds.length === 1) {
       const match = source.find((o) => o.value === currentIds[0]);
       return match?.label ?? `1 ${trimS(currentKind)}`;
@@ -107,7 +101,7 @@
 
   const dirty = $derived(
     draftKind !== currentKind ||
-      JSON.stringify([...draftIds].sort()) !== JSON.stringify([...currentIds].sort()),
+      JSON.stringify([...draftIds].sort()) !== JSON.stringify([...currentIds].sort())
   );
 
   // -- actions ---------------------------------------------------------------
@@ -127,6 +121,7 @@
       await queryClient.invalidateQueries({ queryKey: ['reports.getMyPrefs'] });
       // Composer previews depend on scope; nudge the report cache.
       await queryClient.invalidateQueries({ queryKey: ['reports.run'] });
+      window.dispatchEvent(new CustomEvent('reports:scope-changed'));
       toast.success('Scope updated');
       open = false;
     } catch (err) {

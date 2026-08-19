@@ -6,6 +6,10 @@ import {
   userReportPrefs,
   integrationLinks,
   m365Identities,
+  m365IdentityGroups,
+  m365Groups,
+  m365Roles,
+  m365Licenses,
   m365Policies,
   m365Devices,
   sophosEndpoints,
@@ -81,26 +85,14 @@ const OPERATORS_BY_TYPE: Record<FieldDefinition['type'], readonly string[]> = {
 
 const reportFilterSchema = z.object({
   column: z.string(),
-  operator: z.enum([
-    'eq',
-    'neq',
-    'contains',
-    'gt',
-    'gte',
-    'lt',
-    'lte',
-    'is_null',
-    'is_not_null'
-  ]),
+  operator: z.enum(['eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte', 'is_null', 'is_not_null']),
   value: z.union([z.string(), z.number(), z.boolean()]).optional()
 });
 
 const reportDefinitionSchema = z.object({
   columns: z.array(z.string()).min(1),
   filters: z.array(reportFilterSchema).default([]),
-  sort: z
-    .object({ column: z.string(), direction: z.enum(['asc', 'desc']) })
-    .optional()
+  sort: z.object({ column: z.string(), direction: z.enum(['asc', 'desc']) }).optional()
 });
 
 type ReportDefinition = z.infer<typeof reportDefinitionSchema>;
@@ -126,6 +118,12 @@ function validateDefinition(shape: PolicyTableShape, def: ReportDefinition): voi
         message: `Unknown filter column "${filter.column}" for source "${shape.table}"`
       });
     }
+    if (filter.column === 'groupNames') {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'Groups can be displayed in identity reports but cannot be filtered yet'
+      });
+    }
     if (!OPERATORS_BY_TYPE[field.type].includes(filter.operator)) {
       throw new TRPCError({
         code: 'BAD_REQUEST',
@@ -134,12 +132,65 @@ function validateDefinition(shape: PolicyTableShape, def: ReportDefinition): voi
     }
   }
 
-  if (def.sort && !known.has(def.sort.column)) {
+  if (def.sort && (!known.has(def.sort.column) || def.sort.column === 'groupNames')) {
     throw new TRPCError({
       code: 'BAD_REQUEST',
       message: `Unknown sort column "${def.sort.column}" for source "${shape.table}"`
     });
   }
+}
+
+/**
+ * Identity assignments are stored as IDs so operational syncs remain stable.
+ * Reports are an executive surface, so resolve those IDs to names before the
+ * result leaves the API. This deliberately happens after SQL filtering: a
+ * definition can still filter `assignedLicenses` efficiently in the source
+ * table while exports and previews get readable values.
+ */
+async function decorateReportRows(
+  ctx: Context,
+  sourceName: string,
+  rows: Record<string, unknown>[]
+): Promise<Record<string, unknown>[]> {
+  if (sourceName !== 'm365Identities' || rows.length === 0) return rows;
+
+  const identities = rows.filter(
+    (row): row is Record<string, unknown> & { id: string } => typeof row.id === 'string'
+  );
+  const identityIds = identities.map((row) => row.id);
+  if (!identityIds.length) return rows;
+
+  const [licenses, roles, memberships] = await Promise.all([
+    ctx.db
+      .select({ externalId: m365Licenses.externalId, friendlyName: m365Licenses.friendlyName })
+      .from(m365Licenses),
+    ctx.db.select({ templateId: m365Roles.templateId, name: m365Roles.name }).from(m365Roles),
+    ctx.db
+      .select({ identityId: m365IdentityGroups.identityId, name: m365Groups.name })
+      .from(m365IdentityGroups)
+      .innerJoin(m365Groups, eq(m365IdentityGroups.groupId, m365Groups.id))
+      .where(inArray(m365IdentityGroups.identityId, identityIds))
+  ]);
+  const licenseNames = new Map(licenses.map((row) => [row.externalId, row.friendlyName]));
+  const roleNames = new Map(roles.map((row) => [row.templateId, row.name]));
+  const groupNames = new Map<string, string[]>();
+  for (const membership of memberships) {
+    groupNames.set(membership.identityId, [
+      ...(groupNames.get(membership.identityId) ?? []),
+      membership.name
+    ]);
+  }
+
+  return identities.map((row) => ({
+    ...row,
+    assignedLicenses: Array.isArray(row.assignedLicenses)
+      ? row.assignedLicenses.map((id) => licenseNames.get(String(id)) ?? String(id))
+      : row.assignedLicenses,
+    assignedRoleTemplateIds: Array.isArray(row.assignedRoleTemplateIds)
+      ? row.assignedRoleTemplateIds.map((id) => roleNames.get(String(id)) ?? String(id))
+      : row.assignedRoleTemplateIds,
+    groupNames: groupNames.get(row.id) ?? []
+  }));
 }
 
 // -- scope resolution -------------------------------------------------------
@@ -301,14 +352,12 @@ export const reportsRouter = t.router({
     return ctx.db.select().from(reports).orderBy(reports.name);
   }),
 
-  byId: authProcedure
-    .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ ctx, input }) => {
-      requireReportsRead(ctx);
-      const [row] = await ctx.db.select().from(reports).where(eq(reports.id, input.id)).limit(1);
-      if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found' });
-      return row;
-    }),
+  byId: authProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ ctx, input }) => {
+    requireReportsRead(ctx);
+    const [row] = await ctx.db.select().from(reports).where(eq(reports.id, input.id)).limit(1);
+    if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found' });
+    return row;
+  }),
 
   save: authProcedure.input(saveReportInput).mutation(async ({ ctx, input }) => {
     requireReportsWrite(ctx);
@@ -403,14 +452,18 @@ export const reportsRouter = t.router({
     const prefs = await loadPrefs(ctx);
     const scope = await resolveScope(
       ctx,
-      prefs
-        ? { scopeKind: prefs.scopeKind, scopeIds: prefs.scopeIds ?? [] }
-        : null,
+      prefs ? { scopeKind: prefs.scopeKind, scopeIds: prefs.scopeIds ?? [] } : null,
       input.adhocScope
     );
 
     if (scope.kind === 'empty') {
-      return { rows: [], total: 0, page: input.table.page, pageSize: input.table.pageSize, pageCount: 0 };
+      return {
+        rows: [],
+        total: 0,
+        page: input.table.page,
+        pageSize: input.table.pageSize,
+        pageCount: 0
+      };
     }
 
     const scopeWhere = await buildScopeWhere(ctx, entry.shape, scope);
@@ -425,7 +478,16 @@ export const reportsRouter = t.router({
       ? { column: definition.sort.column, direction: definition.sort.direction }
       : undefined;
 
-    return queryTableData(ctx.db, entry.table, merged, undefined, defaultSort, undefined, scopeWhere);
+    const result = await queryTableData<Record<string, unknown>>(
+      ctx.db,
+      entry.table,
+      merged,
+      undefined,
+      defaultSort,
+      undefined,
+      scopeWhere
+    );
+    return { ...result, rows: await decorateReportRows(ctx, sourceName, result.rows) };
   }),
 
   getMyPrefs: authProcedure.query(async ({ ctx }) => {

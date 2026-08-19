@@ -52,6 +52,19 @@ export const M365IdentitiesShape: SchemaFields = {
     ingestPath: 'mfaEnforced',
     required: false
   },
+  assignedLicenses: {
+    label: 'Licenses',
+    type: 'string',
+    modality: 'array',
+    trackable: true,
+    ingestPath: 'assignedLicenses',
+    required: false,
+    reference: {
+      table: 'm365Licenses',
+      valueColumn: 'externalId',
+      labelColumn: 'friendlyName'
+    }
+  },
   assignedRoleTemplateIds: {
     label: 'Assigned Roles',
     type: 'string',
@@ -64,6 +77,14 @@ export const M365IdentitiesShape: SchemaFields = {
       valueColumn: 'templateId',
       labelColumn: 'name'
     }
+  },
+  groupNames: {
+    label: 'Groups',
+    type: 'string',
+    modality: 'array',
+    trackable: false,
+    ingestPath: 'groupNames',
+    required: false
   }
 };
 

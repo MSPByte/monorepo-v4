@@ -1,10 +1,30 @@
+<script module lang="ts">
+  function formatCell(value: unknown): string {
+    if (value == null) return '—';
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (Array.isArray(value)) return value.length === 0 ? '—' : value.join(', ');
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+  }
+</script>
+
 <script lang="ts">
   import { getContext } from 'svelte';
+  import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
-  import { ArrowLeft, Plus, Save, Trash2 } from '@lucide/svelte';
+  import {
+    ArrowLeft,
+    ChevronLeft,
+    ChevronRight,
+    Download,
+    Play,
+    Plus,
+    Save,
+    Trash2,
+  } from '@lucide/svelte';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import type { FieldDefinition, SchemaFields } from '@mspbyte/shared';
@@ -17,10 +37,12 @@
   import { Badge } from '$lib/components/ui/badge/index.js';
   import SingleSelect from '$lib/components/single-select.svelte';
   import { showErrorToast } from '$lib/utils/errors';
+  import ScopeBar from '../_components/scope-bar.svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
   const canWrite = $derived(authStore.isAllowed('Reports.Write'));
+  const canDelete = $derived(authStore.isAllowed('Reports.Delete'));
 
   const reportId = $derived(page.url.searchParams.get('id') ?? '');
   const editing = $derived(Boolean(reportId));
@@ -81,6 +103,8 @@
   let running = $state(false);
   let runError = $state<string | null>(null);
   let lastRunSignature = $state('');
+  let resultPage = $state(1);
+  let exporting = $state(false);
 
   // -- queries ---------------------------------------------------------------
 
@@ -102,14 +126,17 @@
   const currentSource = $derived<SourceMeta | undefined>(sources.find((s) => s.table === source));
   const shape = $derived<SchemaFields | undefined>(currentSource?.shape);
   const shapeEntries = $derived<Array<[string, FieldDefinition]>>(
-    shape ? Object.entries(shape) : [],
+    shape ? Object.entries(shape) : []
   );
+  const filterEntries = $derived(shapeEntries.filter(([key]) => key !== 'groupNames'));
 
   const sortColumnOptions = $derived(
-    selectedColumns.map((k) => ({
-      value: k,
-      label: shape?.[k]?.label ?? k,
-    })),
+    selectedColumns
+      .filter((k) => k !== 'groupNames')
+      .map((k) => ({
+        value: k,
+        label: shape?.[k]?.label ?? k,
+      }))
   );
 
   // -- hydration -------------------------------------------------------------
@@ -164,8 +191,33 @@
         .filter((f) => validFilter(f))
         .map((f) => ({ column: f.column, operator: f.operator, value: coerceValue(f) })),
       sort: sortColumn ? { column: sortColumn, direction: sortDirection } : undefined,
-    }),
+    })
   );
+
+  const pageCount = $derived(Math.max(1, Math.ceil(resultTotal / 50)));
+  const canPreviousPage = $derived(resultPage > 1 && !running);
+  const canNextPage = $derived(resultPage < pageCount && !running);
+
+  function reportDefinition() {
+    return {
+      columns: selectedColumns,
+      filters: filters.filter(validFilter).map((f) => ({
+        column: f.column,
+        operator: f.operator as
+          | 'eq'
+          | 'neq'
+          | 'contains'
+          | 'gt'
+          | 'gte'
+          | 'lt'
+          | 'lte'
+          | 'is_null'
+          | 'is_not_null',
+        value: coerceValue(f),
+      })),
+      sort: sortColumn ? { column: sortColumn, direction: sortDirection } : undefined,
+    };
+  }
 
   function validFilter(f: FilterRow): boolean {
     if (!f.column || !f.operator) return false;
@@ -185,6 +237,16 @@
   }
 
   let runTimer: ReturnType<typeof setTimeout> | null = null;
+  onMount(() => {
+    const refreshForScope = () => {
+      resultPage = 1;
+      lastRunSignature = '';
+      void runReport(1);
+    };
+    window.addEventListener('reports:scope-changed', refreshForScope);
+    return () => window.removeEventListener('reports:scope-changed', refreshForScope);
+  });
+
   $effect(() => {
     // Track the signature so effect re-fires on any composition change.
     const sig = definitionSignature;
@@ -196,6 +258,7 @@
       return;
     }
     if (sig === lastRunSignature) return;
+    resultPage = 1;
     if (runTimer) clearTimeout(runTimer);
     runTimer = setTimeout(() => {
       lastRunSignature = sig;
@@ -203,40 +266,20 @@
     }, 350);
   });
 
-  async function runReport() {
+  async function runReport(pageToLoad = resultPage) {
     if (!source || selectedColumns.length === 0) return;
     running = true;
     runError = null;
     try {
       const result = await trpc.reports.run.mutate({
         source,
-        definition: {
-          columns: selectedColumns,
-          filters: filters
-            .filter(validFilter)
-            .map((f) => ({
-              column: f.column,
-              operator: f.operator as
-                | 'eq'
-                | 'neq'
-                | 'contains'
-                | 'gt'
-                | 'gte'
-                | 'lt'
-                | 'lte'
-                | 'is_null'
-                | 'is_not_null',
-              value: coerceValue(f),
-            })),
-          sort: sortColumn ? { column: sortColumn, direction: sortDirection } : undefined,
-        },
-        table: { page: 1, pageSize: 50, filters: [] },
+        definition: reportDefinition(),
+        table: { page: pageToLoad, pageSize: 50, filters: [] },
       });
       resultRows = result.rows as ResultRow[];
       resultTotal = result.total;
     } catch (err) {
-      runError =
-        err instanceof Error ? err.message : 'Report failed to run. Check the definition.';
+      runError = err instanceof Error ? err.message : 'Report failed to run. Check the definition.';
       resultRows = [];
       resultTotal = 0;
     } finally {
@@ -244,10 +287,53 @@
     }
   }
 
+  async function changePage(nextPage: number) {
+    if (nextPage < 1 || nextPage > pageCount || running) return;
+    resultPage = nextPage;
+    await runReport(nextPage);
+  }
+
+  function csvValue(value: unknown): string {
+    const text = formatCell(value);
+    return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  }
+
+  async function exportCsv() {
+    if (!source || selectedColumns.length === 0) return;
+    exporting = true;
+    try {
+      const result = await trpc.reports.run.mutate({
+        source,
+        definition: reportDefinition(),
+        table: { page: 1, pageSize: 1000, filters: [] },
+      });
+      const headers = selectedColumns.map((key) => csvValue(shape?.[key]?.label ?? key));
+      const lines = (result.rows as ResultRow[]).map((row) =>
+        selectedColumns.map((key) => csvValue(row[key])).join(',')
+      );
+      const blob = new Blob([[headers.join(','), ...lines].join('\n')], {
+        type: 'text/csv;charset=utf-8;',
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${(name.trim() || 'report').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast.success(
+        `Exported ${result.rows.length.toLocaleString()} row${result.rows.length === 1 ? '' : 's'}`
+      );
+    } catch (err) {
+      showErrorToast(err, 'Failed to export CSV');
+    } finally {
+      exporting = false;
+    }
+  }
+
   // -- filters ---------------------------------------------------------------
 
   function addFilter() {
-    const first = shapeEntries[0];
+    const first = filterEntries[0];
     if (!first) return;
     const [col, def] = first;
     filters = [
@@ -264,7 +350,7 @@
     const def = shape?.[column];
     if (!def) return;
     filters = filters.map((f) =>
-      f.id === id ? { ...f, column, operator: OPERATORS_BY_TYPE[def.type][0], value: '' } : f,
+      f.id === id ? { ...f, column, operator: OPERATORS_BY_TYPE[def.type][0], value: '' } : f
     );
   }
 
@@ -302,24 +388,7 @@
         name: name.trim(),
         description: description.trim() || null,
         source,
-        definition: {
-          columns: selectedColumns,
-          filters: filters.filter(validFilter).map((f) => ({
-            column: f.column,
-            operator: f.operator as
-              | 'eq'
-              | 'neq'
-              | 'contains'
-              | 'gt'
-              | 'gte'
-              | 'lt'
-              | 'lte'
-              | 'is_null'
-              | 'is_not_null',
-            value: coerceValue(f),
-          })),
-          sort: sortColumn ? { column: sortColumn, direction: sortDirection } : undefined,
-        },
+        definition: reportDefinition(),
       });
       toast.success(editing ? 'Report saved' : 'Report created');
       await queryClient.invalidateQueries({ queryKey: ['reports.list'] });
@@ -361,12 +430,13 @@
       </div>
     </div>
     <div class="flex items-center gap-2">
-      {#if editing && canWrite}
+      {#if editing && canDelete}
         <Button variant="ghost" size="sm" class="gap-2" disabled={deleting} onclick={del}>
           <Trash2 class="size-4" />
           Delete
         </Button>
       {/if}
+      <ScopeBar />
       {#if canWrite}
         <Button size="sm" class="gap-2" disabled={saving} onclick={save}>
           <Save class="size-4" />
@@ -470,7 +540,7 @@
                     value={f.column}
                     onchange={(e) => updateFilterColumn(f.id, e.currentTarget.value)}
                   >
-                    {#each shapeEntries as [key, sdef] (key)}
+                    {#each filterEntries as [key, sdef] (key)}
                       <option value={key}>{sdef.label}</option>
                     {/each}
                   </select>
@@ -561,11 +631,33 @@
             {/if}
           </span>
         </div>
-        {#if currentSource?.providerId}
-          <Badge variant="outline" class="font-mono text-[10px] uppercase">
-            {currentSource.providerId}
-          </Badge>
-        {/if}
+        <div class="flex items-center gap-2">
+          {#if currentSource?.providerId}
+            <Badge variant="outline" class="font-mono text-[10px] uppercase">
+              {currentSource.providerId}
+            </Badge>
+          {/if}
+          <Button
+            variant="outline"
+            size="sm"
+            class="h-7 gap-1.5 text-xs"
+            disabled={!source || selectedColumns.length === 0 || running}
+            onclick={() => runReport()}
+          >
+            <Play class="size-3" />
+            Refresh
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            class="h-7 gap-1.5 text-xs"
+            disabled={!source || selectedColumns.length === 0 || exporting}
+            onclick={exportCsv}
+          >
+            <Download class="size-3" />
+            {exporting ? 'Exporting…' : 'CSV'}
+          </Button>
+        </div>
       </div>
 
       <div class="flex min-h-0 flex-1 flex-col">
@@ -618,18 +710,43 @@
               </tbody>
             </table>
           </div>
+          {#if resultTotal > 0}
+            <div class="flex items-center justify-between border-t px-4 py-2">
+              <span class="text-muted-foreground text-xs">
+                Showing {((resultPage - 1) * 50 + 1).toLocaleString()}–{Math.min(
+                  resultPage * 50,
+                  resultTotal
+                ).toLocaleString()} of {resultTotal.toLocaleString()}
+              </span>
+              <div class="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="size-7"
+                  disabled={!canPreviousPage}
+                  onclick={() => changePage(resultPage - 1)}
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft class="size-4" />
+                </Button>
+                <span class="text-muted-foreground min-w-16 text-center text-xs"
+                  >Page {resultPage} / {pageCount}</span
+                >
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="size-7"
+                  disabled={!canNextPage}
+                  onclick={() => changePage(resultPage + 1)}
+                  aria-label="Next page"
+                >
+                  <ChevronRight class="size-4" />
+                </Button>
+              </div>
+            </div>
+          {/if}
         {/if}
       </div>
     </section>
   </div>
 </div>
-
-<script module lang="ts">
-  function formatCell(value: unknown): string {
-    if (value == null) return '—';
-    if (typeof value === 'boolean') return value ? 'true' : 'false';
-    if (Array.isArray(value)) return value.length === 0 ? '—' : value.join(', ');
-    if (typeof value === 'object') return JSON.stringify(value);
-    return String(value);
-  }
-</script>
