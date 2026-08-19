@@ -17,6 +17,8 @@
   import { toast } from 'svelte-sonner';
   import {
     ArrowLeft,
+    ArrowDown,
+    ArrowUp,
     ChevronLeft,
     ChevronRight,
     Download,
@@ -36,6 +38,8 @@
   import { Checkbox } from '$lib/components/ui/checkbox/index.js';
   import { Badge } from '$lib/components/ui/badge/index.js';
   import SingleSelect from '$lib/components/single-select.svelte';
+  import MultiSelect from '$lib/components/multi-select.svelte';
+  import { OPERATOR_LABELS } from '$lib/components/data-table';
   import { showErrorToast } from '$lib/utils/errors';
   import ScopeBar from '../_components/scope-bar.svelte';
 
@@ -52,13 +56,14 @@
     label: string;
     providerId: string | null;
     shape: SchemaFields;
+    licenseRequirements?: Array<{ value: string; label: string; description: string }>;
   };
 
   type FilterRow = {
     id: number;
     column: string;
     operator: string;
-    value: string;
+    value: string | string[];
   };
 
   type ResultRow = Record<string, unknown> & { id?: string };
@@ -71,16 +76,12 @@
     object: ['is_null', 'is_not_null'],
   };
 
-  const OPERATOR_LABEL: Record<string, string> = {
-    eq: 'is',
-    neq: 'is not',
-    contains: 'contains',
-    gt: '>',
-    gte: '≥',
-    lt: '<',
-    lte: '≤',
-    is_null: 'is empty',
-    is_not_null: 'is not empty',
+  const REPORT_OPERATOR_LABELS: Record<string, string> = {
+    ...OPERATOR_LABELS,
+    has_requirement: 'Has coverage for',
+    lacks_requirement: 'Is missing coverage for',
+    has_any_of: 'Contains any of',
+    lacks_any_of: 'Contains none of',
   };
 
   // -- state -----------------------------------------------------------------
@@ -118,6 +119,13 @@
     queryKey: ['reports.byId', reportId],
     queryFn: () => (reportId ? trpc.reports.byId.query({ id: reportId }) : Promise.resolve(null)),
   }));
+  const licenseOptionsQuery = createQuery(() => ({
+    queryKey: ['reports.listFilterValues', source],
+    queryFn: () =>
+      trpc.reports.listFilterValues.query({ source: 'm365Identities', column: 'assignedLicenses' }),
+    enabled: source === 'm365Identities',
+    staleTime: 5 * 60_000,
+  }));
 
   // -- derived ---------------------------------------------------------------
 
@@ -129,6 +137,7 @@
     shape ? Object.entries(shape) : []
   );
   const filterEntries = $derived(shapeEntries.filter(([key]) => key !== 'groupNames'));
+  const licenseOptions = $derived(licenseOptionsQuery.data ?? []);
 
   const sortColumnOptions = $derived(
     selectedColumns
@@ -212,20 +221,39 @@
           | 'lt'
           | 'lte'
           | 'is_null'
-          | 'is_not_null',
+          | 'is_not_null'
+          | 'has_requirement'
+          | 'lacks_requirement'
+          | 'has_any_of'
+          | 'lacks_any_of',
         value: coerceValue(f),
       })),
       sort: sortColumn ? { column: sortColumn, direction: sortDirection } : undefined,
     };
   }
 
+  function operatorsFor(column: string, type: FieldDefinition['type']): readonly string[] {
+    const base = OPERATORS_BY_TYPE[type];
+    return column === 'assignedLicenses' && licenseOptions.length
+      ? [...base, 'has_any_of', 'lacks_any_of']
+      : base;
+  }
+
+  function isRequirementOperator(operator: string) {
+    return operator === 'has_requirement' || operator === 'lacks_requirement';
+  }
+
+  function isLicenseSetOperator(operator: string) {
+    return operator === 'has_any_of' || operator === 'lacks_any_of';
+  }
+
   function validFilter(f: FilterRow): boolean {
     if (!f.column || !f.operator) return false;
     if (f.operator === 'is_null' || f.operator === 'is_not_null') return true;
-    return f.value !== '';
+    return Array.isArray(f.value) ? f.value.length > 0 : f.value !== '';
   }
 
-  function coerceValue(f: FilterRow): string | number | boolean | undefined {
+  function coerceValue(f: FilterRow): string | string[] | number | boolean | undefined {
     if (f.operator === 'is_null' || f.operator === 'is_not_null') return undefined;
     const field = shape?.[f.column];
     if (field?.type === 'boolean') return f.value === 'true';
@@ -338,7 +366,7 @@
     const [col, def] = first;
     filters = [
       ...filters,
-      { id: filterUid++, column: col, operator: OPERATORS_BY_TYPE[def.type][0], value: '' },
+      { id: filterUid++, column: col, operator: operatorsFor(col, def.type)[0], value: '' },
     ];
   }
 
@@ -350,7 +378,17 @@
     const def = shape?.[column];
     if (!def) return;
     filters = filters.map((f) =>
-      f.id === id ? { ...f, column, operator: OPERATORS_BY_TYPE[def.type][0], value: '' } : f
+      f.id === id ? { ...f, column, operator: operatorsFor(column, def.type)[0], value: '' } : f
+    );
+  }
+
+  function updateFilterValue(id: number, value: string | string[]) {
+    filters = filters.map((filter) => (filter.id === id ? { ...filter, value } : filter));
+  }
+
+  function updateFilterOperator(id: number, operator: string) {
+    filters = filters.map((filter) =>
+      filter.id === id ? { ...filter, operator, value: '' } : filter
     );
   }
 
@@ -363,6 +401,15 @@
     } else {
       selectedColumns = [...selectedColumns, key];
     }
+  }
+
+  function moveColumn(key: string, direction: -1 | 1) {
+    const index = selectedColumns.indexOf(key);
+    const nextIndex = index + direction;
+    if (index < 0 || nextIndex < 0 || nextIndex >= selectedColumns.length) return;
+    const next = [...selectedColumns];
+    [next[index], next[nextIndex]] = [next[nextIndex]!, next[index]!];
+    selectedColumns = next;
   }
 
   // -- save / delete ---------------------------------------------------------
@@ -449,8 +496,10 @@
   <!-- Two-pane composer -->
   <div class="flex min-h-0 flex-1">
     <!-- Left: composition -->
-    <aside class="flex w-[380px] shrink-0 flex-col gap-5 overflow-y-auto border-r p-5">
-      <div class="space-y-2">
+    <aside
+      class="bg-muted/[0.015] flex w-[440px] shrink-0 flex-col gap-5 overflow-y-auto border-r p-5"
+    >
+      <div class="space-y-2 border-t pt-5">
         <Label for="report-name">Name</Label>
         <Input id="report-name" bind:value={name} placeholder="Licensed M365 users" />
       </div>
@@ -476,9 +525,14 @@
       </div>
 
       <!-- Columns -->
-      <div class="space-y-2">
+      <div class="space-y-2 border-t pt-5">
         <div class="flex items-baseline justify-between">
-          <Label>Columns</Label>
+          <div>
+            <Label>Columns</Label>
+            <p class="text-muted-foreground mt-0.5 text-xs">
+              The order here is the order in the preview and export.
+            </p>
+          </div>
           <span class="text-muted-foreground text-xs">
             {selectedColumns.length} of {shapeEntries.length}
           </span>
@@ -486,34 +540,99 @@
         {#if !shape}
           <p class="text-muted-foreground text-xs">Pick a source to choose columns.</p>
         {:else}
-          <div class="rounded-md border">
-            <ul class="max-h-64 divide-y overflow-y-auto">
-              {#each shapeEntries as [key, def] (key)}
-                <li class="flex items-center gap-2 px-3 py-2">
-                  <Checkbox
-                    id={`col-${key}`}
-                    checked={selectedColumns.includes(key)}
-                    onCheckedChange={() => toggleColumn(key)}
-                  />
-                  <label for={`col-${key}`} class="flex-1 cursor-pointer text-sm">
-                    {def.label}
-                  </label>
-                  <span
-                    class="text-muted-foreground font-mono text-[10px] uppercase tracking-wider"
-                  >
-                    {def.type}
-                  </span>
-                </li>
-              {/each}
-            </ul>
+          <div class="space-y-3">
+            {#if selectedColumns.length > 0}
+              <div class="overflow-hidden rounded-lg border bg-background shadow-sm">
+                <div
+                  class="bg-muted/40 border-b px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
+                >
+                  Report column order
+                </div>
+                <ul class="divide-y">
+                  {#each selectedColumns as key, index (key)}
+                    {@const def = shape[key]}
+                    <li class="flex items-center gap-2 px-3 py-2">
+                      <span class="text-muted-foreground w-4 text-center text-xs tabular-nums"
+                        >{index + 1}</span
+                      >
+                      <span class="min-w-0 flex-1 truncate text-sm font-medium"
+                        >{def?.label ?? key}</span
+                      >
+                      <div class="flex shrink-0 items-center gap-0.5">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          class="size-6"
+                          disabled={index === 0}
+                          onclick={() => moveColumn(key, -1)}
+                          aria-label={`Move ${def?.label ?? key} up`}
+                        >
+                          <ArrowUp class="size-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          class="size-6"
+                          disabled={index === selectedColumns.length - 1}
+                          onclick={() => moveColumn(key, 1)}
+                          aria-label={`Move ${def?.label ?? key} down`}
+                        >
+                          <ArrowDown class="size-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          class="size-6"
+                          onclick={() => toggleColumn(key)}
+                          aria-label={`Remove ${def?.label ?? key}`}
+                        >
+                          <Trash2 class="size-3.5" />
+                        </Button>
+                      </div>
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
+            <div class="overflow-hidden rounded-lg border">
+              <div
+                class="bg-muted/40 border-b px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
+              >
+                Available columns
+              </div>
+              <ul class="max-h-48 divide-y overflow-y-auto">
+                {#each shapeEntries.filter(([key]) => !selectedColumns.includes(key)) as [key, def] (key)}
+                  <li class="flex items-center gap-2 px-3 py-2">
+                    <Checkbox
+                      id={`col-${key}`}
+                      checked={false}
+                      onCheckedChange={() => toggleColumn(key)}
+                    />
+                    <label for={`col-${key}`} class="flex-1 cursor-pointer text-sm">
+                      {def.label}
+                    </label>
+                    <span
+                      class="text-muted-foreground font-mono text-[10px] uppercase tracking-wider"
+                    >
+                      {def.type}
+                    </span>
+                  </li>
+                {/each}
+              </ul>
+            </div>
           </div>
         {/if}
       </div>
 
       <!-- Filters -->
-      <div class="space-y-2">
+      <div class="space-y-3 border-t pt-5">
         <div class="flex items-baseline justify-between">
-          <Label>Filters</Label>
+          <div>
+            <Label>Filters</Label>
+            <p class="text-muted-foreground mt-0.5 text-xs">
+              Each condition narrows the result set.
+            </p>
+          </div>
           <Button
             variant="ghost"
             size="sm"
@@ -528,62 +647,82 @@
         {#if filters.length === 0}
           <p class="text-muted-foreground text-xs">No filters. All rows returned.</p>
         {:else}
-          <div class="space-y-2">
+          <div class="space-y-3">
             {#each filters as f (f.id)}
               {@const def = shape?.[f.column]}
-              {@const ops = def ? OPERATORS_BY_TYPE[def.type] : []}
+              {@const ops = def ? operatorsFor(f.column, def.type) : []}
               {@const needsValue = f.operator !== 'is_null' && f.operator !== 'is_not_null'}
-              <div class="space-y-1 rounded-md border p-2">
-                <div class="flex items-center gap-1">
-                  <select
-                    class="border-input bg-background flex-1 rounded-md border px-2 py-1 text-xs"
-                    value={f.column}
-                    onchange={(e) => updateFilterColumn(f.id, e.currentTarget.value)}
-                  >
-                    {#each filterEntries as [key, sdef] (key)}
-                      <option value={key}>{sdef.label}</option>
-                    {/each}
-                  </select>
+              <div class="bg-background space-y-2 rounded-lg border p-3 shadow-sm">
+                <div class="flex min-w-0 items-center gap-2">
+                  <SingleSelect
+                    class="h-8 min-w-0 flex-1 text-xs"
+                    options={filterEntries.map(([key, field]) => ({
+                      value: key,
+                      label: field.label,
+                    }))}
+                    selected={f.column}
+                    onchange={(value) => updateFilterColumn(f.id, value)}
+                    placeholder="Field"
+                  />
                   <Button
                     variant="ghost"
                     size="icon"
-                    class="size-6"
+                    class="size-7 shrink-0"
                     onclick={() => removeFilter(f.id)}
                   >
                     <Trash2 class="size-3" />
                   </Button>
                 </div>
-                <div class="flex items-center gap-1">
-                  <select
-                    class="border-input bg-background rounded-md border px-2 py-1 text-xs"
-                    bind:value={f.operator}
-                  >
-                    {#each ops as op}
-                      <option value={op}>{OPERATOR_LABEL[op] ?? op}</option>
-                    {/each}
-                  </select>
+                <div class="grid min-w-0 grid-cols-[9rem_minmax(0,1fr)] gap-2">
+                  <SingleSelect
+                    class="h-8 w-full text-xs"
+                    options={ops.map((op) => ({
+                      value: op,
+                      label: REPORT_OPERATOR_LABELS[op] ?? op,
+                    }))}
+                    selected={f.operator}
+                    onchange={(value) => updateFilterOperator(f.id, value)}
+                    placeholder="Operator"
+                  />
                   {#if needsValue}
-                    {#if def?.type === 'boolean'}
-                      <select
-                        class="border-input bg-background flex-1 rounded-md border px-2 py-1 text-xs"
-                        bind:value={f.value}
-                      >
-                        <option value="true">true</option>
-                        <option value="false">false</option>
-                      </select>
+                    {#if isLicenseSetOperator(f.operator)}
+                      <MultiSelect
+                        options={licenseOptions}
+                        selected={Array.isArray(f.value) ? f.value : []}
+                        onchange={(values) => updateFilterValue(f.id, values)}
+                        placeholder="Choose acceptable licenses…"
+                        searchPlaceholder="Search licenses…"
+                        loading={licenseOptionsQuery.isLoading}
+                      />
+                    {:else if isRequirementOperator(f.operator)}
+                      <p class="text-muted-foreground flex-1 px-1 text-xs">
+                        Legacy coverage filter
+                      </p>
+                    {:else if def?.type === 'boolean'}
+                      <SingleSelect
+                        class="h-8 w-full text-xs"
+                        options={[
+                          { value: 'true', label: 'True' },
+                          { value: 'false', label: 'False' },
+                        ]}
+                        selected={typeof f.value === 'string' ? f.value : ''}
+                        onchange={(value) => updateFilterValue(f.id, value)}
+                        placeholder="Choose value"
+                      />
                     {:else if def?.type === 'enum' && def.options?.length}
-                      <select
-                        class="border-input bg-background flex-1 rounded-md border px-2 py-1 text-xs"
-                        bind:value={f.value}
-                      >
-                        <option value="">—</option>
-                        {#each def.options as opt}
-                          <option value={String(opt.value)}>{opt.label}</option>
-                        {/each}
-                      </select>
+                      <SingleSelect
+                        class="h-8 w-full text-xs"
+                        options={def.options.map((opt) => ({
+                          value: String(opt.value),
+                          label: opt.label,
+                        }))}
+                        selected={typeof f.value === 'string' ? f.value : ''}
+                        onchange={(value) => updateFilterValue(f.id, value)}
+                        placeholder="Choose value"
+                      />
                     {:else}
                       <Input
-                        class="h-7 flex-1 text-xs"
+                        class="h-8 w-full text-xs"
                         type={def?.type === 'number' ? 'number' : 'text'}
                         bind:value={f.value}
                         placeholder="value"
@@ -591,6 +730,12 @@
                     {/if}
                   {/if}
                 </div>
+                {#if isLicenseSetOperator(f.operator)}
+                  <p class="text-muted-foreground px-0.5 text-[11px]">
+                    Choose the SKUs your team considers acceptable. The identity matches if it has
+                    any selected license.
+                  </p>
+                {/if}
               </div>
             {/each}
           </div>
@@ -598,7 +743,7 @@
       </div>
 
       <!-- Sort -->
-      <div class="space-y-2">
+      <div class="space-y-2 border-t pt-5">
         <Label>Sort by</Label>
         <div class="flex gap-2">
           <div class="flex-1">
@@ -608,14 +753,15 @@
               placeholder="None"
             />
           </div>
-          <select
-            class="border-input bg-background rounded-md border px-2 py-1 text-sm"
-            bind:value={sortDirection}
+          <SingleSelect
+            class="h-9 w-28 text-sm"
+            options={[
+              { value: 'asc', label: 'Ascending' },
+              { value: 'desc', label: 'Descending' },
+            ]}
+            bind:selected={sortDirection}
             disabled={!sortColumn}
-          >
-            <option value="asc">asc</option>
-            <option value="desc">desc</option>
-          </select>
+          />
         </div>
       </div>
     </aside>

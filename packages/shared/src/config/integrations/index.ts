@@ -1,38 +1,35 @@
-import { M365_INTEGRATION_CONFIG } from "./microsoft-365/index.js";
-import { SOPHOS_PARTNER_CONFIG } from "./sophos-partner/index.js";
-import { DATTO_RMM_CONFIG } from "./dattormm/index.js";
-import { COVE_CONFIG } from "./cove/index.js";
-import { MSPAGENT_CONFIG } from "./mspagent/index.js";
-import { HALOPSA_CONFIG } from "./halopsa/index.js";
-import type {
-  Integration,
-  DbRoute,
-  IngestTypeConfig,
-} from "../../types/integration.js";
-import { ProviderFacet } from "../../types/provider.js";
-import type { ProviderId } from "../../types/provider.js";
-import type { SchemaFields } from "../../types/schema-registry.js";
+import { M365_INTEGRATION_CONFIG } from './microsoft-365/index.js';
+import { SOPHOS_PARTNER_CONFIG } from './sophos-partner/index.js';
+import { DATTO_RMM_CONFIG } from './dattormm/index.js';
+import { COVE_CONFIG } from './cove/index.js';
+import { MSPAGENT_CONFIG } from './mspagent/index.js';
+import { HALOPSA_CONFIG } from './halopsa/index.js';
+import type { Integration, DbRoute, IngestTypeConfig } from '../../types/integration.js';
+import { ProviderFacet } from '../../types/provider.js';
+import type { ProviderId } from '../../types/provider.js';
+import type { SchemaFields } from '../../types/schema-registry.js';
 
-export { M365_INTEGRATION_CONFIG } from "./microsoft-365/index.js";
-export { M365PoliciesShape } from "./microsoft-365/policies.js";
+export { M365_INTEGRATION_CONFIG } from './microsoft-365/index.js';
+export { M365PoliciesShape } from './microsoft-365/policies.js';
 export {
   CAPABILITY_PLANS,
   CONSENT_VERSION,
-  REQUIRED_DIRECTORY_ROLES,
-} from "./microsoft-365/index.js";
-export { SOPHOS_PARTNER_CONFIG } from "./sophos-partner/index.js";
-export { DATTO_RMM_CONFIG } from "./dattormm/index.js";
-export { COVE_CONFIG } from "./cove/index.js";
-export { MSPAGENT_CONFIG } from "./mspagent/index.js";
-export { HALOPSA_CONFIG } from "./halopsa/index.js";
+  M365_LICENSE_REQUIREMENTS,
+  REQUIRED_DIRECTORY_ROLES
+} from './microsoft-365/index.js';
+export { SOPHOS_PARTNER_CONFIG } from './sophos-partner/index.js';
+export { DATTO_RMM_CONFIG } from './dattormm/index.js';
+export { COVE_CONFIG } from './cove/index.js';
+export { MSPAGENT_CONFIG } from './mspagent/index.js';
+export { HALOPSA_CONFIG } from './halopsa/index.js';
 
 export const INTEGRATIONS: Record<ProviderId, Integration> = {
-  "microsoft-365": M365_INTEGRATION_CONFIG,
-  "sophos-partner": SOPHOS_PARTNER_CONFIG,
+  'microsoft-365': M365_INTEGRATION_CONFIG,
+  'sophos-partner': SOPHOS_PARTNER_CONFIG,
   dattormm: DATTO_RMM_CONFIG,
   cove: COVE_CONFIG,
   mspagent: MSPAGENT_CONFIG,
-  halopsa: HALOPSA_CONFIG,
+  halopsa: HALOPSA_CONFIG
 };
 
 export function getIntegration(id: ProviderId): Integration {
@@ -50,8 +47,8 @@ export function getAllDbRoutedFacets(): {
       .map((t) => ({
         providerId: integration.id,
         facet: t.facet,
-        db: t.db,
-      })),
+        db: t.db
+      }))
   );
 }
 
@@ -80,12 +77,10 @@ export function getFacetShape(facet: ProviderFacet): SchemaFields {
 }
 
 export function getFacetByTable(
-  table: string,
+  table: string
 ): { providerId: ProviderId; facet: ProviderFacet; db: DbRoute } | undefined {
   for (const integration of Object.values(INTEGRATIONS)) {
-    const found = integration.supportedFacets.find(
-      (f) => f.db?.table === table,
-    );
+    const found = integration.supportedFacets.find((f) => f.db?.table === table);
     if (found?.db) {
       return { providerId: integration.id, facet: found.facet, db: found.db };
     }

@@ -33,6 +33,28 @@ export const CAPABILITY_PLANS: Record<MSGraphCapabilities, string[]> = {
   identityProtection: ['AAD_PREMIUM_P2']
 };
 
+/** Human-facing coverage checks. Any SKU containing one of these plans qualifies. */
+export const M365_LICENSE_REQUIREMENTS = [
+  {
+    value: 'conditionalAccess',
+    label: 'Entra ID P1 or P2 (Conditional Access)',
+    description: 'Any license that includes Conditional Access entitlement',
+    servicePlans: CAPABILITY_PLANS.conditionalAccess
+  },
+  {
+    value: 'identityProtection',
+    label: 'Entra ID P2 (Identity Protection)',
+    description: 'Any license that includes Identity Protection entitlement',
+    servicePlans: CAPABILITY_PLANS.identityProtection
+  },
+  {
+    value: 'signInActivity',
+    label: 'Entra ID P1 or P2 (Sign-in activity)',
+    description: 'Any license that includes sign-in activity entitlement',
+    servicePlans: CAPABILITY_PLANS.signInActivity
+  }
+] as const;
+
 export const M365_BLOAT_LICENSES = [
   'MCOPSTNC',
   'POWER_BI_STANDARD',

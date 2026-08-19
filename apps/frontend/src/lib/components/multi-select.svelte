@@ -70,7 +70,7 @@
     const matches = options.filter(
       (opt) =>
         opt.label.toLowerCase().includes(needle) ||
-        (opt.subLabel?.toLowerCase().includes(needle) ?? false),
+        (opt.subLabel?.toLowerCase().includes(needle) ?? false)
     );
     const selectedMatches = matches.filter((o) => selected.includes(o.value));
     const unselectedMatches = matches.filter((o) => !selected.includes(o.value));
@@ -123,7 +123,11 @@
       </Button>
     {/snippet}
   </Popover.Trigger>
-  <Popover.Content class="w-[var(--bits-popover-anchor-width)] p-0" align="start">
+  <Popover.Content
+    class="w-[min(32rem,calc(100vw-2rem))] min-w-[22rem] p-0"
+    align="start"
+    sideOffset={6}
+  >
     <Command.Root shouldFilter={false}>
       <Command.Input placeholder={searchPlaceholder} bind:value={search} />
       {#if loading && filteredOptions.length === 0}
@@ -152,9 +156,11 @@
                 <Check class="h-4 w-4" />
               </div>
               <div class="flex min-w-0 flex-col">
-                <span class="truncate">{option.label}</span>
+                <span class="whitespace-normal leading-5">{option.label}</span>
                 {#if option.subLabel}
-                  <span class="truncate text-xs text-muted-foreground">{option.subLabel}</span>
+                  <span class="whitespace-normal text-xs text-muted-foreground"
+                    >{option.subLabel}</span
+                  >
                 {/if}
               </div>
             </Command.Item>

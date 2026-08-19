@@ -20,6 +20,7 @@ import {
 } from '@mspbyte/drizzle';
 import {
   PolicyTableShapes,
+  M365_LICENSE_REQUIREMENTS,
   getPolicyTableShape,
   type FieldDefinition,
   type PolicyTableShape,
@@ -27,7 +28,7 @@ import {
 } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 import type { Context } from '../context.js';
-import { queryTableData, tableDataInputSchema } from './table-data.js';
+import { queryTableData, tableDataInputSchema, type TableDataInput } from './table-data.js';
 
 // -- permissions ------------------------------------------------------------
 
@@ -85,8 +86,22 @@ const OPERATORS_BY_TYPE: Record<FieldDefinition['type'], readonly string[]> = {
 
 const reportFilterSchema = z.object({
   column: z.string(),
-  operator: z.enum(['eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte', 'is_null', 'is_not_null']),
-  value: z.union([z.string(), z.number(), z.boolean()]).optional()
+  operator: z.enum([
+    'eq',
+    'neq',
+    'contains',
+    'gt',
+    'gte',
+    'lt',
+    'lte',
+    'is_null',
+    'is_not_null',
+    'has_requirement',
+    'lacks_requirement',
+    'has_any_of',
+    'lacks_any_of'
+  ]),
+  value: z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]).optional()
 });
 
 const reportDefinitionSchema = z.object({
@@ -96,6 +111,25 @@ const reportDefinitionSchema = z.object({
 });
 
 type ReportDefinition = z.infer<typeof reportDefinitionSchema>;
+
+const licenseRequirements = new Map<string, (typeof M365_LICENSE_REQUIREMENTS)[number]>(
+  M365_LICENSE_REQUIREMENTS.map((requirement) => [requirement.value, requirement])
+);
+
+function isRequirementFilter(filter: ReportDefinition['filters'][number]) {
+  return filter.operator === 'has_requirement' || filter.operator === 'lacks_requirement';
+}
+
+function isLicenseSetFilter(filter: ReportDefinition['filters'][number]) {
+  return filter.operator === 'has_any_of' || filter.operator === 'lacks_any_of';
+}
+
+function sqlTextArray(values: readonly string[]) {
+  return sql`array[${sql.join(
+    values.map((value) => sql`${value}`),
+    sql`, `
+  )}]::text[]`;
+}
 
 function validateDefinition(shape: PolicyTableShape, def: ReportDefinition): void {
   const fields: SchemaFields = shape.shape;
@@ -124,6 +158,35 @@ function validateDefinition(shape: PolicyTableShape, def: ReportDefinition): voi
         message: 'Groups can be displayed in identity reports but cannot be filtered yet'
       });
     }
+    if (isRequirementFilter(filter)) {
+      if (shape.table !== 'm365Identities' || filter.column !== 'assignedLicenses') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'License coverage checks are only available for M365 identity licenses'
+        });
+      }
+      if (typeof filter.value !== 'string' || !licenseRequirements.has(filter.value)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Unknown license coverage requirement'
+        });
+      }
+      continue;
+    }
+    if (isLicenseSetFilter(filter)) {
+      if (
+        shape.table !== 'm365Identities' ||
+        filter.column !== 'assignedLicenses' ||
+        !Array.isArray(filter.value) ||
+        filter.value.length === 0
+      ) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Choose one or more M365 licenses for this identity-license filter'
+        });
+      }
+      continue;
+    }
     if (!OPERATORS_BY_TYPE[field.type].includes(filter.operator)) {
       throw new TRPCError({
         code: 'BAD_REQUEST',
@@ -138,6 +201,26 @@ function validateDefinition(shape: PolicyTableShape, def: ReportDefinition): voi
       message: `Unknown sort column "${def.sort.column}" for source "${shape.table}"`
     });
   }
+}
+
+function buildLicenseWhere(filters: ReportDefinition['filters']): SQL | undefined {
+  const conditions: SQL[] = [];
+  for (const filter of filters) {
+    if (isRequirementFilter(filter)) {
+      const requirement = licenseRequirements.get(filter.value as string)!;
+      const covered = sql`coalesce(${sql.identifier('assigned_licenses')}, array[]::text[]) && (
+        select coalesce(array_agg(external_id), array[]::text[])
+        from vendors.m365_licenses
+        where service_plan_names && ${sqlTextArray(requirement.servicePlans)}
+      )`;
+      conditions.push(filter.operator === 'has_requirement' ? covered : sql`not (${covered})`);
+    }
+    if (isLicenseSetFilter(filter)) {
+      const matches = sql`coalesce(${sql.identifier('assigned_licenses')}, array[]::text[]) && ${sqlTextArray(filter.value as string[])}`;
+      conditions.push(filter.operator === 'has_any_of' ? matches : sql`not (${matches})`);
+    }
+  }
+  return conditions.length ? and(...conditions) : undefined;
 }
 
 /**
@@ -343,7 +426,8 @@ export const reportsRouter = t.router({
       table: s.table,
       label: s.label,
       providerId: s.providerId ?? null,
-      shape: s.shape
+      shape: s.shape,
+      licenseRequirements: s.table === 'm365Identities' ? M365_LICENSE_REQUIREMENTS : []
     }));
   }),
 
@@ -351,6 +435,31 @@ export const reportsRouter = t.router({
     requireReportsRead(ctx);
     return ctx.db.select().from(reports).orderBy(reports.name);
   }),
+
+  listFilterValues: authProcedure
+    .input(z.object({ source: z.literal('m365Identities'), column: z.literal('assignedLicenses') }))
+    .query(async ({ ctx }) => {
+      requireReportsRead(ctx);
+      const prefs = await loadPrefs(ctx);
+      const scope = await resolveScope(
+        ctx,
+        prefs ? { scopeKind: prefs.scopeKind, scopeIds: prefs.scopeIds ?? [] } : null
+      );
+      if (scope.kind === 'empty') return [];
+      const entry = getSourceEntry('m365Identities')!;
+      const scopeWhere = await buildScopeWhere(ctx, entry.shape, scope);
+      const rows = await ctx.db
+        .select({
+          value: m365Licenses.externalId,
+          label: m365Licenses.friendlyName,
+          subLabel: m365Licenses.skuPartNumber
+        })
+        .from(m365Licenses)
+        .where(scopeWhere);
+      return [...new Map(rows.map((row) => [row.value, row])).values()].sort((a, b) =>
+        a.label.localeCompare(b.label)
+      );
+    }),
 
   byId: authProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ ctx, input }) => {
     requireReportsRead(ctx);
@@ -467,12 +576,22 @@ export const reportsRouter = t.router({
     }
 
     const scopeWhere = await buildScopeWhere(ctx, entry.shape, scope);
+    const requirementWhere = buildLicenseWhere(definition.filters);
 
     // Merge the definition's saved filters into the runtime table input so both
     // the persisted filters and any ad-hoc filters the UI sends apply.
     const merged = {
       ...input.table,
-      filters: [...(input.table.filters ?? []), ...definition.filters]
+      filters: [
+        ...(input.table.filters ?? []),
+        ...definition.filters
+          .filter((filter) => !isRequirementFilter(filter) && !isLicenseSetFilter(filter))
+          .map((filter) => ({
+            ...filter,
+            operator: filter.operator as NonNullable<TableDataInput['filters']>[number]['operator'],
+            value: filter.value as string | number | boolean | undefined
+          }))
+      ]
     };
     const defaultSort = definition.sort
       ? { column: definition.sort.column, direction: definition.sort.direction }
@@ -485,7 +604,9 @@ export const reportsRouter = t.router({
       undefined,
       defaultSort,
       undefined,
-      scopeWhere
+      scopeWhere && requirementWhere
+        ? and(scopeWhere, requirementWhere)
+        : (scopeWhere ?? requirementWhere)
     );
     return { ...result, rows: await decorateReportRows(ctx, sourceName, result.rows) };
   }),
