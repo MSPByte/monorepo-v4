@@ -514,7 +514,9 @@ async function loadM365LicenseRowsById(ctx: any, ids: string[]) {
       consumedUnits: m365Licenses.consumedUnits
     })
     .from(m365Licenses)
-    .where(inArray(m365Licenses.id, [...new Set(ids)]));
+    .where(
+      and(inArray(m365Licenses.id, [...new Set(ids)]), eq(m365Licenses.isBloat, false))
+    );
 }
 
 async function loadM365RoleRowsById(ctx: any, ids: string[]) {
@@ -1051,6 +1053,9 @@ export const vendorRouter = t.router({
 
       // Build base filter: explicit link/site scope can be further narrowed by group.
       const baseConditions: ReturnType<typeof sql>[] = [];
+      if (tableKey === 'm365_licenses') {
+        baseConditions.push(eq(m365Licenses.isBloat, false));
+      }
       if (input.linkId) {
         baseConditions.push(sql`${sql.identifier('link_id')} = ${input.linkId}`);
       }
@@ -2473,7 +2478,13 @@ export const vendorRouter = t.router({
           enabled: m365Licenses.enabled
         })
         .from(m365Licenses)
-        .where(and(eq(m365Licenses.linkId, input.linkId), eq(m365Licenses.enabled, true)))
+        .where(
+          and(
+            eq(m365Licenses.linkId, input.linkId),
+            eq(m365Licenses.enabled, true),
+            eq(m365Licenses.isBloat, false)
+          )
+        )
         .orderBy(m365Licenses.friendlyName);
     }),
 
@@ -2610,7 +2621,9 @@ export const vendorRouter = t.router({
             unused: sql<number>`coalesce(sum(greatest(0, ${m365Licenses.totalUnits} - ${m365Licenses.consumedUnits})), 0)`
           })
           .from(m365Licenses)
-          .where(eq(m365Licenses.linkId, input.linkId)),
+          .where(
+            and(eq(m365Licenses.linkId, input.linkId), eq(m365Licenses.isBloat, false))
+          ),
         ctx.db
           .select({
             total: count(),

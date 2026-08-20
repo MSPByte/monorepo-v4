@@ -8,10 +8,14 @@
   import type { TRPCClient } from '@trpc/client';
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import { DataTable } from '$lib/components/data-table';
-  import type { DataTableColumn, PaginationInput } from '$lib/components/data-table/types';
+  import type {
+    DataTableColumn,
+    PaginationInput,
+    TableFilter,
+  } from '$lib/components/data-table/types';
   import {
+    boolBadgeColumn,
     relativeDateColumn,
-    stateColumn,
     textColumn,
     numberColumn,
   } from '$lib/components/data-table/column-defs';
@@ -41,31 +45,67 @@
   let deleteDialogOpen = $state(false);
 
   const columns: DataTableColumn<FactRuleRow>[] = [
-    textColumn({ key: 'name', label: 'Name', sortable: true, searchable: true }),
-    stateColumn({
-      key: 'enabled',
-      label: 'Status',
-      states: {
-        true: { label: 'Enabled', variant: 'success' },
-        false: { label: 'Disabled', variant: 'muted' },
-      },
+    textColumn<FactRuleRow>('name', 'Name', 'Search fact rules'),
+    boolBadgeColumn<FactRuleRow>('enabled', 'Status', {
+      trueLabel: 'Enabled',
+      falseLabel: 'Disabled',
     }),
-    textColumn({ key: 'dataSource', label: 'Data Source', sortable: true }),
-    textColumn({ key: 'factKey', label: 'Fact Key', sortable: true, searchable: true }),
-    numberColumn({ key: 'priority', label: 'Priority', sortable: true }),
-    relativeDateColumn({ key: 'updatedAt', label: 'Updated' }),
+    textColumn<FactRuleRow>('dataSource', 'Data Source'),
+    textColumn<FactRuleRow>('factKey', 'Fact Key', 'Search fact keys'),
+    numberColumn<FactRuleRow>('priority', 'Priority'),
+    relativeDateColumn<FactRuleRow>('updatedAt', 'Updated'),
   ];
 
-  async function fetchData(input: PaginationInput) {
-    const rows = await trpc.factRules.list.query();
-    const filtered = input.search
+  function compareValues(a: unknown, b: unknown): number {
+    if (typeof a === 'number' && typeof b === 'number') return a - b;
+    return String(a ?? '').localeCompare(String(b ?? ''));
+  }
+
+  function matchesFilter(value: unknown, filter: TableFilter): boolean {
+    if (filter.operator === 'eq') return value === filter.value;
+    if (filter.operator === 'neq') return value !== filter.value;
+    if (filter.operator === 'contains') {
+      return String(value ?? '')
+        .toLowerCase()
+        .includes(String(filter.value ?? '').toLowerCase());
+    }
+    if (filter.operator === 'gt') return Number(value) > Number(filter.value);
+    if (filter.operator === 'gte') return Number(value) >= Number(filter.value);
+    if (filter.operator === 'lt') return Number(value) < Number(filter.value);
+    if (filter.operator === 'lte') return Number(value) <= Number(filter.value);
+    if (filter.operator === 'is_null') return value === null || value === undefined || value === '';
+    if (filter.operator === 'is_not_null')
+      return !(value === null || value === undefined || value === '');
+    return true;
+  }
+
+  async function fetchData(
+    input: PaginationInput
+  ): Promise<{ rows: FactRuleRow[]; total: number }> {
+    const rows = (await trpc.factRules.list.query()) as FactRuleRow[];
+    const query = input.globalSearch.trim().toLowerCase();
+    let filtered = query
       ? rows.filter(
           (row) =>
-            row.name.toLowerCase().includes(input.search!.toLowerCase()) ||
-            row.factKey.toLowerCase().includes(input.search!.toLowerCase())
+            row.name.toLowerCase().includes(query) ||
+            row.factKey.toLowerCase().includes(query) ||
+            row.dataSource.toLowerCase().includes(query)
         )
       : rows;
-    return { rows: filtered as FactRuleRow[], total: filtered.length };
+    for (const filter of input.filters) {
+      filtered = filtered.filter((row) => matchesFilter(row[filter.field], filter));
+    }
+    const sorted = input.sortField
+      ? [...filtered].sort((a, b) => {
+          const comparison = compareValues(a[input.sortField!], b[input.sortField!]);
+          return input.sortDir === 'asc' ? comparison : -comparison;
+        })
+      : filtered;
+    const start = input.page * input.pageSize;
+    return {
+      rows: sorted.slice(start, start + input.pageSize),
+      total: sorted.length,
+    };
   }
 
   async function deleteSelected() {
@@ -138,9 +178,9 @@
       {columns}
       {fetchData}
       {refreshKey}
-      onRowClick={(row) => goto(`/automation/fact-rules/${row.id}`)}
-      bind:selectedIds
-      selectable={canDelete}
+      onrowclick={(row) => goto(`/automation/fact-rules/${row.id}`)}
+      onselectionchange={(rows) => (selectedIds = rows.map((row) => row.id))}
+      enableRowSelection={canDelete}
     />
   </div>
 </div>

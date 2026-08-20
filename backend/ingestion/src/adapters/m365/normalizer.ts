@@ -99,6 +99,7 @@ function normalizeLicense(raw: M365SubscribedSku): RecordValue {
     skuId: raw.skuId,
     skuPartNumber: raw.skuPartNumber,
     friendlyName: raw._friendlyName ?? raw.skuPartNumber,
+    isBloat: raw._isBloat ?? false,
     enabled: raw.capabilityStatus === 'Enabled',
     totalUnits: raw.prepaidUnits?.enabled ?? 0,
     consumedUnits: raw.consumedUnits ?? 0,

@@ -44,7 +44,8 @@ export const M365SubscribedSkuSchema = z.looseObject({
     .array(z.object({ servicePlanName: z.string() }))
     .optional()
     .default([]),
-  _friendlyName: z.string().optional()
+  _friendlyName: z.string().optional(),
+  _isBloat: z.boolean().optional()
 });
 
 export const M365CAPolicySchema = z.looseObject({

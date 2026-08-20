@@ -28,6 +28,7 @@ import {
 } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 import type { Context } from '../context.js';
+import { loadGroupTargets } from './group-targets.js';
 import { queryTableData, tableDataInputSchema, type TableDataInput } from './table-data.js';
 
 // -- permissions ------------------------------------------------------------
@@ -81,6 +82,7 @@ const OPERATORS_BY_TYPE: Record<FieldDefinition['type'], readonly string[]> = {
   enum: ['eq', 'neq', 'is_null', 'is_not_null'],
   boolean: ['eq', 'neq', 'is_null', 'is_not_null'],
   number: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'is_null', 'is_not_null'],
+  date: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'is_null', 'is_not_null'],
   object: ['is_null', 'is_not_null']
 };
 
@@ -112,6 +114,8 @@ const reportDefinitionSchema = z.object({
 
 type ReportDefinition = z.infer<typeof reportDefinitionSchema>;
 
+const DISPLAY_ONLY_IDENTITY_COLUMNS = new Set(['groupNames', 'tenantName']);
+
 const licenseRequirements = new Map<string, (typeof M365_LICENSE_REQUIREMENTS)[number]>(
   M365_LICENSE_REQUIREMENTS.map((requirement) => [requirement.value, requirement])
 );
@@ -129,6 +133,20 @@ function sqlTextArray(values: readonly string[]) {
     values.map((value) => sql`${value}`),
     sql`, `
   )}]::text[]`;
+}
+
+/**
+ * postgres-js serializes an interpolated JavaScript array as a scalar in a
+ * SQL template, which makes `= any(${values})` fail at runtime. Build the
+ * UUID list explicitly so scoped report queries remain parameterized.
+ */
+function sqlUuidIn(column: string, values: readonly string[]): SQL {
+  if (values.length === 0) return sql`false`;
+  const params = sql.join(
+    values.map((value) => sql`${value}::uuid`),
+    sql`, `
+  );
+  return sql`${sql.identifier(column)} in (${params})`;
 }
 
 function validateDefinition(shape: PolicyTableShape, def: ReportDefinition): void {
@@ -152,10 +170,10 @@ function validateDefinition(shape: PolicyTableShape, def: ReportDefinition): voi
         message: `Unknown filter column "${filter.column}" for source "${shape.table}"`
       });
     }
-    if (filter.column === 'groupNames') {
+    if (shape.table === 'm365Identities' && DISPLAY_ONLY_IDENTITY_COLUMNS.has(filter.column)) {
       throw new TRPCError({
         code: 'BAD_REQUEST',
-        message: 'Groups can be displayed in identity reports but cannot be filtered yet'
+        message: `${field.label} can be displayed in identity reports but cannot be filtered yet`
       });
     }
     if (isRequirementFilter(filter)) {
@@ -195,7 +213,11 @@ function validateDefinition(shape: PolicyTableShape, def: ReportDefinition): voi
     }
   }
 
-  if (def.sort && (!known.has(def.sort.column) || def.sort.column === 'groupNames')) {
+  if (
+    def.sort &&
+    (!known.has(def.sort.column) ||
+      (shape.table === 'm365Identities' && DISPLAY_ONLY_IDENTITY_COLUMNS.has(def.sort.column)))
+  ) {
     throw new TRPCError({
       code: 'BAD_REQUEST',
       message: `Unknown sort column "${def.sort.column}" for source "${shape.table}"`
@@ -243,7 +265,14 @@ async function decorateReportRows(
   const identityIds = identities.map((row) => row.id);
   if (!identityIds.length) return rows;
 
-  const [licenses, roles, memberships] = await Promise.all([
+  const identityLinkIds = [
+    ...new Set(
+      identities
+        .map((identity) => identity.linkId)
+        .filter((id): id is string => typeof id === 'string')
+    )
+  ];
+  const [licenses, roles, memberships, links] = await Promise.all([
     ctx.db
       .select({ externalId: m365Licenses.externalId, friendlyName: m365Licenses.friendlyName })
       .from(m365Licenses),
@@ -252,10 +281,23 @@ async function decorateReportRows(
       .select({ identityId: m365IdentityGroups.identityId, name: m365Groups.name })
       .from(m365IdentityGroups)
       .innerJoin(m365Groups, eq(m365IdentityGroups.groupId, m365Groups.id))
-      .where(inArray(m365IdentityGroups.identityId, identityIds))
+      .where(inArray(m365IdentityGroups.identityId, identityIds)),
+    identityLinkIds.length
+      ? ctx.db
+          .select({
+            id: integrationLinks.id,
+            name: integrationLinks.name,
+            externalId: integrationLinks.externalId
+          })
+          .from(integrationLinks)
+          .where(inArray(integrationLinks.id, identityLinkIds))
+      : Promise.resolve([])
   ]);
   const licenseNames = new Map(licenses.map((row) => [row.externalId, row.friendlyName]));
   const roleNames = new Map(roles.map((row) => [row.templateId, row.name]));
+  const tenantNames = new Map(
+    links.map((link) => [link.id, link.name ?? link.externalId ?? link.id])
+  );
   const groupNames = new Map<string, string[]>();
   for (const membership of memberships) {
     groupNames.set(membership.identityId, [
@@ -272,7 +314,8 @@ async function decorateReportRows(
     assignedRoleTemplateIds: Array.isArray(row.assignedRoleTemplateIds)
       ? row.assignedRoleTemplateIds.map((id) => roleNames.get(String(id)) ?? String(id))
       : row.assignedRoleTemplateIds,
-    groupNames: groupNames.get(row.id) ?? []
+    groupNames: groupNames.get(row.id) ?? [],
+    tenantName: typeof row.linkId === 'string' ? (tenantNames.get(row.linkId) ?? row.linkId) : null
   }));
 }
 
@@ -281,77 +324,154 @@ async function decorateReportRows(
 type ResolvedScope =
   | { kind: 'unrestricted' }
   | { kind: 'empty' }
-  | { kind: 'sites'; siteIds: readonly string[] };
+  | {
+      kind: 'scoped';
+      /** Site restrictions from role, site, and group scope. */
+      siteIds: readonly string[] | null;
+      /** Exact active M365 links selected by the link picker or a group. */
+      linkIds: readonly string[] | null;
+      /** The selected links' sites, used only by direct site-scoped sources. */
+      linkSiteIds: readonly string[] | null;
+      /**
+       * A group explicitly selected M365 tenant links. Those IDs scope M365
+       * sources only; the group's site members continue to scope every other
+       * provider.
+       */
+      useExplicitM365LinksOnly: boolean;
+    };
+
+// Reports currently use integration-link scope only for M365 tenant data.
+const REPORT_LINK_INTEGRATION_ID = 'microsoft-365';
 
 /**
  * Layered scope: role scope (hard ceiling) ∩ workspace scope ∩ ad-hoc scope.
  * Ad-hoc scope arrives via `runReport` input; the workspace scope is read from
- * `user_report_prefs`. All three are expressed as site-id sets so we can
- * intersect. `groups` is resolved to sites via ctx.scopeFor primitives; `links`
- * is resolved to sites via integration_links.site_id downstream (we return the
- * link IDs directly for link-scoped sources).
+ * `user_report_prefs`. Site and group scopes resolve to site IDs; selected
+ * M365 tenant links retain their link IDs so tenant-scoped tables still work
+ * when a link has no associated site. When a group contains both site members
+ * and M365 links, the latter are applied only to M365 sources.
  */
 async function resolveScope(
   ctx: Context,
   workspace: { scopeKind: string; scopeIds: readonly string[] } | null,
   adhoc?: { kind: 'sites' | 'groups' | 'links'; ids: readonly string[] }
 ): Promise<ResolvedScope> {
-  const roleScope = ctx.scopeFor('Reports.Read');
-  if (roleScope !== 'all' && roleScope.length === 0) return { kind: 'empty' };
+  const roleSiteScope = ctx.scopeFor('Reports.Read');
+  const roleLinkScope = ctx.linkScopeFor('Reports.Read');
+  const hasNoRoleSites = roleSiteScope !== 'all' && roleSiteScope.length === 0;
+  const hasNoRoleLinks = roleLinkScope !== 'all' && roleLinkScope.length === 0;
+  if (hasNoRoleSites && hasNoRoleLinks) return { kind: 'empty' };
 
-  // `null` means unrestricted; a Set means restricted to that set of site IDs.
-  let sites: Set<string> | null = roleScope === 'all' ? null : new Set(roleScope);
+  // `null` means unrestricted; a Set means restricted to that dimension.
+  let sites: Set<string> | null = roleSiteScope === 'all' ? null : new Set(roleSiteScope);
+  // linkScopeFor includes every link attached to a site-scoped grant. Those
+  // IDs are already bounded by `sites`; retain a link ceiling only when the
+  // permission is granted exclusively through explicit link membership.
+  let links: Set<string> | null =
+    hasNoRoleSites && roleLinkScope !== 'all' ? new Set(roleLinkScope) : null;
 
-  const narrow = (next: Set<string>) => {
+  // A group can grant Reports.Read to individual links without granting any
+  // sites. In that case the link set is the permission ceiling.
+  if (hasNoRoleSites && links !== null && links.size > 0) sites = null;
+
+  // A globally scoped Reports role can narrow M365 data exclusively by the
+  // tenant links in a selected group. A site-scoped role keeps its site ceiling
+  // applied, so group selection cannot widen the user's access.
+  const canUseExplicitM365LinksOnly = roleSiteScope === 'all';
+  let useExplicitM365LinksOnly = false;
+
+  const narrowSites = (next: Set<string>) => {
     if (sites === null) sites = next;
     else sites = new Set([...sites].filter((id) => next.has(id)));
   };
+  const narrowLinks = (next: Set<string>) => {
+    if (links === null) links = next;
+    else links = new Set([...links].filter((id) => next.has(id)));
+  };
+  const applyScope = async (scope: {
+    kind: 'sites' | 'groups' | 'links';
+    ids: readonly string[];
+  }) => {
+    if (scope.kind === 'links') {
+      narrowLinks(new Set(scope.ids));
+      return;
+    }
+    if (scope.kind === 'groups') {
+      const targets = await loadGroupScopeTargets(ctx, scope.ids);
+      if (targets.siteIds.length) narrowSites(new Set(targets.siteIds));
+      if (targets.linkIds.length) {
+        narrowLinks(new Set(targets.linkIds));
+        useExplicitM365LinksOnly ||= canUseExplicitM365LinksOnly;
+      }
+      // An empty group should not expose report data. A link-only group leaves
+      // the role's site ceiling intact while retaining its M365 link IDs.
+      if (targets.siteIds.length === 0 && targets.linkIds.length === 0) {
+        narrowSites(new Set());
+      }
+      return;
+    }
+    narrowSites(new Set(scope.ids));
+  };
 
   if (workspace && workspace.scopeKind !== 'all') {
-    narrow(await scopeIdsToSiteIds(ctx, workspace.scopeKind, workspace.scopeIds));
+    await applyScope({
+      kind: workspace.scopeKind as 'sites' | 'groups' | 'links',
+      ids: workspace.scopeIds
+    });
+  }
+  if (adhoc) await applyScope(adhoc);
+
+  let linkSiteIds: readonly string[] | null = null;
+  if (links !== null) {
+    const activeLinks = await loadActiveM365ReportLinks(ctx, [...links]);
+    links = new Set(activeLinks.map((link) => link.id));
+    if (links.size === 0) return { kind: 'empty' };
+    linkSiteIds = [...new Set(activeLinks.map((link) => link.siteId).filter(Boolean))] as string[];
   }
 
-  if (adhoc) {
-    narrow(await scopeIdsToSiteIds(ctx, adhoc.kind, adhoc.ids));
-  }
-
-  if (sites === null) return { kind: 'unrestricted' };
-  if (sites.size === 0) return { kind: 'empty' };
-  return { kind: 'sites', siteIds: [...sites] };
+  if (sites !== null && sites.size === 0 && links === null) return { kind: 'empty' };
+  if (sites === null && links === null) return { kind: 'unrestricted' };
+  return {
+    kind: 'scoped',
+    siteIds: sites === null ? null : [...sites],
+    linkIds: links === null ? null : [...links],
+    linkSiteIds,
+    useExplicitM365LinksOnly
+  };
 }
 
-async function scopeIdsToSiteIds(
+async function loadGroupScopeTargets(
   ctx: Context,
-  kind: string,
-  ids: readonly string[]
-): Promise<Set<string>> {
-  if (kind === 'all' || ids.length === 0) return new Set();
-  if (kind === 'sites') return new Set(ids);
+  groupIds: readonly string[]
+): Promise<{ siteIds: string[]; linkIds: string[] }> {
+  const targets = await Promise.all(groupIds.map((groupId) => loadGroupTargets(ctx.db, groupId)));
+  const siteIds = [...new Set(targets.flatMap((target) => target.siteIds))];
+  const activeLinks = await loadActiveM365ReportLinks(ctx, [
+    ...new Set(targets.flatMap((target) => target.linkIds))
+  ]);
+  return { siteIds, linkIds: activeLinks.map((link) => link.id) };
+}
 
-  if (kind === 'groups') {
-    const rows = await ctx.db
-      .select({ siteId: sql<string>`site_id`.as('site_id') })
-      .from(sql`public.site_group_members`)
-      .where(sql`site_group_id = any(${ids as string[]})`);
-    return new Set(rows.map((r) => r.siteId).filter((id): id is string => !!id));
-  }
-
-  if (kind === 'links') {
-    const rows = await ctx.db
-      .select({ siteId: integrationLinks.siteId })
-      .from(integrationLinks)
-      .where(inArray(integrationLinks.id, ids as string[]));
-    return new Set(rows.map((r) => r.siteId).filter((id): id is string => !!id));
-  }
-
-  return new Set();
+async function loadActiveM365ReportLinks(ctx: Context, ids: readonly string[]) {
+  if (ids.length === 0) return [];
+  return ctx.db
+    .select({ id: integrationLinks.id, siteId: integrationLinks.siteId })
+    .from(integrationLinks)
+    .where(
+      and(
+        inArray(integrationLinks.id, ids as string[]),
+        eq(integrationLinks.integrationId, REPORT_LINK_INTEGRATION_ID),
+        eq(integrationLinks.status, 'active')
+      )
+    );
 }
 
 /**
  * Compose a WHERE fragment restricting rows to a given site-id set.
- * - `direct`: table has a `site_id` column; filter directly.
- * - `link`: table has a `link_id` FK to integration_links; resolve allowed link
- *   ids by querying integration_links.site_id ∈ siteIds, then filter link_id.
+ * - `direct`: table has a `site_id` column; filter by site scope and by the
+ *   selected links' sites.
+ * - `link`: table has a `link_id` FK to integration_links; filter by the
+ *   exact selected M365 tenant links, plus any site scope.
  */
 async function buildScopeWhere(
   ctx: Context,
@@ -362,18 +482,52 @@ async function buildScopeWhere(
   if (scope.kind === 'empty') return sql`false`;
 
   const ss = shape.siteScope!;
-  if (ss.via === 'direct') {
-    return sql`${sql.identifier('site_id')} = any(${scope.siteIds as string[]})`;
+  const isM365Source = shape.providerId === REPORT_LINK_INTEGRATION_ID;
+  const usesM365GroupLinkScope = isM365Source && scope.useExplicitM365LinksOnly;
+
+  // A group made up only of M365 links has no applicable scope for non-M365
+  // sources. Do not let that absence of site IDs turn into an unscoped query.
+  if (scope.useExplicitM365LinksOnly && !isM365Source && scope.siteIds === null) {
+    return sql`false`;
   }
 
-  // link scope: preload allowed link ids
-  const linkRows = await ctx.db
-    .select({ id: integrationLinks.id })
-    .from(integrationLinks)
-    .where(inArray(integrationLinks.siteId, scope.siteIds as string[]));
-  const allowedLinkIds = linkRows.map((r) => r.id);
-  if (allowedLinkIds.length === 0) return sql`false`;
-  return sql`${sql.identifier('link_id')} = any(${allowedLinkIds})`;
+  if (ss.via === 'direct') {
+    const directSiteIds = scope.useExplicitM365LinksOnly
+      ? scope.siteIds
+      : intersectScopeIds(scope.siteIds, scope.linkSiteIds);
+    if (directSiteIds === null) return undefined;
+    if (directSiteIds.length === 0) return sql`false`;
+    return sqlUuidIn('site_id', directSiteIds);
+  }
+
+  const conditions: SQL[] = [];
+  // Group M365 links are not a constraint for Sophos or other site-scoped
+  // providers. Explicit link-picker scopes still constrain every link source.
+  if (scope.linkIds !== null && (!scope.useExplicitM365LinksOnly || isM365Source)) {
+    if (scope.linkIds.length === 0) return sql`false`;
+    conditions.push(sqlUuidIn('link_id', scope.linkIds));
+  }
+  if (scope.siteIds !== null && !usesM365GroupLinkScope) {
+    if (scope.siteIds.length === 0) return sql`false`;
+    const linkRows = await ctx.db
+      .select({ id: integrationLinks.id })
+      .from(integrationLinks)
+      .where(inArray(integrationLinks.siteId, scope.siteIds as string[]));
+    const allowedLinkIds = linkRows.map((r) => r.id);
+    if (allowedLinkIds.length === 0) return sql`false`;
+    conditions.push(sqlUuidIn('link_id', allowedLinkIds));
+  }
+  return conditions.length ? and(...conditions) : undefined;
+}
+
+function intersectScopeIds(
+  left: readonly string[] | null,
+  right: readonly string[] | null
+): readonly string[] | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  const rightSet = new Set(right);
+  return left.filter((id) => rightSet.has(id));
 }
 
 // -- workspace prefs helpers ------------------------------------------------
@@ -455,7 +609,7 @@ export const reportsRouter = t.router({
           subLabel: m365Licenses.skuPartNumber
         })
         .from(m365Licenses)
-        .where(scopeWhere);
+        .where(and(scopeWhere, eq(m365Licenses.isBloat, false)));
       return [...new Map(rows.map((row) => [row.value, row])).values()].sort((a, b) =>
         a.label.localeCompare(b.label)
       );

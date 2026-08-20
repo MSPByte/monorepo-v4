@@ -1269,6 +1269,7 @@ export const packagesRouter = t.router({
 
       if (input.entityType === 'm365_license') {
         const filters = [];
+        filters.push(eq(m365Licenses.isBloat, false));
         if (input.integrationLinkId) {
           filters.push(eq(m365Licenses.linkId, input.integrationLinkId));
         }

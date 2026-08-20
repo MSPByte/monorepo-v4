@@ -47,7 +47,7 @@ export class M365GraphClient {
   }
 
   clearCache() {
-    M365GraphClient.tokenCache.clear();
+    M365GraphClient.tokenCache.delete(this.cacheKey());
   }
 
   async getToken(): Promise<string> {

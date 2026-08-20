@@ -23,7 +23,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "test:unit": "bun test"
   },
   "devDependencies": {
     "@mspbyte/typescript-config": "*",

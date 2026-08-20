@@ -1,159 +1,90 @@
-# Turborepo starter
+# MSPByte
 
-This Turborepo starter is maintained by the Turborepo core team.
+MSPByte is a multi-tenant operations platform for managed service providers. It
+combines a SvelteKit web application, a Tauri endpoint agent, a typed tRPC API,
+and BullMQ workers that ingest and normalize vendor data before evaluating
+policies and executing automation packages.
 
-## Using this example
+## Repository map
 
-Run the following command:
+| Path                       | Purpose                                                                         |
+| -------------------------- | ------------------------------------------------------------------------------- |
+| `apps/frontend`            | SvelteKit web application, served by Vercel's Node runtime                      |
+| `apps/agent`               | Tauri desktop endpoint agent                                                    |
+| `packages/trpc`            | Typed server API: authentication, authorization, and route-level business logic |
+| `packages/drizzle`         | Tenant service database schema, migrations, and database client                 |
+| `packages/drizzle-catalog` | Catalog database schema and tenant provisioning lookup                          |
+| `packages/shared`          | Shared domain types, permission model, schemas, and integration metadata        |
+| `packages/capabilities`    | Automation capability definitions and generators                                |
+| `packages/pipeline`        | Shared BullMQ queues and pipeline orchestration                                 |
+| `backend/ingestion`        | Vendor-data ingestion scheduler and worker                                      |
+| `backend/normalize`        | Raw-data normalization worker                                                   |
+| `backend/policies`         | Policy-evaluation worker                                                        |
+| `backend/packages`         | Automation package execution worker                                             |
+| `backend/agents`           | HTTP API consumed by the endpoint agent                                         |
+| `infra`                    | Local Redis/Bull Board and tenant administration scripts                        |
 
-```sh
-npx create-turbo@latest
-```
+The catalog database holds organization provisioning information. Application
+data lives in an organization-specific service database, resolved through the
+catalog. Keep that boundary intact: browser code talks to tRPC; routers obtain
+the tenant database from the request context.
 
-## What's inside?
+## Quick start
 
-This Turborepo includes the following packages/apps:
-
-### Apps and Packages
-
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `eslint-config-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
-
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
-
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
+Prerequisites: Bun `1.3.11`, Docker, and development credentials for the
+catalog and tenant databases.
 
 ```sh
-cd my-turborepo
-turbo build
+bun install
+bun run infra:up
+bun run dev:web
 ```
 
-Without global `turbo`, use your package manager:
+`infra:up` provides Redis and Bull Board. The databases are configured through
+environment variables and are not created by Docker Compose.
+
+For pipeline work, run the web app in one terminal and the workers in another:
 
 ```sh
-cd my-turborepo
-npx turbo build
-bun dlx turbo build
-bun exec turbo build
+bun run dev:pipeline
 ```
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+Use `bun run dev:pipeline:scheduled` only when you intend to enable the
+ingestion scheduler.
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+## Environment
+
+Keep secrets in an ignored `.env` file. The common server-side variables are:
+
+- `CATALOG_DATABASE_URL` and `MSP_DATABASE_URL`
+- `ENCRYPTION_KEY`
+- `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, and `BETTER_AUTH_TRUSTED_ORIGINS`
+- `REDIS_URL` (defaults to `redis://localhost:6379` for workers)
+- Microsoft OAuth/application credentials when working with Microsoft flows
+
+Worker-specific variables, concurrency, and scheduler defaults are defined in
+each worker's `src/env.ts`. Do not copy real credentials into source, test
+fixtures, or agent instructions.
+
+## Validation
 
 ```sh
-turbo build --filter=docs
+bun run lint               # static check (delegates to the type checker)
+bun run check-types        # checks all TypeScript/Svelte workspaces
+bun run test:unit          # runs database-free unit tests
+bun run check              # types + unit tests
 ```
 
-Without global `turbo`:
+Target a workspace while iterating to keep feedback fast, for example:
 
 ```sh
-npx turbo build --filter=docs
-bun exec turbo build --filter=docs
-bun exec turbo build --filter=docs
+bun run --cwd apps/frontend check
+bun run --cwd packages/shared test:unit
+bun run check-types --filter=@mspbyte/trpc
 ```
 
-### Develop
+Database migrations and integration tests need real, disposable database
+credentials. Treat `db:push`, `db:migrate`, tenant-migration scripts, and
+production-like integrations as intentional operations, not routine checks.
 
-To develop all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo dev
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo dev
-bun exec turbo dev
-bun exec turbo dev
-```
-
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo dev --filter=web
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo dev --filter=web
-bun exec turbo dev --filter=web
-bun exec turbo dev --filter=web
-```
-
-### Remote Caching
-
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo login
-bun exec turbo login
-bun exec turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo link
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo link
-bun exec turbo link
-bun exec turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+For more implementation and safety guidance, see [AGENTS.md](AGENTS.md).

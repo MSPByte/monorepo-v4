@@ -1,6 +1,7 @@
 <script module lang="ts">
   function formatCell(value: unknown): string {
     if (value == null) return '—';
+    if (value instanceof Date) return value.toISOString();
     if (typeof value === 'boolean') return value ? 'true' : 'false';
     if (Array.isArray(value)) return value.length === 0 ? '—' : value.join(', ');
     if (typeof value === 'object') return JSON.stringify(value);
@@ -73,6 +74,7 @@
     enum: ['eq', 'neq', 'is_null', 'is_not_null'],
     boolean: ['eq', 'neq', 'is_null', 'is_not_null'],
     number: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'is_null', 'is_not_null'],
+    date: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'is_null', 'is_not_null'],
     object: ['is_null', 'is_not_null'],
   };
 
@@ -136,12 +138,15 @@
   const shapeEntries = $derived<Array<[string, FieldDefinition]>>(
     shape ? Object.entries(shape) : []
   );
-  const filterEntries = $derived(shapeEntries.filter(([key]) => key !== 'groupNames'));
+  const displayOnlyIdentityFields = new Set(['groupNames', 'tenantName']);
+  const filterEntries = $derived(
+    shapeEntries.filter(([key]) => !displayOnlyIdentityFields.has(key))
+  );
   const licenseOptions = $derived(licenseOptionsQuery.data ?? []);
 
   const sortColumnOptions = $derived(
     selectedColumns
-      .filter((k) => k !== 'groupNames')
+      .filter((k) => !displayOnlyIdentityFields.has(k))
       .map((k) => ({
         value: k,
         label: shape?.[k]?.label ?? k,
@@ -330,15 +335,23 @@
     if (!source || selectedColumns.length === 0) return;
     exporting = true;
     try {
-      const result = await trpc.reports.run.mutate({
+      const definition = reportDefinition();
+      const firstPage = await trpc.reports.run.mutate({
         source,
-        definition: reportDefinition(),
+        definition,
         table: { page: 1, pageSize: 1000, filters: [] },
       });
+      const rows = [...(firstPage.rows as ResultRow[])];
+      for (let page = 2; page <= firstPage.pageCount; page++) {
+        const result = await trpc.reports.run.mutate({
+          source,
+          definition,
+          table: { page, pageSize: 1000, filters: [] },
+        });
+        rows.push(...(result.rows as ResultRow[]));
+      }
       const headers = selectedColumns.map((key) => csvValue(shape?.[key]?.label ?? key));
-      const lines = (result.rows as ResultRow[]).map((row) =>
-        selectedColumns.map((key) => csvValue(row[key])).join(',')
-      );
+      const lines = rows.map((row) => selectedColumns.map((key) => csvValue(row[key])).join(','));
       const blob = new Blob([[headers.join(','), ...lines].join('\n')], {
         type: 'text/csv;charset=utf-8;',
       });
@@ -348,9 +361,7 @@
       link.download = `${(name.trim() || 'report').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}.csv`;
       link.click();
       URL.revokeObjectURL(url);
-      toast.success(
-        `Exported ${result.rows.length.toLocaleString()} row${result.rows.length === 1 ? '' : 's'}`
-      );
+      toast.success(`Exported ${rows.length.toLocaleString()} row${rows.length === 1 ? '' : 's'}`);
     } catch (err) {
       showErrorToast(err, 'Failed to export CSV');
     } finally {

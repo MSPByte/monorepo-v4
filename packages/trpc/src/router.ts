@@ -24,6 +24,7 @@ import { billingRouter } from './routers/billing.js';
 import { entitySourcesRouter } from './routers/entity-sources.js';
 import { factRulesRouter } from './routers/fact-rules.js';
 import { reportsRouter } from './routers/reports.js';
+import { dashboardsRouter } from './routers/dashboards.js';
 
 export const appRouter = t.router({
   auth: authRouter,
@@ -50,7 +51,8 @@ export const appRouter = t.router({
   billing: billingRouter,
   entitySources: entitySourcesRouter,
   factRules: factRulesRouter,
-  reports: reportsRouter
+  reports: reportsRouter,
+  dashboards: dashboardsRouter
 });
 
 export type AppRouter = typeof appRouter;

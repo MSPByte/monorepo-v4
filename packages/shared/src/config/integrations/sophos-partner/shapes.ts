@@ -82,6 +82,22 @@ export const SophosEndpointsShape: SchemaFields = {
     trackable: true,
     ingestPath: 'tamperProtectionEnabled',
     required: true
+  },
+  lockdown: {
+    label: 'Lockdown Status',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'lockdown',
+    required: true
+  },
+  lastHeartbeatAt: {
+    label: 'Last Heartbeat',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'lastHeartbeatAt',
+    required: false
   }
 };
 
@@ -110,12 +126,28 @@ export const SophosFirewallsShape: SchemaFields = {
     ingestPath: 'model',
     required: true
   },
+  serialNumber: {
+    label: 'Serial Number',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'serialNumber',
+    required: true
+  },
   firmwareVersion: {
     label: 'Firmware Version',
     type: 'string',
     modality: 'single',
     trackable: true,
     ingestPath: 'firmwareVersion',
+    required: true
+  },
+  externalIp: {
+    label: 'External IP',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'externalIp',
     required: true
   },
   connected: {
@@ -133,10 +165,50 @@ export const SophosFirewallsShape: SchemaFields = {
     trackable: true,
     ingestPath: 'suspended',
     required: true
+  },
+  managing: {
+    label: 'Managing Status',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'managing',
+    required: true
+  },
+  reporting: {
+    label: 'Reporting Status',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'reporting',
+    required: true
+  },
+  upgradeToVersion: {
+    label: 'Upgrade To Version',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'upgradeToVersion',
+    required: false
+  },
+  lastChangeAt: {
+    label: 'Last Changed At',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'lastChangeAt',
+    required: true
   }
 };
 
 export const SophosLicensesShape: SchemaFields = {
+  licenseId: {
+    label: 'License ID',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'licenseId',
+    required: true
+  },
   name: {
     label: 'Name',
     type: 'string',
@@ -176,5 +248,37 @@ export const SophosLicensesShape: SchemaFields = {
     trackable: true,
     ingestPath: 'unlimited',
     required: true
+  },
+  quantity: {
+    label: 'Quantity',
+    type: 'number',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'quantity',
+    required: false
+  },
+  usageCount: {
+    label: 'Usage Count',
+    type: 'number',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'usageCount',
+    required: false
+  },
+  startedAt: {
+    label: 'Started At',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'startedAt',
+    required: true
+  },
+  endsAt: {
+    label: 'Ends At',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'endsAt',
+    required: false
   }
 };

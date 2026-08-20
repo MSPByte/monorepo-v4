@@ -1,4 +1,4 @@
-export type FieldType = "boolean" | "string" | "number" | "enum" | "object";
+export type FieldType = 'boolean' | 'string' | 'number' | 'date' | 'enum' | 'object';
 
 export type FieldReference = {
   table: string;
@@ -10,7 +10,7 @@ export type FieldReference = {
 export type FieldDefinition = {
   type: FieldType;
   label: string;
-  modality: "single" | "array";
+  modality: 'single' | 'array';
   description?: string;
   options?: { value: string; label: string }[];
   required?: boolean;

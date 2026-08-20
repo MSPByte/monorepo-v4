@@ -7,9 +7,16 @@ import { M365PoliciesShape } from './policies.js';
 const M365_LINK_META_VERSION = 1;
 import {
   M365DevicesShape,
+  M365DomainConfigShape,
+  M365ExchangeConfigsShape,
   M365GroupsShape,
   M365IdentitiesShape,
-  M365LicensesShape
+  M365InboxRulesShape,
+  M365LicensesShape,
+  M365MailboxForwardingShape,
+  M365OAuthGrantsShape,
+  M365RiskyUsersShape,
+  M365TeamsConfigShape
 } from './shapes.js';
 
 export const CONSENT_VERSION = 6;
@@ -114,7 +121,11 @@ export const M365_INTEGRATION_CONFIG: Integration = {
     {
       facet: ProviderFacet.M365ExchangeConfig,
       scopeLevel: 'link',
-      db: { table: 'm365ExchangeConfigs', name: 'M365 Exchange', shape: {} },
+      db: {
+        table: 'm365ExchangeConfigs',
+        name: 'M365 Exchange',
+        shape: M365ExchangeConfigsShape
+      },
       sync: { intervalMs: SyncIntervals['24_HOURS'] }
     },
     {
@@ -126,25 +137,25 @@ export const M365_INTEGRATION_CONFIG: Integration = {
     {
       facet: ProviderFacet.M365OAuthGrants,
       scopeLevel: 'link',
-      db: { table: 'm365OAuthGrants', name: 'M365 OAuth Grants', shape: {} },
+      db: { table: 'm365OAuthGrants', name: 'M365 OAuth Grants', shape: M365OAuthGrantsShape },
       sync: { intervalMs: SyncIntervals['24_HOURS'] }
     },
     {
       facet: ProviderFacet.M365DomainConfig,
       scopeLevel: 'link',
-      db: { table: 'm365DomainConfig', name: 'M365 Domains', shape: {} },
+      db: { table: 'm365DomainConfig', name: 'M365 Domains', shape: M365DomainConfigShape },
       sync: { intervalMs: SyncIntervals['24_HOURS'] }
     },
     {
       facet: ProviderFacet.M365TeamsConfig,
       scopeLevel: 'link',
-      db: { table: 'm365TeamsConfig', name: 'M365 Teams', shape: {} },
+      db: { table: 'm365TeamsConfig', name: 'M365 Teams', shape: M365TeamsConfigShape },
       sync: { intervalMs: SyncIntervals['24_HOURS'] }
     },
     {
       facet: ProviderFacet.M365RiskyUsers,
       scopeLevel: 'link',
-      db: { table: 'm365RiskyUsers', name: 'M365 Risky Users', shape: {} },
+      db: { table: 'm365RiskyUsers', name: 'M365 Risky Users', shape: M365RiskyUsersShape },
       sync: { intervalMs: SyncIntervals['2_HOURS'] }
     },
     {
@@ -153,14 +164,14 @@ export const M365_INTEGRATION_CONFIG: Integration = {
       db: {
         table: 'm365MailboxForwarding',
         name: 'M365 Mailbox Forwarding',
-        shape: {}
+        shape: M365MailboxForwardingShape
       },
       sync: { intervalMs: SyncIntervals['8_HOURS'] }
     },
     {
       facet: ProviderFacet.M365InboxRules,
       scopeLevel: 'link',
-      db: { table: 'm365InboxRules', name: 'M365 Inbox Rules', shape: {} },
+      db: { table: 'm365InboxRules', name: 'M365 Inbox Rules', shape: M365InboxRulesShape },
       sync: { intervalMs: SyncIntervals['12_HOURS'] }
     }
   ],

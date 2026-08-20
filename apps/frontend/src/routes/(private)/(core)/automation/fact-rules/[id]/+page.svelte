@@ -14,12 +14,13 @@
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
-  const id = $derived(page.params.id);
+  const id = $derived(page.params.id ?? '');
   const canWrite = $derived(authStore.isAllowed('Policies.Write'));
 
   const ruleQuery = createQuery(() => ({
     queryKey: ['factRules.byId', id],
     queryFn: () => trpc.factRules.byId.query({ id }),
+    enabled: Boolean(id),
   }));
 
   const rule = $derived(ruleQuery.data);
@@ -79,9 +80,13 @@
 </script>
 
 {#if ruleQuery.isLoading}
-  <div class="flex size-full items-center justify-center text-sm text-muted-foreground">Loading…</div>
+  <div class="flex size-full items-center justify-center text-sm text-muted-foreground">
+    Loading…
+  </div>
 {:else if !rule}
-  <div class="flex size-full items-center justify-center text-sm text-muted-foreground">Fact rule not found.</div>
+  <div class="flex size-full items-center justify-center text-sm text-muted-foreground">
+    Fact rule not found.
+  </div>
 {:else}
   <div class="flex size-full flex-col overflow-hidden">
     <!-- Header -->
@@ -102,7 +107,9 @@
         </div>
         <div class="flex shrink-0 items-center gap-3">
           {#if canWrite}
-            <label class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground select-none">
+            <label
+              class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground select-none"
+            >
               <Switch checked={rule.enabled} onchange={toggleEnabled} disabled={toggling} />
               {rule.enabled ? 'Enabled' : 'Disabled'}
             </label>
@@ -121,14 +128,14 @@
 
     <!-- Body -->
     <div class="flex min-h-0 flex-1 gap-6 overflow-auto p-6">
-
       <!-- Main: definition -->
       <div class="flex-1 space-y-6">
-
         <!-- Output -->
         <section class="rounded-lg border">
           <div class="border-b px-4 py-3 bg-muted/30">
-            <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Output</p>
+            <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Output
+            </p>
           </div>
           <div class="grid grid-cols-2 gap-4 p-4 text-sm">
             <div>
@@ -162,7 +169,9 @@
               {#if def.transform && def.transform !== 'none'}
                 <div>
                   <p class="text-xs text-muted-foreground">Transform</p>
-                  <p class="mt-0.5 font-medium">{transformLabel[String(def.transform)] ?? String(def.transform)}</p>
+                  <p class="mt-0.5 font-medium">
+                    {transformLabel[String(def.transform)] ?? String(def.transform)}
+                  </p>
                 </div>
               {/if}
             {/if}
@@ -174,7 +183,9 @@
                 {#each defCases as c, i}
                   {#if isRecord(c)}
                     <div class="rounded-md border text-sm">
-                      <div class="border-b px-3 py-2 bg-muted/20 text-xs font-semibold text-muted-foreground">
+                      <div
+                        class="border-b px-3 py-2 bg-muted/20 text-xs font-semibold text-muted-foreground"
+                      >
                         {c.default ? 'Default' : `Case ${i + 1}`}
                       </div>
                       <div class="p-3 space-y-2">
@@ -182,7 +193,9 @@
                           <div class="space-y-1">
                             {#each c.filter.conditions as condition}
                               {#if isRecord(condition)}
-                                <div class="flex items-center gap-2 rounded-md border bg-muted/20 px-3 py-1.5 font-mono text-xs">
+                                <div
+                                  class="flex items-center gap-2 rounded-md border bg-muted/20 px-3 py-1.5 font-mono text-xs"
+                                >
                                   <span>{condition.field}</span>
                                   <span class="text-muted-foreground">{condition.op}</span>
                                   {#if condition.value !== undefined}
@@ -195,7 +208,9 @@
                         {/if}
                         <div class="flex items-center gap-2">
                           <span class="text-xs text-muted-foreground">Output:</span>
-                          <span class="font-mono font-medium text-xs">{JSON.stringify(c.output)}</span>
+                          <span class="font-mono font-medium text-xs"
+                            >{JSON.stringify(c.output)}</span
+                          >
                         </div>
                       </div>
                     </div>
@@ -209,7 +224,9 @@
         <!-- Data source -->
         <section class="rounded-lg border">
           <div class="border-b px-4 py-3 bg-muted/30">
-            <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Data Source</p>
+            <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Data Source
+            </p>
           </div>
           <div class="p-4 text-sm">
             <p class="text-xs text-muted-foreground">Source table</p>
@@ -220,14 +237,18 @@
         <!-- Filter -->
         <section class="rounded-lg border">
           <div class="border-b px-4 py-3 bg-muted/30">
-            <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Candidate Filter</p>
+            <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Candidate Filter
+            </p>
           </div>
           <div class="p-4 text-sm">
             {#if isRecord(def.filter) && Array.isArray(def.filter.conditions) && def.filter.conditions.length > 0}
               <div class="space-y-2">
                 {#each def.filter.conditions as condition}
                   {#if isRecord(condition)}
-                    <div class="flex items-center gap-2 rounded-md border bg-muted/20 px-3 py-2 font-mono text-xs">
+                    <div
+                      class="flex items-center gap-2 rounded-md border bg-muted/20 px-3 py-2 font-mono text-xs"
+                    >
                       <span class="text-foreground">{condition.field}</span>
                       <span class="text-muted-foreground">{condition.op}</span>
                       {#if condition.value !== undefined}
@@ -238,7 +259,9 @@
                 {/each}
               </div>
             {:else}
-              <p class="text-muted-foreground italic">No filter — all rows in scope are included.</p>
+              <p class="text-muted-foreground italic">
+                No filter — all rows in scope are included.
+              </p>
             {/if}
           </div>
         </section>
@@ -248,7 +271,9 @@
       <aside class="w-64 shrink-0 space-y-4">
         <section class="rounded-lg border">
           <div class="border-b px-4 py-3 bg-muted/30">
-            <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Details</p>
+            <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Details
+            </p>
           </div>
           <div class="space-y-3 p-4 text-sm">
             <div>

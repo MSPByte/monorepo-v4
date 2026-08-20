@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { Integration } from '../../../types/integration.js';
 import { ProviderFacet } from '../../../types/provider.js';
 import { SyncIntervals } from '../intervals.js';
+import { HaloPsaRecurringItemsShape } from './shapes.js';
 
 const HALOPSA_LINK_META_VERSION = 1;
 
@@ -19,7 +20,11 @@ export const HALOPSA_CONFIG: Integration = {
     {
       facet: ProviderFacet.HaloPsaRecurringItems,
       scopeLevel: 'link',
-      db: { table: 'haloPsaRecurringItems', name: 'HaloPSA Recurring Items', shape: {} },
+      db: {
+        table: 'haloPsaRecurringItems',
+        name: 'HaloPSA Recurring Items',
+        shape: HaloPsaRecurringItemsShape
+      },
       sync: { intervalMs: SyncIntervals['24_HOURS'] }
     }
   ],

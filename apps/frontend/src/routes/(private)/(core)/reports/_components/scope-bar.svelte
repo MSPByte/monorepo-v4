@@ -34,8 +34,12 @@
   }));
 
   const linksQuery = createQuery(() => ({
-    queryKey: ['integrationLinks.list', {}],
-    queryFn: () => trpc.integrationLinks.list.query({}),
+    queryKey: ['integrationLinks.list', 'microsoft-365', 'active'],
+    queryFn: () =>
+      trpc.integrationLinks.list.query({
+        integrationId: 'microsoft-365',
+        status: 'active',
+      }),
     staleTime: 5 * 60_000,
   }));
 

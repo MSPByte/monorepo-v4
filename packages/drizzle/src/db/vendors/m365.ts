@@ -254,6 +254,7 @@ export const m365Licenses = vendorsSchema.table(
     skuId: text('sku_id').notNull(),
     skuPartNumber: text('sku_part_number').notNull(),
     friendlyName: text('friendly_name').notNull(),
+    isBloat: boolean('is_bloat').notNull().default(false),
     enabled: boolean('enabled').notNull(),
     totalUnits: integer('total_units').notNull(),
     consumedUnits: integer('consumed_units').notNull(),

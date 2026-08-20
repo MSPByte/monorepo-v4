@@ -270,22 +270,16 @@ async function* fetchLicenses(connector: M365Connector): AsyncGenerator<FetchPag
     connector.subscribedSkus.listAll(),
     SkuCatalogService.resolve()
   ]);
-  const records = skus
-    .filter((sku) => {
-      const record = sku as Record<string, unknown>;
-      return typeof record.skuPartNumber === 'string'
-        ? !M365_BLOAT_LICENSES.includes(record.skuPartNumber)
-        : true;
-    })
-    .map((sku) => {
-      const record = sku as Record<string, unknown>;
-      const skuPartNumber =
-        typeof record.skuPartNumber === 'string' ? record.skuPartNumber : undefined;
-      return {
-        ...record,
-        _friendlyName: skuPartNumber ? (skuNames.get(skuPartNumber) ?? skuPartNumber) : record.skuId
-      };
-    });
+  const records = skus.map((sku) => {
+    const record = sku as Record<string, unknown>;
+    const skuPartNumber =
+      typeof record.skuPartNumber === 'string' ? record.skuPartNumber : undefined;
+    return {
+      ...record,
+      _friendlyName: skuPartNumber ? (skuNames.get(skuPartNumber) ?? skuPartNumber) : record.skuId,
+      _isBloat: skuPartNumber ? M365_BLOAT_LICENSES.includes(skuPartNumber) : false
+    };
+  });
 
   yield page(ProviderFacet.M365Licenses, records);
 }
