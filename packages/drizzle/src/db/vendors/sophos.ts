@@ -1,4 +1,4 @@
-import { uuid, text, boolean, integer, timestamp, unique, index } from 'drizzle-orm/pg-core';
+import { uuid, text, boolean, integer, jsonb, timestamp, unique, index } from 'drizzle-orm/pg-core';
 import { crudPolicy, authenticatedRole } from 'drizzle-orm/neon';
 import { vendorsSchema } from '../schemas.js';
 import { integrationLinks, sites, users } from '../public/index.js';
@@ -114,6 +114,35 @@ export const sophosLicenses = vendorsSchema.table(
     usageCount: integer('usage_count'),
     startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }).notNull(),
     endsAt: timestamp('ends_at', { withTimezone: true, mode: 'string' }),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow()
+  },
+  (t) => [unique().on(t.linkId, t.externalId), rls]
+);
+
+export const sophosFirewallLicenses = vendorsSchema.table(
+  'sophos_firewall_licenses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    linkId: uuid('link_id')
+      .notNull()
+      .references(() => integrationLinks.id, { onDelete: 'cascade' }),
+    siteId: uuid('site_id').references(() => sites.id),
+    externalId: text('external_id').notNull(),
+    sourceHash: text('source_hash'),
+    serialNumber: text('serial_number').notNull(),
+    ownerType: text('owner_type').notNull(),
+    model: text('model').notNull(),
+    modelType: text('model_type', { enum: ['virtual', 'hardware'] }).notNull(),
+    licenses: jsonb('licenses').notNull().default([]),
+    lastCheckedAt: timestamp('last_checked_at', { withTimezone: true, mode: 'string' }),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' })
       .notNull()
       .defaultNow(),

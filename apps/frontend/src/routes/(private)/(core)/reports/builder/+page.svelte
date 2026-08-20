@@ -1,9 +1,9 @@
 <script module lang="ts">
-  function formatCell(value: unknown): string {
-    if (value == null) return '—';
+  function formatCell(value: unknown, emptyValue = '—'): string {
+    if (value == null) return emptyValue;
     if (value instanceof Date) return value.toISOString();
     if (typeof value === 'boolean') return value ? 'true' : 'false';
-    if (Array.isArray(value)) return value.length === 0 ? '—' : value.join(', ');
+    if (Array.isArray(value)) return value.length === 0 ? emptyValue : value.join(', ');
     if (typeof value === 'object') return JSON.stringify(value);
     return String(value);
   }
@@ -138,15 +138,14 @@
   const shapeEntries = $derived<Array<[string, FieldDefinition]>>(
     shape ? Object.entries(shape) : []
   );
-  const displayOnlyIdentityFields = new Set(['groupNames', 'tenantName']);
   const filterEntries = $derived(
-    shapeEntries.filter(([key]) => !displayOnlyIdentityFields.has(key))
+    shapeEntries.filter(([, def]) => def.trackable || def.filterable)
   );
   const licenseOptions = $derived(licenseOptionsQuery.data ?? []);
 
   const sortColumnOptions = $derived(
     selectedColumns
-      .filter((k) => !displayOnlyIdentityFields.has(k))
+      .filter((k) => shape?.[k]?.trackable !== false)
       .map((k) => ({
         value: k,
         label: shape?.[k]?.label ?? k,
@@ -175,7 +174,7 @@
       id: filterUid++,
       column: f.column,
       operator: f.operator,
-      value: f.value == null ? '' : String(f.value),
+      value: f.value == null ? '' : Array.isArray(f.value) ? f.value : String(f.value),
     }));
     sortColumn = def.sort?.column ?? '';
     sortDirection = def.sort?.direction ?? 'asc';
@@ -239,6 +238,7 @@
 
   function operatorsFor(column: string, type: FieldDefinition['type']): readonly string[] {
     const base = OPERATORS_BY_TYPE[type];
+    if (column === 'hasLicenses') return ['eq', 'neq'];
     return column === 'assignedLicenses' && licenseOptions.length
       ? [...base, 'has_any_of', 'lacks_any_of']
       : base;
@@ -327,7 +327,8 @@
   }
 
   function csvValue(value: unknown): string {
-    const text = formatCell(value);
+    // Keep absent values truly empty in exports; the em dash is only a preview placeholder.
+    const text = formatCell(value, '');
     return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
   }
 
@@ -352,7 +353,8 @@
       }
       const headers = selectedColumns.map((key) => csvValue(shape?.[key]?.label ?? key));
       const lines = rows.map((row) => selectedColumns.map((key) => csvValue(row[key])).join(','));
-      const blob = new Blob([[headers.join(','), ...lines].join('\n')], {
+      // The UTF-8 BOM lets desktop Excel identify Unicode CSVs correctly.
+      const blob = new Blob([`\uFEFF${[headers.join(','), ...lines].join('\r\n')}`], {
         type: 'text/csv;charset=utf-8;',
       });
       const url = URL.createObjectURL(blob);

@@ -14,6 +14,7 @@ import {
   sophosEndpoints,
   sophosFirewalls,
   sophosLicenses,
+  sophosFirewallLicenses,
   sophosTamperProtection,
   haloPsaRecurringItems,
   dattoEndpoints,
@@ -83,6 +84,10 @@ export const vendorTableRegistry = {
   sophosLicenses: {
     table: sophosLicenses,
     conflictTarget: [sophosLicenses.linkId, sophosLicenses.externalId] as const
+  },
+  sophosFirewallLicenses: {
+    table: sophosFirewallLicenses,
+    conflictTarget: [sophosFirewallLicenses.linkId, sophosFirewallLicenses.externalId] as const
   },
   sophosTamperProtection: {
     table: sophosTamperProtection,

@@ -101,6 +101,34 @@ export const SophosEndpointsShape: SchemaFields = {
   }
 };
 
+export const SophosFirewallLicenseJoinFields: SchemaFields = {
+  licenseOwnerType: {
+    label: 'License Owner Type',
+    type: 'string',
+    modality: 'single',
+    trackable: false,
+    ingestPath: 'licenseOwnerType',
+    required: false
+  },
+  hasLicenses: {
+    label: 'Has Licenses',
+    type: 'boolean',
+    modality: 'single',
+    trackable: false,
+    filterable: true,
+    ingestPath: 'hasLicenses',
+    required: false
+  },
+  licenseLastCheckedAt: {
+    label: 'License Last Checked',
+    type: 'string',
+    modality: 'single',
+    trackable: false,
+    ingestPath: 'licenseLastCheckedAt',
+    required: false
+  }
+};
+
 export const SophosFirewallsShape: SchemaFields = {
   name: {
     label: 'Name',
@@ -197,6 +225,62 @@ export const SophosFirewallsShape: SchemaFields = {
     trackable: true,
     ingestPath: 'lastChangeAt',
     required: true
+  },
+  siteName: {
+    label: 'Site Name',
+    type: 'string',
+    modality: 'single',
+    trackable: false,
+    ingestPath: 'siteName',
+    required: false
+  },
+  ...SophosFirewallLicenseJoinFields
+};
+
+export const SophosFirewallLicensesShape: SchemaFields = {
+  serialNumber: {
+    label: 'Serial Number',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'serialNumber',
+    required: true
+  },
+  ownerType: {
+    label: 'Owner Type',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'ownerType',
+    required: true
+  },
+  model: {
+    label: 'Model',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'model',
+    required: true
+  },
+  modelType: {
+    label: 'Model Type',
+    type: 'enum',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'modelType',
+    required: true,
+    options: [
+      { value: 'virtual', label: 'Virtual' },
+      { value: 'hardware', label: 'Hardware' }
+    ]
+  },
+  lastCheckedAt: {
+    label: 'Last License Check',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'lastCheckedAt',
+    required: false
   }
 };
 

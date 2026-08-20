@@ -13,7 +13,8 @@ import {
   m365Policies,
   m365Devices,
   sophosEndpoints,
-  sophosFirewalls,
+  sophosFirewallsWithSite,
+  sophosFirewallLicenses,
   dattoEndpoints,
   coveEndpoints,
   assets
@@ -62,7 +63,7 @@ const SOURCE_TABLES: Record<string, unknown> = {
   m365Policies,
   m365Devices,
   sophosEndpoints,
-  sophosFirewalls,
+  sophosFirewalls: sophosFirewallsWithSite,
   dattoEndpoints,
   coveEndpoints
 };
@@ -114,7 +115,15 @@ const reportDefinitionSchema = z.object({
 
 type ReportDefinition = z.infer<typeof reportDefinitionSchema>;
 
-const DISPLAY_ONLY_IDENTITY_COLUMNS = new Set(['groupNames', 'tenantName']);
+/** Fields with trackable:false are display-only and cannot be sorted at the DB level. */
+function isDisplayOnly(shape: PolicyTableShape, column: string): boolean {
+  return shape.shape[column]?.trackable === false;
+}
+
+function isFilterable(shape: PolicyTableShape, column: string): boolean {
+  const field = shape.shape[column];
+  return field?.trackable === true || field?.filterable === true;
+}
 
 const licenseRequirements = new Map<string, (typeof M365_LICENSE_REQUIREMENTS)[number]>(
   M365_LICENSE_REQUIREMENTS.map((requirement) => [requirement.value, requirement])
@@ -126,6 +135,10 @@ function isRequirementFilter(filter: ReportDefinition['filters'][number]) {
 
 function isLicenseSetFilter(filter: ReportDefinition['filters'][number]) {
   return filter.operator === 'has_any_of' || filter.operator === 'lacks_any_of';
+}
+
+function isFirewallHasLicensesFilter(filter: ReportDefinition['filters'][number]) {
+  return filter.column === 'hasLicenses';
 }
 
 function sqlTextArray(values: readonly string[]) {
@@ -170,10 +183,23 @@ function validateDefinition(shape: PolicyTableShape, def: ReportDefinition): voi
         message: `Unknown filter column "${filter.column}" for source "${shape.table}"`
       });
     }
-    if (shape.table === 'm365Identities' && DISPLAY_ONLY_IDENTITY_COLUMNS.has(filter.column)) {
+    if (isFirewallHasLicensesFilter(filter)) {
+      if (
+        shape.table !== 'sophosFirewalls' ||
+        (filter.operator !== 'eq' && filter.operator !== 'neq') ||
+        typeof filter.value !== 'boolean'
+      ) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Sophos Firewall Has Licenses filters must compare to true or false'
+        });
+      }
+      continue;
+    }
+    if (!isFilterable(shape, filter.column)) {
       throw new TRPCError({
         code: 'BAD_REQUEST',
-        message: `${field.label} can be displayed in identity reports but cannot be filtered yet`
+        message: `${field.label} can be displayed in reports but cannot be filtered`
       });
     }
     if (isRequirementFilter(filter)) {
@@ -213,11 +239,7 @@ function validateDefinition(shape: PolicyTableShape, def: ReportDefinition): voi
     }
   }
 
-  if (
-    def.sort &&
-    (!known.has(def.sort.column) ||
-      (shape.table === 'm365Identities' && DISPLAY_ONLY_IDENTITY_COLUMNS.has(def.sort.column)))
-  ) {
+  if (def.sort && (!known.has(def.sort.column) || isDisplayOnly(shape, def.sort.column))) {
     throw new TRPCError({
       code: 'BAD_REQUEST',
       message: `Unknown sort column "${def.sort.column}" for source "${shape.table}"`
@@ -241,6 +263,20 @@ function buildLicenseWhere(filters: ReportDefinition['filters']): SQL | undefine
       const matches = sql`coalesce(${sql.identifier('assigned_licenses')}, array[]::text[]) && ${sqlTextArray(filter.value as string[])}`;
       conditions.push(filter.operator === 'has_any_of' ? matches : sql`not (${matches})`);
     }
+    if (isFirewallHasLicensesFilter(filter)) {
+      const hasLicenses = sql`exists (
+        select 1
+        from vendors.sophos_firewall_licenses as firewall_licenses
+        where firewall_licenses.serial_number = ${sophosFirewallsWithSite.serialNumber}
+          and jsonb_array_length(firewall_licenses.licenses) > 0
+      )`;
+      const matches = filter.value === true;
+      conditions.push(
+        filter.operator === 'eq'
+          ? (matches ? hasLicenses : sql`not (${hasLicenses})`)
+          : (matches ? sql`not (${hasLicenses})` : hasLicenses)
+      );
+    }
   }
   return conditions.length ? and(...conditions) : undefined;
 }
@@ -252,11 +288,59 @@ function buildLicenseWhere(filters: ReportDefinition['filters']): SQL | undefine
  * definition can still filter `assignedLicenses` efficiently in the source
  * table while exports and previews get readable values.
  */
+async function decorateFirewallRows(
+  ctx: Context,
+  rows: Record<string, unknown>[]
+): Promise<Record<string, unknown>[]> {
+  if (rows.length === 0) return rows;
+  const serialNumbers = [
+    ...new Set(
+      rows.map((row) => row.serialNumber).filter((serial): serial is string => typeof serial === 'string')
+    )
+  ];
+  if (serialNumbers.length === 0) return rows;
+
+  const licenseRows = await ctx.db
+    .select({
+      serialNumber: sophosFirewallLicenses.serialNumber,
+      ownerType: sophosFirewallLicenses.ownerType,
+      licenses: sophosFirewallLicenses.licenses,
+      lastCheckedAt: sophosFirewallLicenses.lastCheckedAt
+    })
+    .from(sophosFirewallLicenses)
+    .where(inArray(sophosFirewallLicenses.serialNumber, serialNumbers));
+
+  // Sophos firewall licenses can be stored on a different integration link
+  // than the firewall itself. A serial number is the licensing identity.
+  const licenseMap = new Map<string, (typeof licenseRows)[number]>();
+  for (const license of licenseRows) {
+    const existing = licenseMap.get(license.serialNumber);
+    if (
+      !existing ||
+      (Array.isArray(license.licenses) && license.licenses.length > 0 &&
+        (!Array.isArray(existing.licenses) || existing.licenses.length === 0))
+    ) {
+      licenseMap.set(license.serialNumber, license);
+    }
+  }
+
+  return rows.map((row) => {
+    const lic = typeof row.serialNumber === 'string' ? licenseMap.get(row.serialNumber) : undefined;
+    return {
+      ...row,
+      licenseOwnerType: lic?.ownerType ?? null,
+      hasLicenses: lic ? Array.isArray(lic.licenses) && lic.licenses.length > 0 : null,
+      licenseLastCheckedAt: lic?.lastCheckedAt ?? null
+    };
+  });
+}
+
 async function decorateReportRows(
   ctx: Context,
   sourceName: string,
   rows: Record<string, unknown>[]
 ): Promise<Record<string, unknown>[]> {
+  if (sourceName === 'sophosFirewalls') return decorateFirewallRows(ctx, rows);
   if (sourceName !== 'm365Identities' || rows.length === 0) return rows;
 
   const identities = rows.filter(
@@ -739,7 +823,12 @@ export const reportsRouter = t.router({
       filters: [
         ...(input.table.filters ?? []),
         ...definition.filters
-          .filter((filter) => !isRequirementFilter(filter) && !isLicenseSetFilter(filter))
+          .filter(
+            (filter) =>
+              !isRequirementFilter(filter) &&
+              !isLicenseSetFilter(filter) &&
+              !isFirewallHasLicensesFilter(filter)
+          )
           .map((filter) => ({
             ...filter,
             operator: filter.operator as NonNullable<TableDataInput['filters']>[number]['operator'],

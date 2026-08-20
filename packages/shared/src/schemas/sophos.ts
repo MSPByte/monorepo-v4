@@ -65,6 +65,18 @@ export const SophosLicenseSchema = z.looseObject({
     .optional(),
 });
 
+export const SophosFirewallLicenseSchema = z.looseObject({
+  serialNumber: z.string(),
+  owner: z.looseObject({
+    id: z.string(),
+    type: z.string(),
+  }),
+  model: z.string(),
+  modelType: z.string(),
+  lastSeenAt: z.string().nullable().optional(),
+  licenses: z.array(z.looseObject({})).default([]),
+});
+
 export const SophosTamperProtectionSchema = z.looseObject({
   _endpoint_id: z.string(),
   _endpoint_external_id: z.string(),
@@ -84,6 +96,7 @@ export const SophosRawSchemas = {
   [ProviderFacet.SophosEndpoints]: SophosEndpointSchema,
   [ProviderFacet.SophosFirewalls]: SophosFirewallSchema,
   [ProviderFacet.SophosLicenses]: SophosLicenseSchema,
+  [ProviderFacet.SophosFirewallLicenses]: SophosFirewallLicenseSchema,
   [ProviderFacet.SophosTamperProtection]: SophosTamperProtectionSchema,
 } as const;
 
@@ -91,6 +104,7 @@ export type SophosRawFacet = keyof typeof SophosRawSchemas;
 export type SophosEndpoint = z.infer<typeof SophosEndpointSchema>;
 export type SophosFirewall = z.infer<typeof SophosFirewallSchema>;
 export type SophosLicense = z.infer<typeof SophosLicenseSchema>;
+export type SophosFirewallLicense = z.infer<typeof SophosFirewallLicenseSchema>;
 export type SophosTamperProtection = z.infer<typeof SophosTamperProtectionSchema>;
 
 export function getSophosRawSchema(facet: ProviderFacet | string) {

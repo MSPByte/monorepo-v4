@@ -17,6 +17,8 @@ export type FieldDefinition = {
   fields?: SchemaFields;
   ingestPath: string;
   trackable: boolean;
+  /** Allows a custom report query filter when the field is not stored on the source table. */
+  filterable?: boolean;
   reference?: FieldReference;
 };
 

@@ -110,6 +110,7 @@ export class SophosConnector {
 
   readonly license: {
     list: (tenantId?: string) => Promise<unknown[]>;
+    firewalls: (tenantId?: string) => Promise<unknown[]>;
   };
 
   readonly partner: {
@@ -212,15 +213,47 @@ export class SophosConnector {
           tenantId
         );
         return result.licenses ?? [];
-      }
+      },
+      firewalls: (tenantId) => this.fetchPartnerLicenses('firewalls', tenantId)
     };
 
     this.partner = {
       tenants: {
         list: () => this.fetchPartnerTenants(),
-        create: (req) => this.createPartnerTenant(req),
+        create: (req) => this.createPartnerTenant(req)
       }
     };
+  }
+
+  /**
+   * Fetches firewall license assignments at the partner level and filters to
+   * those belonging to the given tenant (matched via organization.id === tenantId).
+   */
+  private async fetchPartnerLicenses(kind: 'firewalls', tenantId?: string): Promise<unknown[]> {
+    const whoami = await this.client.get<{
+      id: string;
+      idType: string;
+      apiHosts?: { global?: string };
+    }>('https://api.central.sophos.com/whoami/v1');
+
+    if (whoami.idType !== 'partner' || !whoami.id) {
+      throw new Error('Sophos firewall license ingestion requires a partner account');
+    }
+
+    const globalHost = whoami.apiHosts?.global ?? 'https://api.central.sophos.com';
+    const partnerId = whoami.id;
+
+    const items = await this.client.fetchAllPages<Record<string, unknown>>(
+      `${globalHost}/licenses/v1/licenses/firewalls?pageTotal=true&pageSize=50`,
+      undefined,
+      { partnerId }
+    );
+
+    if (!tenantId) return items;
+
+    return items.filter(
+      (item) => (item.billingTenant as { id?: string } | undefined)?.id === tenantId
+    );
   }
 
   async checkHealth(): Promise<boolean> {

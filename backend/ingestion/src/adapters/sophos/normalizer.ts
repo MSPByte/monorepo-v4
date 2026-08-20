@@ -3,10 +3,12 @@ import {
   SophosEndpointSchema,
   SophosFirewallSchema,
   SophosLicenseSchema,
+  SophosFirewallLicenseSchema,
   SophosTamperProtectionSchema,
   type SophosEndpoint,
   type SophosFirewall,
   type SophosLicense,
+  type SophosFirewallLicense,
   type SophosTamperProtection,
 } from "@mspbyte/shared";
 
@@ -20,6 +22,8 @@ export function normalizeSophos(facet: string, raw: unknown): RecordValue {
       return normalizeFirewall(SophosFirewallSchema.parse(raw));
     case ProviderFacet.SophosLicenses:
       return normalizeLicense(SophosLicenseSchema.parse(raw));
+    case ProviderFacet.SophosFirewallLicenses:
+      return normalizeFirewallLicense(SophosFirewallLicenseSchema.parse(raw));
     case ProviderFacet.SophosTamperProtection:
       return normalizeTamperProtection(
         SophosTamperProtectionSchema.parse(raw),
@@ -77,6 +81,18 @@ function normalizeLicense(raw: SophosLicense): RecordValue {
     usageCount: raw.usage?.current?.count ?? null,
     startedAt: dateString(raw.startDate) ?? new Date().toISOString(),
     endsAt: dateString(raw.endDate),
+  };
+}
+
+function normalizeFirewallLicense(raw: SophosFirewallLicense): RecordValue {
+  return {
+    externalId: raw.serialNumber,
+    serialNumber: raw.serialNumber,
+    ownerType: raw.owner.type,
+    model: raw.model,
+    modelType: raw.modelType === 'virtual' ? 'virtual' : 'hardware',
+    licenses: raw.licenses,
+    lastCheckedAt: dateString(raw.lastSeenAt),
   };
 }
 

@@ -30,7 +30,7 @@
   const groupsQuery = createQuery(() => ({
     queryKey: ['siteGroups.list'],
     queryFn: () => trpc.siteGroups.list.query(),
-    staleTime: 5 * 60_000,
+    staleTime: 0,
   }));
 
   const linksQuery = createQuery(() => ({

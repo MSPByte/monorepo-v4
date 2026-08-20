@@ -5,6 +5,7 @@ import { passthroughLinkMetaSchema } from "../link-meta-passthrough.js";
 import {
   SophosEndpointsShape,
   SophosFirewallsShape,
+  SophosFirewallLicensesShape,
   SophosLicensesShape,
 } from "./shapes.js";
 
@@ -43,6 +44,16 @@ export const SOPHOS_PARTNER_CONFIG: Integration = {
         table: "sophosLicenses",
         name: "Sophos Licenses",
         shape: SophosLicensesShape,
+      },
+      sync: { intervalMs: SyncIntervals["24_HOURS"] },
+    },
+    {
+      facet: ProviderFacet.SophosFirewallLicenses,
+      scopeLevel: "link",
+      db: {
+        table: "sophosFirewallLicenses",
+        name: "Sophos Firewall Licenses",
+        shape: SophosFirewallLicensesShape,
       },
       sync: { intervalMs: SyncIntervals["24_HOURS"] },
     },
