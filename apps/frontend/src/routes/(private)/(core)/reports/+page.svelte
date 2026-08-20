@@ -17,6 +17,7 @@
   } from '$lib/components/data-table';
   import { relativeDateColumn, textColumn } from '$lib/components/data-table/column-defs';
   import { showErrorToast } from '$lib/utils/errors';
+  import ScopeBar from './_components/scope-bar.svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
@@ -99,12 +100,15 @@
         Compose reports over vendor data. Reports are visible to everyone with Reports.Read.
       </p>
     </div>
-    {#if canWrite}
-      <Button size="sm" class="gap-2" onclick={() => goto('/reports/builder')}>
-        <Plus class="size-4" />
-        New report
-      </Button>
-    {/if}
+    <div class="flex items-center gap-2">
+      <ScopeBar />
+      {#if canWrite}
+        <Button size="sm" class="gap-2" onclick={() => goto('/reports/builder')}>
+          <Plus class="size-4" />
+          New report
+        </Button>
+      {/if}
+    </div>
   </div>
 
   <DataTable
