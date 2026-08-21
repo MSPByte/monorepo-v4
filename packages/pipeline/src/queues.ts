@@ -38,3 +38,7 @@ export function nextIngestionJobId(linkId: string, facet: string): string {
 export function packageRunJobId(packageRunId: string, executionAttempt = 0): string {
   return assertBullMqName(`package_run_${packageRunId}_${executionAttempt}`, "BullMQ job id");
 }
+
+export function policyTriggerJobId(requestId: string): string {
+  return assertBullMqName(`policy_trigger_${requestId}`, "BullMQ job id");
+}

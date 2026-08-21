@@ -396,10 +396,34 @@ export const policySetsWithStats = policySchema
     ) of on true
   `);
 
+export const policyEvaluationRequests = policySchema.table(
+  'policy_evaluation_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: text('org_id').notNull(),
+    linkId: uuid('link_id')
+      .notNull()
+      .references(() => integrationLinks.id, { onDelete: 'cascade' }),
+    siteId: uuid('site_id').references(() => sites.id, { onDelete: 'set null' }),
+    integrationId: text('integration_id').notNull(),
+    type: text('type').notNull(),
+    status: text('status', { enum: ['pending', 'queued'] }).notNull().default('pending'),
+    bullmqJobId: text('bullmq_job_id'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow()
+  },
+  (t) => [index('policy_eval_req_status_idx').on(t.status), rls]
+);
+
 export type Finding = typeof findings.$inferSelect;
 export type FindingWithContext = typeof findingsWithContext.$inferSelect;
 export type Policy = typeof policies.$inferSelect;
 export type PolicyAssignment = typeof policyAssignments.$inferSelect;
+export type PolicyEvaluationRequest = typeof policyEvaluationRequests.$inferSelect;
 export type PolicySet = typeof policySets.$inferSelect;
 export type PolicyWithStats = typeof policiesWithStats.$inferSelect;
 export type PolicySetWithStats = typeof policySetsWithStats.$inferSelect;

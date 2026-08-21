@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import {
   customerLogs,
   findings,
@@ -9,10 +9,13 @@ import {
   policyDependencies,
   policiesWithStats,
   policyAssignments,
+  policyEvaluationRequests,
   policySetItems,
   policySets,
+  siteGroupMembers,
   siteGroups,
   sites,
+  syncContext,
 } from "@mspbyte/drizzle";
 import { TRPCError } from "@trpc/server";
 import { ActionLabels, PolicyTableShapes } from "@mspbyte/shared";
@@ -191,6 +194,141 @@ function requirePoliciesWrite(ctx: { can: (p: 'Policies.Write') => boolean }) {
   if (!ctx.can('Policies.Write')) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Policies.Write permission required' });
   }
+}
+
+// Returns true if policyId is still covered by any enabled assignment other
+// than the one being deleted. Checks both direct and framework assignments.
+async function hasPolicyCoverage(
+  db: Context['db'],
+  policyId: string,
+  excludeAssignmentId: string
+): Promise<boolean> {
+  const [direct] = await db
+    .select({ id: policyAssignments.id })
+    .from(policyAssignments)
+    .where(
+      and(
+        eq(policyAssignments.policyId, policyId),
+        ne(policyAssignments.id, excludeAssignmentId),
+        eq(policyAssignments.enabled, true)
+      )
+    )
+    .limit(1);
+  if (direct) return true;
+
+  const [viaFramework] = await db
+    .select({ id: policyAssignments.id })
+    .from(policySetItems)
+    .innerJoin(policyAssignments, eq(policySetItems.policySetId, policyAssignments.policySetId))
+    .where(
+      and(
+        eq(policySetItems.policyId, policyId),
+        ne(policyAssignments.id, excludeAssignmentId),
+        eq(policyAssignments.enabled, true)
+      )
+    )
+    .limit(1);
+  return !!viaFramework;
+}
+
+// Returns true if policyId has coverage via any path other than the given set.
+async function hasPolicyCoverageExcludingSet(
+  db: Context['db'],
+  policyId: string,
+  excludeSetId: string
+): Promise<boolean> {
+  const [direct] = await db
+    .select({ id: policyAssignments.id })
+    .from(policyAssignments)
+    .where(and(eq(policyAssignments.policyId, policyId), eq(policyAssignments.enabled, true)))
+    .limit(1);
+  if (direct) return true;
+
+  const otherMemberships = await db
+    .select({ policySetId: policySetItems.policySetId })
+    .from(policySetItems)
+    .where(
+      and(eq(policySetItems.policyId, policyId), ne(policySetItems.policySetId, excludeSetId))
+    );
+
+  if (otherMemberships.length === 0) return false;
+
+  const otherSetIds = otherMemberships.map((m: { policySetId: string }) => m.policySetId);
+  const [viaOtherSet] = await db
+    .select({ id: policyAssignments.id })
+    .from(policyAssignments)
+    .where(and(inArray(policyAssignments.policySetId, otherSetIds), eq(policyAssignments.enabled, true)))
+    .limit(1);
+  return !!viaOtherSet;
+}
+
+// Returns (linkId, siteId, integrationId, type) for all active links in the
+// assignment's scope that have at least one successful sync run.
+async function findLinksWithData(
+  db: Context['db'],
+  assignment: typeof policyAssignments.$inferSelect
+): Promise<Array<{ linkId: string; siteId: string | null; integrationId: string; type: string }>> {
+  const baseConditions = [
+    isNotNull(syncContext.lastSuccessAt),
+    eq(integrationLinks.status, 'active'),
+  ];
+
+  if (assignment.scopeType === 'integration_link' && assignment.linkId) {
+    return db
+      .select({
+        linkId: syncContext.linkId,
+        siteId: integrationLinks.siteId,
+        integrationId: syncContext.integrationId,
+        type: syncContext.type,
+      })
+      .from(syncContext)
+      .innerJoin(integrationLinks, eq(syncContext.linkId, integrationLinks.id))
+      .where(and(...baseConditions, eq(integrationLinks.id, assignment.linkId)));
+  }
+
+  if (assignment.scopeType === 'site' && assignment.siteId) {
+    return db
+      .select({
+        linkId: syncContext.linkId,
+        siteId: integrationLinks.siteId,
+        integrationId: syncContext.integrationId,
+        type: syncContext.type,
+      })
+      .from(syncContext)
+      .innerJoin(integrationLinks, eq(syncContext.linkId, integrationLinks.id))
+      .where(and(...baseConditions, eq(integrationLinks.siteId, assignment.siteId)));
+  }
+
+  if (assignment.scopeType === 'site_group' && assignment.siteGroupId) {
+    const members = await db
+      .select({ siteId: siteGroupMembers.siteId })
+      .from(siteGroupMembers)
+      .where(eq(siteGroupMembers.siteGroupId, assignment.siteGroupId));
+    if (members.length === 0) return [];
+    const siteIds = members.map((m: { siteId: string }) => m.siteId);
+    return db
+      .select({
+        linkId: syncContext.linkId,
+        siteId: integrationLinks.siteId,
+        integrationId: syncContext.integrationId,
+        type: syncContext.type,
+      })
+      .from(syncContext)
+      .innerJoin(integrationLinks, eq(syncContext.linkId, integrationLinks.id))
+      .where(and(...baseConditions, inArray(integrationLinks.siteId, siteIds)));
+  }
+
+  // global scope: all active links with data
+  return db
+    .select({
+      linkId: syncContext.linkId,
+      siteId: integrationLinks.siteId,
+      integrationId: syncContext.integrationId,
+      type: syncContext.type,
+    })
+    .from(syncContext)
+    .innerJoin(integrationLinks, eq(syncContext.linkId, integrationLinks.id))
+    .where(and(...baseConditions));
 }
 
 async function auditAssignmentChange(
@@ -609,6 +747,27 @@ export const policiesRouter = t.router({
         },
       });
 
+      // For scopes that already have ingested data, request an immediate policy
+      // evaluation rather than waiting for the next ingestion cycle (up to 24h).
+      // The policy-trigger poller in backend/policies picks these up and enqueues
+      // BullMQ jobs without requiring direct Redis access from tRPC.
+      if (row.enabled) {
+        const linksWithData = await findLinksWithData(ctx.db, row);
+        if (linksWithData.length > 0) {
+          await ctx.db
+            .insert(policyEvaluationRequests)
+            .values(
+              linksWithData.map((link) => ({
+                orgId: ctx.orgId,
+                linkId: link.linkId,
+                siteId: link.siteId,
+                integrationId: link.integrationId,
+                type: link.type,
+              }))
+            );
+        }
+      }
+
       return row;
     }),
 
@@ -695,6 +854,36 @@ export const policiesRouter = t.router({
         .limit(1);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
 
+      // Collect all policyIds covered by this assignment so we can check whether
+      // findings should be closed (only when no other assignment remains).
+      let affectedPolicyIds: string[] = [];
+      if (existing.subjectType === 'policy' && existing.policyId) {
+        affectedPolicyIds = [existing.policyId];
+      } else if (existing.subjectType === 'policy_set' && existing.policySetId) {
+        const items = await ctx.db
+          .select({ policyId: policySetItems.policyId })
+          .from(policySetItems)
+          .where(eq(policySetItems.policySetId, existing.policySetId));
+        affectedPolicyIds = items.map((i) => i.policyId);
+      }
+
+      const now = new Date().toISOString();
+      for (const policyId of affectedPolicyIds) {
+        const stillCovered = await hasPolicyCoverage(ctx.db, policyId, input.id);
+        if (!stillCovered) {
+          await ctx.db
+            .update(findings)
+            .set({ status: 'resolved', resolvedAt: now, updatedAt: now })
+            .where(
+              and(
+                eq(findings.policyId, policyId),
+                eq(findings.policyAssignmentId, input.id),
+                inArray(findings.status, ['open', 'acknowledged', 'regressed'])
+              )
+            );
+        }
+      }
+
       await ctx.db
         .delete(policyAssignments)
         .where(eq(policyAssignments.id, input.id));
@@ -757,6 +946,39 @@ export const policiesRouter = t.router({
       const nextSetIds = [...new Set(input.policySetIds)].sort();
       const added = nextSetIds.filter((id) => !previousSetIds.includes(id));
       const removed = previousSetIds.filter((id) => !nextSetIds.includes(id));
+
+      // Close orphaned findings for each set the policy is being removed from,
+      // but only when no other assignment still covers the policy.
+      if (removed.length > 0) {
+        const now = new Date().toISOString();
+        for (const removedSetId of removed) {
+          const setAssignments = await ctx.db
+            .select({ id: policyAssignments.id })
+            .from(policyAssignments)
+            .where(eq(policyAssignments.policySetId, removedSetId));
+
+          if (setAssignments.length === 0) continue;
+
+          const stillCovered = await hasPolicyCoverageExcludingSet(
+            ctx.db,
+            input.policyId,
+            removedSetId
+          );
+          if (!stillCovered) {
+            const setAssignmentIds = setAssignments.map((a) => a.id);
+            await ctx.db
+              .update(findings)
+              .set({ status: 'resolved', resolvedAt: now, updatedAt: now })
+              .where(
+                and(
+                  eq(findings.policyId, input.policyId),
+                  inArray(findings.policyAssignmentId, setAssignmentIds),
+                  inArray(findings.status, ['open', 'acknowledged', 'regressed'])
+                )
+              );
+          }
+        }
+      }
 
       await ctx.db
         .delete(policySetItems)
