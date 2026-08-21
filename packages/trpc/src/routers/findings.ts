@@ -5,7 +5,9 @@ import {
   findings,
   findingsWithContext,
   entitySources,
+  policies,
   policyDependencies,
+  userReportPrefs,
   users
 } from '@mspbyte/drizzle';
 import { ActionLabels, getPolicyTableShape } from '@mspbyte/shared';
@@ -441,6 +443,171 @@ export const findingsRouter = t.router({
       relatedBySite,
       relatedByPolicy
     };
+  }),
+
+  policyBreakdown: authProcedure.query(async ({ ctx }) => {
+    const roleScope = ctx.scopeFor('Findings.Read');
+    if (roleScope !== 'all' && roleScope.length === 0) return [];
+
+    // Read workspace scope from the user's saved report prefs (same prefs used
+    // by Reports and Dashboards, so the ScopeBar applies here too).
+    const [prefs] = await ctx.db
+      .select({ scopeKind: userReportPrefs.scopeKind, scopeIds: userReportPrefs.scopeIds })
+      .from(userReportPrefs)
+      .where(eq(userReportPrefs.userId, ctx.user.id))
+      .limit(1)
+      .catch(() => []);
+
+    // Role ceiling on sites.
+    let effectiveSiteIds: Set<string> | null =
+      roleScope === 'all' ? null : new Set(roleScope);
+    // Workspace link scope (null = no link restriction, empty Set = no links).
+    let effectiveLinkIds: Set<string> | null = null;
+
+    const narrowSites = (next: Set<string>) => {
+      effectiveSiteIds =
+        effectiveSiteIds === null
+          ? next
+          : new Set([...effectiveSiteIds].filter((id) => next.has(id)));
+    };
+
+    if (prefs && prefs.scopeKind !== 'all' && (prefs.scopeIds?.length ?? 0) > 0) {
+      if (prefs.scopeKind === 'sites') {
+        narrowSites(new Set(prefs.scopeIds!));
+      } else if (prefs.scopeKind === 'links') {
+        effectiveLinkIds = new Set(prefs.scopeIds!);
+      } else if (prefs.scopeKind === 'groups') {
+        const targets = await Promise.all(
+          prefs.scopeIds!.map((gid) => loadGroupTargets(ctx.db, gid))
+        );
+        const groupSiteIds = new Set(targets.flatMap((t) => t.siteIds));
+        const groupLinkIds = new Set(targets.flatMap((t) => t.linkIds));
+        if (groupSiteIds.size === 0 && groupLinkIds.size === 0) return [];
+        if (groupSiteIds.size > 0) narrowSites(groupSiteIds);
+        else effectiveSiteIds = new Set(); // group has no site members
+        if (groupLinkIds.size > 0) effectiveLinkIds = groupLinkIds;
+      }
+    }
+
+    if (effectiveSiteIds !== null && effectiveSiteIds.size === 0 && effectiveLinkIds === null) return [];
+
+    // Build a WHERE that matches site-scoped and/or link-scoped findings.
+    const siteCondition =
+      effectiveSiteIds === null ? undefined : inArray(findingsWithContext.siteId, [...effectiveSiteIds]);
+    const linkCondition =
+      effectiveLinkIds === null ? undefined : inArray(findingsWithContext.linkId, [...effectiveLinkIds]);
+    const scopeWhere =
+      siteCondition && linkCondition
+        ? or(siteCondition, linkCondition)
+        : siteCondition ?? linkCondition;
+
+    // Summary grouped by policy, with category from the policies table.
+    const policyRows = await ctx.db
+      .select({
+        policyId: findingsWithContext.policyId,
+        policyName: findingsWithContext.policyName,
+        category: policies.category,
+        severity: sql<number>`max(${findingsWithContext.severity})::int`,
+        totalFindings: sql<number>`count(*)::int`,
+        siteCount: sql<number>`count(distinct ${findingsWithContext.siteId})::int`,
+        linkCount: sql<number>`count(distinct ${findingsWithContext.linkId}) filter (where ${findingsWithContext.linkId} is not null)::int`
+      })
+      .from(findingsWithContext)
+      .innerJoin(policies, eq(findingsWithContext.policyId, policies.id))
+      .where(and(inArray(findingsWithContext.status, [...OPEN_STATUSES]), scopeWhere))
+      .groupBy(findingsWithContext.policyId, findingsWithContext.policyName, policies.category)
+      .orderBy(sql`max(${findingsWithContext.severity}) desc`, sql`count(*) desc`)
+      .catch(() => []);
+
+    if (policyRows.length === 0) return [];
+
+    const policyIds = policyRows.map((r) => r.policyId);
+    const detailRows = await ctx.db
+      .select({
+        policyId: findingsWithContext.policyId,
+        siteId: findingsWithContext.siteId,
+        siteName: findingsWithContext.siteName,
+        linkId: findingsWithContext.linkId,
+        linkName: findingsWithContext.linkName,
+        count: sql<number>`count(*)::int`
+      })
+      .from(findingsWithContext)
+      .where(
+        and(
+          inArray(findingsWithContext.policyId, policyIds),
+          inArray(findingsWithContext.status, [...OPEN_STATUSES]),
+          scopeWhere
+        )
+      )
+      .groupBy(
+        findingsWithContext.policyId,
+        findingsWithContext.siteId,
+        findingsWithContext.siteName,
+        findingsWithContext.linkId,
+        findingsWithContext.linkName
+      )
+      .catch(() => []);
+
+    type SiteEntry = { siteId: string; siteName: string; count: number };
+    type LinkEntry = {
+      linkId: string;
+      linkName: string;
+      siteId: string | null;
+      siteName: string | null;
+      count: number;
+    };
+    const detailByPolicy = new Map<
+      string,
+      { sites: Map<string, SiteEntry>; links: Map<string, LinkEntry> }
+    >();
+
+    for (const row of detailRows) {
+      if (!detailByPolicy.has(row.policyId)) {
+        detailByPolicy.set(row.policyId, { sites: new Map(), links: new Map() });
+      }
+      const entry = detailByPolicy.get(row.policyId)!;
+      if (row.siteId) {
+        const existing = entry.sites.get(row.siteId);
+        if (existing) {
+          existing.count += row.count;
+        } else {
+          entry.sites.set(row.siteId, {
+            siteId: row.siteId,
+            siteName: row.siteName ?? row.siteId,
+            count: row.count
+          });
+        }
+      }
+      if (row.linkId) {
+        const existing = entry.links.get(row.linkId);
+        if (existing) {
+          existing.count += row.count;
+        } else {
+          entry.links.set(row.linkId, {
+            linkId: row.linkId,
+            linkName: row.linkName ?? row.linkId,
+            siteId: row.siteId,
+            siteName: row.siteName,
+            count: row.count
+          });
+        }
+      }
+    }
+
+    return policyRows.map((policy) => {
+      const detail = detailByPolicy.get(policy.policyId);
+      return {
+        policyId: policy.policyId,
+        policyName: policy.policyName,
+        category: policy.category ?? null,
+        severity: policy.severity,
+        totalFindings: policy.totalFindings,
+        siteCount: policy.siteCount,
+        linkCount: policy.linkCount,
+        sites: detail ? [...detail.sites.values()].sort((a, b) => b.count - a.count) : [],
+        links: detail ? [...detail.links.values()].sort((a, b) => b.count - a.count) : []
+      };
+    });
   }),
 
   overview: authProcedure.query(async ({ ctx }) => {

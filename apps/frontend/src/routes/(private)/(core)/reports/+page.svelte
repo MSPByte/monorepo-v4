@@ -3,7 +3,7 @@
   import { goto } from '$app/navigation';
   import { useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
-  import { Plus, Trash2 } from '@lucide/svelte';
+  import { Pencil, Plus, Trash2 } from '@lucide/svelte';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import { getPolicyTableShape } from '@mspbyte/shared';
@@ -117,18 +117,31 @@
     {refreshKey}
     defaultPageSize={25}
     defaultSort={{ field: 'updatedAt', dir: 'desc' }}
-    onrowclick={(row) => goto(`/reports/builder?id=${row.id}`)}
-    rowActions={canDelete
-      ? [
-          {
-            label: 'Delete',
-            icon: Trash2,
-            variant: 'destructive',
-            onclick: (rows) => {
-              toDelete = rows[0] ?? null;
+    onrowclick={(row) => goto(`/reports/${row.id}`)}
+    rowActions={[
+      ...(canWrite
+        ? [
+            {
+              label: 'Edit',
+              icon: Pencil,
+              onclick: (rows: ReportRow[]) => {
+                if (rows[0]) goto(`/reports/builder?id=${rows[0].id}`);
+              },
             },
-          },
-        ]
-      : []}
+          ]
+        : []),
+      ...(canDelete
+        ? [
+            {
+              label: 'Delete',
+              icon: Trash2,
+              variant: 'destructive' as const,
+              onclick: (rows: ReportRow[]) => {
+                toDelete = rows[0] ?? null;
+              },
+            },
+          ]
+        : []),
+    ]}
   />
 </div>

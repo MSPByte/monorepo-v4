@@ -4,7 +4,7 @@
   const { children } = $props();
 
   const tabs = [
-    { href: '/home', label: 'Briefing', exact: true },
+    { href: '/home', label: 'Dashboard', exact: true },
     { href: '/home/findings', label: 'Findings' },
     { href: '/home/sites', label: 'Sites' }
   ];

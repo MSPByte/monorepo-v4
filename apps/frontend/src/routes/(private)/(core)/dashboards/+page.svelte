@@ -3,7 +3,7 @@
   import { goto } from '$app/navigation';
   import { useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
-  import { Plus, Pin, Trash2 } from '@lucide/svelte';
+  import { Plus, Trash2 } from '@lucide/svelte';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import { authStore } from '$lib/stores/auth.store.svelte';
@@ -16,7 +16,6 @@
   } from '$lib/components/data-table';
   import { relativeDateColumn, textColumn } from '$lib/components/data-table/column-defs';
   import { showErrorToast } from '$lib/utils/errors';
-  import ScopeBar from '../reports/_components/scope-bar.svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
@@ -28,7 +27,6 @@
     name: string;
     description: string | null;
     tileCount: number;
-    pinned: boolean;
     updatedAt: string | null;
     [key: string]: unknown;
   };
@@ -67,17 +65,6 @@
     return { rows: filtered, total: filtered.length };
   }
 
-  async function pin(row: DashboardRow) {
-    try {
-      await trpc.reports.saveMyPrefs.mutate({ landingDashboardId: row.id });
-      toast.success(`"${row.name}" pinned as your landing page`);
-      refreshKey++;
-      await queryClient.invalidateQueries({ queryKey: ['reports.getMyPrefs'] });
-      await queryClient.invalidateQueries({ queryKey: ['dashboards.list'] });
-    } catch (err) {
-      showErrorToast(err, 'Failed to pin dashboard');
-    }
-  }
 
   async function confirmDelete() {
     if (!toDelete) return;
@@ -97,14 +84,6 @@
 {#snippet nameCell({ row }: { row: DashboardRow })}
   <span class="flex items-center gap-2">
     <span class="font-medium">{row.name}</span>
-    {#if row.pinned}
-      <span
-        class="text-primary inline-flex items-center gap-1 rounded-full border border-current/20 bg-current/5 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider"
-      >
-        <Pin class="size-2.5" />
-        Landing
-      </span>
-    {/if}
   </span>
 {/snippet}
 
@@ -119,7 +98,7 @@
     <AlertDialog.Header>
       <AlertDialog.Title>Delete "{toDelete?.name}"?</AlertDialog.Title>
       <AlertDialog.Description>
-        Removes the dashboard and all its tiles. The underlying reports are not affected.
+        Removes the dashboard and all of its team KPI widgets.
       </AlertDialog.Description>
     </AlertDialog.Header>
     <AlertDialog.Footer>
@@ -134,11 +113,10 @@
     <div>
       <h1 class="text-2xl font-semibold tracking-normal">Dashboards</h1>
       <p class="text-sm text-muted-foreground">
-        Glanceable KPIs built from your reports. Pin one as your landing page.
+        Team KPI definitions. Use the overview page to choose your default dashboard.
       </p>
     </div>
     <div class="flex items-center gap-2">
-      <ScopeBar />
       {#if canWrite}
         <Button size="sm" class="gap-2" onclick={() => goto('/dashboards/new')}>
           <Plus class="size-4" />
@@ -156,11 +134,6 @@
     defaultSort={{ field: 'updatedAt', dir: 'desc' }}
     onrowclick={(row) => goto(`/dashboards/${row.id}`)}
     rowActions={[
-      {
-        label: 'Pin as landing',
-        icon: Pin,
-        onclick: (rows) => rows[0] && void pin(rows[0]),
-      },
       ...(canDelete
         ? [
             {

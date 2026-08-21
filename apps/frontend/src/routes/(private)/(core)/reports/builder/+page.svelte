@@ -453,7 +453,7 @@
       toast.success(editing ? 'Report saved' : 'Report created');
       await queryClient.invalidateQueries({ queryKey: ['reports.list'] });
       if (!editing && saved?.id) {
-        await goto(`/reports/builder?id=${saved.id}`);
+        await goto(`/reports/${saved.id}`);
       }
     } catch (err) {
       showErrorToast(err, 'Failed to save report');
@@ -481,9 +481,14 @@
   <!-- Header -->
   <div class="flex items-center justify-between gap-3 border-b px-6 py-3">
     <div class="flex items-center gap-3">
-      <Button variant="ghost" size="sm" class="gap-2" onclick={() => goto('/reports')}>
+      <Button
+        variant="ghost"
+        size="sm"
+        class="gap-2"
+        onclick={() => goto(editing ? `/reports/${reportId}` : '/reports')}
+      >
         <ArrowLeft class="size-4" />
-        Reports
+        {editing ? 'Back to report' : 'Reports'}
       </Button>
       <div class="text-muted-foreground text-sm">
         {editing ? 'Edit report' : 'New report'}

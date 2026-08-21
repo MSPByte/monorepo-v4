@@ -1,18 +1,17 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import {
   dashboards,
   dashboardTiles,
-  reports,
   userReportPrefs,
   type NewDashboardTile
 } from '@mspbyte/drizzle';
 import { t, authProcedure } from '../trpc.js';
 import type { Context } from '../context.js';
 
-// Dashboards live in the reports domain and inherit its permission model.
-// Any user with Reports.Read can view; Write to create/edit; Delete to remove.
+// Dashboards use the reporting permission family, but their widgets own their
+// definitions. A dashboard never needs a saved report as an intermediary.
 
 function requireReportsRead(ctx: Context) {
   if (!ctx.can('Reports.Read')) {
@@ -34,31 +33,55 @@ function requireReportsDelete(ctx: Context) {
 
 // -- tile viz schema --------------------------------------------------------
 
-const kpiVizSchema = z.object({
-  aggregation: z.enum(['count']).default('count'),
-  // Reserved for future sum/avg/distinct; ignored today.
+const dashboardVizSchema = z.object({
+  aggregation: z.enum(['count', 'percent']).default('count'),
   field: z.string().optional(),
+  groupBy: z.string().optional(),
   format: z.enum(['number', 'percent']).default('number'),
+  chartStyle: z.enum(['bar', 'line', 'donut']).optional(),
   // Cosmetic hint for the tile.
   tone: z.enum(['neutral', 'primary', 'warning', 'danger', 'success']).default('neutral'),
   // Optional short caption under the value.
-  caption: z.string().optional()
+  caption: z.string().optional(),
+  width: z.enum(['1', '2', '3', '4']).default('1'),
+  height: z.enum(['compact', 'standard', 'tall']).default('standard'),
+  warningAt: z.number().min(0).optional(),
+  dangerAt: z.number().min(0).optional(),
+  thresholdDirection: z.enum(['higher_is_bad', 'higher_is_good']).default('higher_is_bad'),
+  thresholds: z.array(z.object({ at: z.number().min(0), tone: z.enum(['neutral', 'primary', 'warning', 'danger', 'success']) })).default([]),
+  // Explicit display order, kept with the widget so reordering does not need
+  // a schema migration or depend on database insertion order.
+  position: z.number().int().min(0).optional()
 });
 
-const chartVizSchema = z.object({
-  // Placeholder — chart kinds land in a later PR.
-  labelField: z.string().optional(),
-  valueField: z.string().optional()
+const inlineKpiDefinitionSchema = z.object({
+  source: z.string().min(1),
+  definition: z.object({
+    columns: z.array(z.string()).min(1),
+    filters: z
+      .array(
+        z.object({
+          column: z.string(),
+          operator: z.enum([
+            'eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte', 'is_null', 'is_not_null',
+            'has_requirement', 'lacks_requirement', 'has_any_of', 'lacks_any_of'
+          ]),
+          value: z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]).optional()
+        })
+      )
+      .default([]),
+    sort: z.object({ column: z.string(), direction: z.enum(['asc', 'desc']) }).optional()
+  })
 });
 
-const tileVizSchema = z.union([kpiVizSchema, chartVizSchema]);
+const tileVizSchema = dashboardVizSchema;
 
 const tileInputSchema = z.object({
   id: z.string().uuid().optional(),
   title: z.string().min(1),
   kind: z.enum(['kpi', 'table', 'bar', 'line', 'donut']),
   reportId: z.string().uuid().optional().nullable(),
-  inlineDef: z.record(z.string(), z.unknown()).optional().nullable(),
+  inlineDef: inlineKpiDefinitionSchema.optional().nullable(),
   viz: tileVizSchema
 });
 
@@ -144,31 +167,18 @@ export const dashboardsRouter = t.router({
         .select()
         .from(dashboardTiles)
         .where(eq(dashboardTiles.dashboardId, input.id));
-      return { ...dashboard, tiles };
+      return {
+        ...dashboard,
+        tiles: tiles.sort(
+          (a, b) =>
+            (dashboardVizSchema.safeParse(a.viz).data?.position ?? 0) -
+            (dashboardVizSchema.safeParse(b.viz).data?.position ?? 0)
+        )
+      };
     }),
 
   save: authProcedure.input(saveDashboardSchema).mutation(async ({ ctx, input }) => {
     requireReportsWrite(ctx);
-
-    // Guard: every tile that references a report must reference one that
-    // exists — silent orphans on a dashboard are worse than a save error.
-    const referencedReportIds = input.tiles
-      .map((t) => t.reportId)
-      .filter((id): id is string => !!id);
-    if (referencedReportIds.length) {
-      const existing = await ctx.db
-        .select({ id: reports.id })
-        .from(reports)
-        .where(inArray(reports.id, referencedReportIds));
-      const found = new Set(existing.map((row) => row.id));
-      const missing = referencedReportIds.filter((id) => !found.has(id));
-      if (missing.length) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `Tile references unknown report(s): ${missing.join(', ')}`
-        });
-      }
-    }
 
     const now = new Date().toISOString();
     let dashboardId = input.id;
@@ -210,6 +220,8 @@ export const dashboardsRouter = t.router({
         dashboardId: dashboardId!,
         title: tile.title,
         kind: tile.kind,
+        // reportId is retained only to render legacy tiles created before
+        // dashboard-owned widgets were introduced.
         reportId: tile.reportId ?? null,
         inlineDef: tile.inlineDef ?? null,
         viz: tile.viz
@@ -228,7 +240,14 @@ export const dashboardsRouter = t.router({
       .select()
       .from(dashboardTiles)
       .where(eq(dashboardTiles.dashboardId, dashboardId!));
-    return { ...dashboard!, tiles };
+    return {
+      ...dashboard!,
+      tiles: tiles.sort(
+        (a, b) =>
+          (dashboardVizSchema.safeParse(a.viz).data?.position ?? 0) -
+          (dashboardVizSchema.safeParse(b.viz).data?.position ?? 0)
+      )
+    };
   }),
 
   delete: authProcedure
@@ -253,7 +272,8 @@ export const dashboardsRouter = t.router({
       z.object({
         tileId: z.string().uuid().optional(),
         reportId: z.string().uuid().optional(),
-        viz: kpiVizSchema.optional()
+        inlineDef: inlineKpiDefinitionSchema.optional(),
+        viz: dashboardVizSchema.optional()
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -265,6 +285,7 @@ export const dashboardsRouter = t.router({
       const caller = reportsRouter.createCaller(ctx);
 
       let reportId = input.reportId ?? null;
+      let inlineDef = input.inlineDef ?? null;
       let viz = input.viz;
 
       if (input.tileId) {
@@ -275,15 +296,46 @@ export const dashboardsRouter = t.router({
           .limit(1);
         if (!tile) throw new TRPCError({ code: 'NOT_FOUND', message: 'Tile not found' });
         reportId = tile.reportId;
-        viz = kpiVizSchema.parse(tile.viz);
+        inlineDef = inlineKpiDefinitionSchema.nullable().parse(tile.inlineDef);
+        viz = dashboardVizSchema.parse(tile.viz);
+      }
+
+      if (inlineDef) {
+        const result = await caller.run({
+          source: inlineDef.source,
+          definition: inlineDef.definition,
+          table: { page: 1, pageSize: viz?.groupBy ? 1000 : 1, filters: [] }
+        });
+        const value = viz?.aggregation === 'percent'
+          ? await caller.run({
+              source: inlineDef.source,
+              definition: { ...inlineDef.definition, filters: [] },
+              table: { page: 1, pageSize: 1, filters: [] }
+            }).then((total) => total.total ? Math.round((result.total / total.total) * 1000) / 10 : 0)
+          : result.total;
+        const chart = viz?.groupBy
+          ? [...result.rows.reduce<Map<string, { value: number; scopeLinkId?: string }>>((buckets, row) => {
+              const label = String(row[viz.groupBy!] ?? 'Unspecified');
+              const bucket = buckets.get(label) ?? {
+                value: 0,
+                // tenantName is display-only; vendor routes scope it by the
+                // corresponding integration-link UUID rather than a filter.
+                scopeLinkId: viz.groupBy === 'tenantName' && typeof row.linkId === 'string'
+                  ? row.linkId
+                  : undefined
+              };
+              bucket.value++;
+              buckets.set(label, bucket);
+              return buckets;
+            }, new Map()).entries()].slice(0, 8).map(([label, bucket]) => ({ label, ...bucket }))
+          : undefined;
+        return { value, chart, viz };
       }
 
       if (!reportId) {
-        // Inline tile definitions (a tile that embeds a full ReportDefinition
-        // rather than referencing a saved report) land in a follow-up.
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: 'Tile has no report to run'
+          message: 'Tile has no KPI definition'
         });
       }
 

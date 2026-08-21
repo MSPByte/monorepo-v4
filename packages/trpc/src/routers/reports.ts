@@ -664,6 +664,7 @@ export const reportsRouter = t.router({
       table: s.table,
       label: s.label,
       providerId: s.providerId ?? null,
+      route: s.route?.path ?? null,
       shape: s.shape,
       licenseRequirements: s.table === 'm365Identities' ? M365_LICENSE_REQUIREMENTS : []
     }));

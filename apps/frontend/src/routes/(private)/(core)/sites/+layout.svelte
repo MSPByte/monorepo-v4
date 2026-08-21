@@ -7,6 +7,7 @@
     { href: '/sites', label: 'Sites' },
     { href: '/groups', label: 'Groups' },
     { href: '/assets', label: 'Assets' },
+    { href: '/wiki', label: 'Wiki' },
   ];
 </script>
 

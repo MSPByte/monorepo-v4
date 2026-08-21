@@ -1,157 +1,42 @@
 <script lang="ts">
   import { getContext } from 'svelte';
-  import { createQuery } from '@tanstack/svelte-query';
+  import { goto } from '$app/navigation';
+  import { createQuery, useQueryClient } from '@tanstack/svelte-query';
+  import { toast } from 'svelte-sonner';
+  import { LayoutDashboard, Pencil, Plus, Star } from '@lucide/svelte';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
-  import MetricCard from '$lib/components/domain/metric-card.svelte';
-  import FindingSeverityBadge from '$lib/components/domain/finding-severity-badge.svelte';
-  import SeverityCountRow from '$lib/components/domain/severity-count-row.svelte';
-  import * as Card from '$lib/components/ui/card';
-  import { formatRelativeDate } from '$lib/utils/format';
-    import Loader from "$lib/components/transition/loader.svelte";
-    import FadeIn from "$lib/components/transition/fade-in.svelte";
+  import { authStore } from '$lib/stores/auth.store.svelte';
+  import Button from '$lib/components/ui/button/button.svelte';
+  import SingleSelect from '$lib/components/single-select.svelte';
+  import ScopeBar from '../reports/_components/scope-bar.svelte';
+  import KpiTile from '../dashboards/[id]/_components/kpi-tile.svelte';
+  import { showErrorToast } from '$lib/utils/errors';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
-
-  const kpis = createQuery(() => ({
-    queryKey: ['overview.kpis'],
-    queryFn: () => trpc.overview.kpis.query()
-  }));
-
-  const rollups = createQuery(() => ({
-    queryKey: ['overview.findingRollups.briefing'],
-    queryFn: () => trpc.overview.findingRollups.query()
-  }));
-
-  const sitePressure = createQuery(() => ({
-    queryKey: ['overview.sitePressure.briefing'],
-    queryFn: () => trpc.overview.sitePressure.query()
-  }));
-
-  function severityLabel(severity: number) {
-    return severity === 4 ? 'Critical' : severity === 3 ? 'High' : severity === 2 ? 'Medium' : 'Low';
+  const queryClient = useQueryClient();
+  const canManage = $derived(authStore.isAllowed('Reports.Write'));
+  let selectedId = $state('');
+  let initialized = $state(false);
+  const dashboards = createQuery(() => ({ queryKey: ['dashboards.list'], queryFn: () => trpc.dashboards.list.query() }));
+  const sources = createQuery(() => ({ queryKey: ['reports.listSources'], queryFn: () => trpc.reports.listSources.query(), staleTime: 300_000 }));
+  const prefs = createQuery(() => ({ queryKey: ['reports.getMyPrefs'], queryFn: () => trpc.reports.getMyPrefs.query() }));
+  const activeDashboard = createQuery(() => ({ queryKey: ['dashboards.byId', selectedId], queryFn: () => selectedId ? trpc.dashboards.byId.query({ id: selectedId }) : Promise.resolve(null), enabled: Boolean(selectedId) }));
+  const options = $derived((dashboards.data ?? []).map((dashboard) => ({ value: dashboard.id, label: dashboard.name })));
+  $effect(() => { if (initialized || !dashboards.data || prefs.isPending) return; selectedId = prefs.data?.landingDashboardId ?? dashboards.data[0]?.id ?? ''; initialized = true; });
+  async function setDefault() {
+    if (!selectedId) return;
+    try { await trpc.reports.saveMyPrefs.mutate({ landingDashboardId: selectedId }); await queryClient.invalidateQueries({ queryKey: ['reports.getMyPrefs'] }); toast.success('Default dashboard updated'); }
+    catch (error) { showErrorToast(error, 'Failed to update default dashboard'); }
   }
 </script>
 
-<div class="size-full overflow-auto">
-  <div class="flex flex-col gap-6 p-6">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-normal">Command Center</h1>
-      <p class="text-sm text-muted-foreground">What needs your attention across every managed site.</p>
-    </div>
-
-    <div class="grid gap-4 md:grid-cols-4">
-      <a href="/home/findings" class="block">
-        <MetricCard
-          label="Critical &amp; High open"
-          value={kpis.data?.criticalHigh ?? '—'}
-          detail={`${kpis.data?.totalOpen ?? 0} total open findings`}
-        />
-      </a>
-      <a href="/home/sites" class="block">
-        <MetricCard
-          label="Sites with open work"
-          value={kpis.data?.sitesWithOpenFindings ?? '—'}
-          detail="Click to triage by site"
-        />
-      </a>
-      <a href="/setup/integrations" class="block">
-        <MetricCard
-          label="Failing sources"
-          value={kpis.data?.sourceHealth.failed ?? '—'}
-          detail={`${kpis.data?.sourceHealth.total ?? 0} integration links`}
-        />
-      </a>
-      <a href="/policies" class="block">
-        <MetricCard
-          label="Policy pass rate"
-          value={kpis.data ? `${kpis.data.policyPassRate}%` : '—'}
-          detail="Across enabled policies"
-        />
-      </a>
-    </div>
-
-    <div class="grid gap-6 lg:grid-cols-[2fr_1fr]">
-      <section class="space-y-3">
-        <div class="flex items-baseline justify-between">
-          <h2 class="text-sm font-medium">Needs attention now</h2>
-          <a href="/home/findings" class="text-xs text-muted-foreground hover:text-foreground">View all rollups →</a>
-        </div>
-        {#if rollups.data && rollups.data.length > 0}
-          <FadeIn class="grid gap-3 md:grid-cols-2">
-            {#each rollups.data.slice(0, 8) as rollup}
-              <a
-                href={`/findings?policyId=${encodeURIComponent(rollup.policyId)}`}
-                class="block rounded-lg border bg-background p-4 transition-colors hover:bg-accent/40"
-              >
-                <div class="flex items-start justify-between gap-3">
-                  <div class="min-w-0 space-y-1">
-                    <div class="font-medium leading-tight">
-                      {rollup.count} {rollup.count === 1 ? 'finding' : 'findings'} — {rollup.policyName}
-                    </div>
-                    <div class="text-xs text-muted-foreground">
-                      {rollup.siteCount} {rollup.siteCount === 1 ? 'site' : 'sites'} affected · last seen {formatRelativeDate(rollup.lastSeenAt)}
-                    </div>
-                  </div>
-                  <FindingSeverityBadge severity={rollup.maxSeverity} />
-                </div>
-              </a>
-            {/each}
-          </FadeIn>
-        {:else if rollups.data}
-          <Card.Root class="rounded-lg">
-            <Card.Content class="py-6 text-center text-sm text-muted-foreground">
-              No open findings — every enabled policy is passing.
-            </Card.Content>
-          </Card.Root>
-        {:else}
-          <Loader />
-        {/if}
-      </section>
-
-      <div class="space-y-6">
-        <Card.Root class="rounded-lg">
-          <Card.Header>
-            <Card.Title>Sites by pressure</Card.Title>
-            <Card.Description>Highest open finding load first.</Card.Description>
-          </Card.Header>
-          <Card.Content class="space-y-2">
-            {#if sitePressure.data && sitePressure.data.length > 0}
-              {#each sitePressure.data.slice(0, 8) as site}
-                <a href={`/sites/${site.id}`} class="flex items-center justify-between rounded-md border px-3 py-2 hover:bg-accent/40">
-                  <div class="min-w-0">
-                    <div class="text-sm font-medium truncate">{site.name}</div>
-                    <div class="text-xs text-muted-foreground">{site.openFindingCount} open</div>
-                  </div>
-                  <SeverityCountRow buckets={site.severity} />
-                </a>
-              {/each}
-            {:else if sitePressure.data}
-              <div class="py-4 text-center text-sm text-muted-foreground">No sites with open work.</div>
-            {:else}
-              <Loader />
-            {/if}
-          </Card.Content>
-        </Card.Root>
-
-        {#if kpis.data}
-          <Card.Root class="rounded-lg">
-            <Card.Header>
-              <Card.Title>Severity distribution</Card.Title>
-            </Card.Header>
-            <Card.Content>
-              <div class="space-y-2">
-                {#each kpis.data.bySeverity as bucket}
-                  <div class="flex items-center justify-between rounded-md border px-3 py-2">
-                    <div class="text-xs text-muted-foreground">{severityLabel(bucket.severity)}</div>
-                    <div class="text-lg font-semibold">{bucket.count}</div>
-                  </div>
-                {/each}
-              </div>
-            </Card.Content>
-          </Card.Root>
-        {/if}
-      </div>
-    </div>
-  </div>
-</div>
+<div class="size-full overflow-auto"><div class="flex min-h-full flex-col gap-6 p-6">
+  <header class="flex flex-col justify-between gap-4 border-b pb-5 lg:flex-row lg:items-end">
+    <div class="space-y-1"><h1 class="text-3xl font-semibold tracking-tight">{activeDashboard.data?.name ?? 'Overview'}</h1><p class="text-sm text-muted-foreground">{activeDashboard.data?.description ?? 'Choose the operational signals your team needs first.'}</p></div>
+    <div class="flex flex-wrap items-center gap-2"><div class="w-56"><SingleSelect options={options} bind:selected={selectedId} placeholder="Choose dashboard" searchPlaceholder="Search dashboards…" /></div><ScopeBar />{#if selectedId && prefs.data?.landingDashboardId !== selectedId}<Button variant="outline" size="sm" class="gap-2" onclick={setDefault}><Star class="size-4" />Set as default</Button>{/if}{#if canManage && selectedId}<Button variant="outline" size="sm" class="gap-2" onclick={() => goto(`/dashboards/${selectedId}`)}><Pencil class="size-4" />Edit</Button>{/if}{#if canManage}<Button size="sm" class="gap-2" onclick={() => goto('/dashboards/new')}><Plus class="size-4" />New dashboard</Button>{/if}</div>
+  </header>
+  {#if activeDashboard.isPending}<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{#each Array(4) as _}<div class="h-32 animate-pulse rounded-lg border bg-muted/30"></div>{/each}</div>
+  {:else if activeDashboard.data?.tiles.length}<section class="grid auto-rows-min gap-4 md:grid-cols-4">{#each activeDashboard.data.tiles as row (row.id)}{@const viz = (row.viz ?? {}) as { tone?: 'neutral' | 'primary' | 'warning' | 'danger' | 'success'; caption?: string; width?: string; height?: string; format?: string; groupBy?: string; thresholds?: Array<{ at: number; tone: 'neutral' | 'primary' | 'warning' | 'danger' | 'success' }> }}{@const inline = (row.inlineDef ?? {}) as { source?: string; definition?: { filters?: Array<{ column: string; operator: string; value?: string | number | boolean }> } }}{@const route = sources.data?.find((source) => source.table === inline.source)?.route ?? null}<div class={viz.width === '4' ? 'md:col-span-4' : viz.width === '3' ? 'md:col-span-3' : viz.width === '2' ? 'md:col-span-2' : 'md:col-span-1'}><KpiTile tile={{ key: row.id, id: row.id, title: row.title, kind: row.kind, tone: viz.tone ?? 'neutral', caption: viz.caption ?? '', width: viz.width, height: viz.height, format: viz.format, route, filters: inline.definition?.filters ?? [], groupBy: viz.groupBy, thresholds: viz.thresholds }} /></div>{/each}</section>
+  {:else}<section class="rounded-xl border border-dashed bg-muted/20 px-6 py-16 text-center"><LayoutDashboard class="text-muted-foreground mx-auto mb-3 size-8" /><h2 class="font-semibold">{selectedId ? 'This dashboard is ready for its first widget' : 'No dashboard selected'}</h2><p class="text-muted-foreground mx-auto mt-1 max-w-md text-sm">{canManage ? 'Create a KPI widget from a live data source, then arrange it for your team.' : 'Ask a dashboard manager to choose the KPIs this team should monitor.'}</p>{#if canManage}<Button class="mt-5" onclick={() => goto(selectedId ? `/dashboards/${selectedId}` : '/dashboards/new')}>{selectedId ? 'Add widget' : 'Create dashboard'}</Button>{/if}</section>{/if}
+</div></div>
