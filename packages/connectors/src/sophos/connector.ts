@@ -1,4 +1,8 @@
 import { SophosHttpClient } from './http-client.js';
+
+const PARTNER_LICENSE_CACHE_TTL_MS = 5 * 60_000;
+type PartnerLicenseCache = { data: Record<string, unknown>[]; expiresAt: number };
+const partnerLicenseCache = new Map<string, PartnerLicenseCache>();
 import type {
   SophosMigrationCreate,
   SophosMigrationEndpoint,
@@ -55,6 +59,7 @@ export interface SophosTenantCreateRequest {
 
 export class SophosConnector {
   private client: SophosHttpClient;
+  private clientId: string;
 
   readonly endpoint: {
     list: (apiHost: string, tenantId?: string) => Promise<unknown[]>;
@@ -121,6 +126,7 @@ export class SophosConnector {
   };
 
   constructor(clientId: string, clientSecret: string) {
+    this.clientId = clientId;
     this.client = new SophosHttpClient(clientId, clientSecret);
 
     this.endpoint = {
@@ -225,29 +231,37 @@ export class SophosConnector {
     };
   }
 
-  /**
-   * Fetches firewall license assignments at the partner level and filters to
-   * those belonging to the given tenant (matched via organization.id === tenantId).
-   */
   private async fetchPartnerLicenses(kind: 'firewalls', tenantId?: string): Promise<unknown[]> {
-    const whoami = await this.client.get<{
-      id: string;
-      idType: string;
-      apiHosts?: { global?: string };
-    }>('https://api.central.sophos.com/whoami/v1');
+    const cached = partnerLicenseCache.get(this.clientId);
+    let items: Record<string, unknown>[];
 
-    if (whoami.idType !== 'partner' || !whoami.id) {
-      throw new Error('Sophos firewall license ingestion requires a partner account');
+    if (cached && cached.expiresAt > Date.now()) {
+      items = cached.data;
+    } else {
+      const whoami = await this.client.get<{
+        id: string;
+        idType: string;
+        apiHosts?: { global?: string };
+      }>('https://api.central.sophos.com/whoami/v1');
+
+      if (whoami.idType !== 'partner' || !whoami.id) {
+        throw new Error('Sophos firewall license ingestion requires a partner account');
+      }
+
+      const globalHost = whoami.apiHosts?.global ?? 'https://api.central.sophos.com';
+      const partnerId = whoami.id;
+
+      items = await this.client.fetchAllPages<Record<string, unknown>>(
+        `${globalHost}/licenses/v1/licenses/firewalls?pageTotal=true&pageSize=50`,
+        undefined,
+        { partnerId }
+      );
+
+      partnerLicenseCache.set(this.clientId, {
+        data: items,
+        expiresAt: Date.now() + PARTNER_LICENSE_CACHE_TTL_MS
+      });
     }
-
-    const globalHost = whoami.apiHosts?.global ?? 'https://api.central.sophos.com';
-    const partnerId = whoami.id;
-
-    const items = await this.client.fetchAllPages<Record<string, unknown>>(
-      `${globalHost}/licenses/v1/licenses/firewalls?pageTotal=true&pageSize=50`,
-      undefined,
-      { partnerId }
-    );
 
     if (!tenantId) return items;
 
