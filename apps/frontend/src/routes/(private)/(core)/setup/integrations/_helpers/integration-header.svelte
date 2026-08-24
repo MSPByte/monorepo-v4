@@ -52,30 +52,38 @@
         <Dialog.Title>About {integration.name}</Dialog.Title>
         <Dialog.Description>{integration.info.summary}</Dialog.Description>
       </Dialog.Header>
-      <div class="grid gap-4 py-1 sm:grid-cols-2">
-        <section class="rounded-lg border bg-muted/25 p-3">
-          <div class="mb-2 flex items-center gap-2 text-sm font-medium"><Database class="size-4 text-primary" /> MSPByte manages</div>
-          <ul class="space-y-1.5 text-xs leading-relaxed text-muted-foreground">
-            {#each integration.info.manages as item}<li>{item}</li>{/each}
-          </ul>
-        </section>
-        {#if integration.info.requirements?.length}
-          <section class="rounded-lg border border-primary/20 bg-primary/[0.035] p-3">
-            <div class="mb-2 flex items-center gap-2 text-sm font-medium"><KeyRound class="size-4 text-primary" /> Before you connect</div>
+      <Dialog.Body class="gap-4">
+        <div class="grid gap-4 py-1 sm:grid-cols-2">
+          <section class="rounded-lg border bg-muted/25 p-3">
+            <div class="mb-2 flex items-center gap-2 text-sm font-medium">
+              <Database class="size-4 text-primary" /> MSPByte manages
+            </div>
             <ul class="space-y-1.5 text-xs leading-relaxed text-muted-foreground">
-              {#each integration.info.requirements as item}<li>{item}</li>{/each}
+              {#each integration.info.manages as item}<li>{item}</li>{/each}
+            </ul>
+          </section>
+          {#if integration.info.requirements?.length}
+            <section class="rounded-lg border border-primary/20 bg-primary/[0.035] p-3">
+              <div class="mb-2 flex items-center gap-2 text-sm font-medium">
+                <KeyRound class="size-4 text-primary" /> Before you connect
+              </div>
+              <ul class="space-y-1.5 text-xs leading-relaxed text-muted-foreground">
+                {#each integration.info.requirements as item}<li>{item}</li>{/each}
+              </ul>
+            </section>
+          {/if}
+        </div>
+        {#if integration.info.notes?.length}
+          <section class="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 mt-2">
+            <div class="mb-2 flex items-center gap-2 text-sm font-medium">
+              <Sparkles class="size-4 text-amber-600" /> How MSPByte interprets it
+            </div>
+            <ul class="space-y-1.5 text-xs leading-relaxed text-muted-foreground">
+              {#each integration.info.notes as note}<li>{note}</li>{/each}
             </ul>
           </section>
         {/if}
-      </div>
-      {#if integration.info.notes?.length}
-        <section class="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
-          <div class="mb-2 flex items-center gap-2 text-sm font-medium"><Sparkles class="size-4 text-amber-600" /> How MSPByte interprets it</div>
-          <ul class="space-y-1.5 text-xs leading-relaxed text-muted-foreground">
-            {#each integration.info.notes as note}<li>{note}</li>{/each}
-          </ul>
-        </section>
-      {/if}
+      </Dialog.Body>
     </Dialog.Content>
   </Dialog.Root>
 </div>
