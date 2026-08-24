@@ -5,8 +5,6 @@ import {
   dattoEndpoints,
   entitySources,
   m365Devices,
-  m365Identities,
-  people,
   sophosEndpoints,
   sophosFirewalls,
   syncRuns,
@@ -29,14 +27,12 @@ export type NormalizeMetrics = {
 
 type ConfidenceLabel = 'high' | 'medium' | 'low';
 type SourceStatus = 'candidate' | 'confirmed' | 'rejected' | 'superseded';
-type PersonMatch = {
+type AssetMatch = {
   canonicalId: string | undefined;
   confidence: number;
   method: string;
   evidence: Record<string, unknown>;
 };
-type AssetMatch = PersonMatch;
-type M365IdentityInput = typeof m365Identities.$inferSelect & { normalizedEmail: string };
 
 const CONFIRMED_THRESHOLD = 85;
 
@@ -159,8 +155,6 @@ export async function normalizeProjectedRun(
   }
 ): Promise<NormalizeMetrics> {
   switch (params.type) {
-    case ProviderFacet.M365Identities:
-      return normalizeM365Identities(db, params);
     case ProviderFacet.M365Devices:
       //return normalizeM365Devices(db, params); // This is bloat, no usecase yet
       return emptyMetrics();
@@ -175,146 +169,6 @@ export async function normalizeProjectedRun(
     default:
       return emptyMetrics();
   }
-}
-
-async function normalizeM365Identities(
-  db: Db,
-  params: { linkId: string; siteId?: string; provider: string; type: string }
-): Promise<NormalizeMetrics> {
-  const rows = (await db
-    .select()
-    .from(m365Identities)
-    .where(eq(m365Identities.linkId, params.linkId))) as Array<
-    typeof m365Identities.$inferSelect
-  >;
-  const metrics = emptyMetrics();
-  metrics.recordsIn = rows.length;
-
-  const validRows: M365IdentityInput[] = [];
-  for (const row of rows) {
-    const normalizedEmail = normalizeEmail(row.email);
-    if (!normalizedEmail) metrics.skippedCt++;
-    else validRows.push({ ...row, normalizedEmail });
-  }
-  if (validRows.length === 0) return metrics;
-
-  const existingSources = await findSourcesBatch(
-    db,
-    'm365_identities',
-    validRows.map((row) => row.id)
-  );
-  await adoptPersonSites(
-    db,
-    validRows.map((row) => ({
-      identityId: row.id,
-      email: row.normalizedEmail,
-      siteId: row.siteId ?? params.siteId
-    })),
-    existingSources
-  );
-  const rowsNeedingMatch = validRows.filter((row) => !existingSources.has(row.id));
-  const peopleMatches = await findPeopleMatchesBatch(
-    db,
-    rowsNeedingMatch.map((row) => ({
-      email: row.normalizedEmail,
-      siteId: row.siteId ?? params.siteId
-    }))
-  );
-
-  const planned = validRows.map((row) => {
-    const existingSource = existingSources.get(row.id);
-    const match: PersonMatch = existingSource
-      ? {
-          canonicalId: existingSource.canonicalId,
-          confidence: 100,
-          method: 'existing_source',
-          evidence: { entitySourceId: existingSource.id }
-        }
-      : (peopleMatches.get(siteEmailKey(row.siteId ?? params.siteId, row.normalizedEmail)) ?? {
-          canonicalId: undefined,
-          confidence: 0,
-          method: 'no_match',
-          evidence: { email: row.normalizedEmail }
-        });
-    const status: SourceStatus =
-      match.confidence >= CONFIRMED_THRESHOLD ? 'confirmed' : 'candidate';
-
-    if (match.canonicalId && status === 'candidate') metrics.candidateCt++;
-
-    return {
-      row,
-      match,
-      status,
-      needsCreate: !match.canonicalId || status !== 'confirmed'
-    };
-  });
-
-  const createInputs = uniqueBy(
-    planned.filter((item) => item.needsCreate),
-    (item) => siteEmailKey(item.row.siteId ?? params.siteId, item.row.normalizedEmail)
-  );
-  const createdPeople = await upsertPeopleBatch(
-    db,
-    createInputs.map(({ row }) => ({
-      siteId: row.siteId ?? params.siteId,
-      primaryEmail: row.normalizedEmail,
-      displayName: row.name || row.normalizedEmail,
-      status: personStatus(row.enabled),
-      sourceConfidence: 'high',
-      attributes: m365PersonAttributes(params.linkId, row)
-    }))
-  );
-  metrics.canonicalCreatedCt += createdPeople.createdCt;
-  metrics.canonicalUpdatedCt += createdPeople.updatedCt;
-
-  const createdBySiteEmail = new Map(
-    createdPeople.rows.map((row) => [siteEmailKey(row.siteId ?? undefined, row.primaryEmail), row.id])
-  );
-
-  const updateInputs = planned
-    .filter((item) => !item.needsCreate && item.match.canonicalId)
-    .map(({ row, match }) => ({
-      id: match.canonicalId!,
-      displayName: row.name || row.normalizedEmail,
-      status: personStatus(row.enabled),
-      sourceConfidence: confidenceLabel(match.confidence),
-      attributes: m365PersonAttributes(params.linkId, row)
-    }));
-  const updatedPeopleCt = await updatePeopleBatch(db, updateInputs);
-  metrics.canonicalUpdatedCt += updatedPeopleCt;
-
-  const sourceRows = planned.flatMap(({ row, match, needsCreate }) => {
-    const canonicalId = needsCreate
-      ? createdBySiteEmail.get(siteEmailKey(row.siteId ?? params.siteId, row.normalizedEmail))
-      : match.canonicalId;
-    if (!canonicalId) return [];
-
-    return [
-      {
-        canonicalType: 'person' as const,
-        canonicalId,
-        vendorTable: 'm365_identities',
-        vendorRecordId: row.id,
-        linkId: params.linkId,
-        siteId: row.siteId ?? params.siteId,
-        provider: params.provider,
-        type: params.type,
-        externalId: row.externalId,
-        confidence: needsCreate ? 100 : match.confidence,
-        matchMethod: needsCreate ? 'created_from_m365_identity' : match.method,
-        matchEvidence: needsCreate
-          ? { email: row.normalizedEmail, reason: 'no confirmed existing person match' }
-          : match.evidence,
-        status: 'confirmed' as const
-      }
-    ];
-  });
-  const sourceResult = await upsertEntitySourcesBatch(db, sourceRows);
-  metrics.sourceCreatedCt += sourceResult.createdCt;
-  metrics.sourceUpdatedCt += sourceResult.updatedCt;
-  metrics.recordsOut += sourceRows.length;
-
-  return metrics;
 }
 
 async function normalizeM365Devices(
@@ -696,186 +550,6 @@ async function findSourcesBatch(
   );
 }
 
-async function adoptPersonSites(
-  db: Db,
-  rows: Array<{ identityId: string; email: string; siteId: string | undefined }>,
-  existingSources: Map<string, { id: string; canonicalId: string; status: string }>
-): Promise<void> {
-  const candidates = rows
-    .map((row) => {
-      const source = existingSources.get(row.identityId);
-      if (!source || !row.siteId) return null;
-      return { canonicalId: source.canonicalId, email: row.email, siteId: row.siteId };
-    })
-    .filter((row): row is { canonicalId: string; email: string; siteId: string } => row !== null);
-  if (candidates.length === 0) return;
-
-  const canonicalIds = unique(candidates.map((row) => row.canonicalId));
-  const currentPeople = (await db
-    .select({ id: people.id, siteId: people.siteId })
-    .from(people)
-    .where(inArray(people.id, canonicalIds))) as Array<{ id: string; siteId: string | null }>;
-  const personSiteById = new Map(currentPeople.map((row) => [row.id, row.siteId]));
-  const needsMove = candidates.filter((row) => personSiteById.get(row.canonicalId) === null);
-  if (needsMove.length === 0) return;
-
-  const emailsByTargetSite = new Map<string, string[]>();
-  for (const row of needsMove) {
-    const existing = emailsByTargetSite.get(row.siteId) ?? [];
-    if (!existing.includes(row.email)) existing.push(row.email);
-    emailsByTargetSite.set(row.siteId, existing);
-  }
-  const conflictKeys = new Set<string>();
-  for (const [siteId, emails] of emailsByTargetSite) {
-    const conflicts = (await db
-      .select({ primaryEmail: people.primaryEmail })
-      .from(people)
-      .where(
-        and(eq(people.siteId, siteId), inArray(people.primaryEmail, emails))
-      )) as Array<{ primaryEmail: string }>;
-    for (const row of conflicts) {
-      conflictKeys.add(siteEmailKey(siteId, row.primaryEmail));
-    }
-  }
-
-  const idsByTargetSite = new Map<string, string[]>();
-  for (const row of needsMove) {
-    if (conflictKeys.has(siteEmailKey(row.siteId, row.email))) continue;
-    const bucket = idsByTargetSite.get(row.siteId) ?? [];
-    if (!bucket.includes(row.canonicalId)) bucket.push(row.canonicalId);
-    idsByTargetSite.set(row.siteId, bucket);
-  }
-
-  const now = new Date().toISOString();
-  for (const [siteId, ids] of idsByTargetSite) {
-    if (ids.length === 0) continue;
-    await db
-      .update(people)
-      .set({ siteId, updatedAt: now })
-      .where(inArray(people.id, ids));
-  }
-}
-
-async function findPeopleMatchesBatch(
-  db: Db,
-  inputs: Array<{ siteId?: string; email: string }>
-): Promise<Map<string, PersonMatch>> {
-  if (inputs.length === 0) return new Map();
-
-  const emails = unique(inputs.map((input) => input.email));
-  const rows = (await db
-    .select({ id: people.id, siteId: people.siteId, primaryEmail: people.primaryEmail })
-    .from(people)
-    .where(inArray(people.primaryEmail, emails))) as Array<{
-    id: string;
-    siteId: string | null;
-    primaryEmail: string;
-  }>;
-  const byEmail = groupBy(rows, (row) => row.primaryEmail);
-  const result = new Map<string, PersonMatch>();
-
-  for (const input of inputs) {
-    const candidates = byEmail.get(input.email) ?? [];
-    const row =
-      candidates.find((candidate) => candidate.siteId === input.siteId) ??
-      candidates.find((candidate) => candidate.siteId == null) ??
-      candidates[0];
-    if (!row) {
-      result.set(siteEmailKey(input.siteId, input.email), {
-        canonicalId: undefined,
-        confidence: 0,
-        method: 'no_match',
-        evidence: { email: input.email }
-      });
-      continue;
-    }
-
-    result.set(siteEmailKey(input.siteId, input.email), {
-      canonicalId: row.id,
-      confidence: row.siteId === input.siteId ? 95 : 90,
-      method: row.siteId === input.siteId ? 'site_email' : 'email',
-      evidence: { email: input.email, siteId: input.siteId }
-    });
-  }
-
-  return result;
-}
-
-async function upsertPeopleBatch(
-  db: Db,
-  values: Array<typeof people.$inferInsert>
-): Promise<{
-  rows: Array<{ id: string; siteId: string | null; primaryEmail: string }>;
-  createdCt: number;
-  updatedCt: number;
-}> {
-  if (values.length === 0) return { rows: [], createdCt: 0, updatedCt: 0 };
-
-  const now = new Date().toISOString();
-  const rows = await db
-    .insert(people)
-    .values(values.map((value) => ({ ...value, updatedAt: now })))
-    .onConflictDoUpdate({
-      target: [people.siteId, people.primaryEmail],
-      set: {
-        displayName: sql`excluded.display_name`,
-        status: sql`excluded.status`,
-        sourceConfidence: sql`excluded.source_confidence`,
-        attributes: sql`coalesce(${people.attributes}, '{}'::jsonb) || excluded.attributes`,
-        updatedAt: now
-      }
-    })
-    .returning({
-      id: people.id,
-      siteId: people.siteId,
-      primaryEmail: people.primaryEmail,
-      xmax: sql<string>`xmax::text`
-    });
-  const createdCt = rows.filter((row: { xmax?: string }) => row.xmax === '0').length;
-
-  return {
-    rows,
-    createdCt,
-    updatedCt: rows.length - createdCt
-  };
-}
-
-async function updatePeopleBatch(
-  db: Db,
-  values: Array<{
-    id: string;
-    displayName: string;
-    status: 'active' | 'inactive' | 'unknown';
-    sourceConfidence: ConfidenceLabel;
-    attributes: Record<string, unknown>;
-  }>
-): Promise<number> {
-  const rows = uniqueBy(values, (value) => value.id);
-  if (rows.length === 0) return 0;
-
-  const returned = await db
-    .update(people)
-    .set({
-      displayName: caseById(people.id, rows.map((row) => [row.id, row.displayName]), people.displayName),
-      status: caseById(people.id, rows.map((row) => [row.id, row.status]), people.status),
-      sourceConfidence: caseById(
-        people.id,
-        rows.map((row) => [row.id, row.sourceConfidence]),
-        people.sourceConfidence
-      ),
-      attributes: sql`coalesce(${people.attributes}, '{}'::jsonb) || ${caseJsonById(
-        people.id,
-        rows.map((row) => [row.id, row.attributes]),
-        sql`'{}'::jsonb`
-      )}`,
-      updatedAt: new Date().toISOString()
-    })
-    .where(inArray(people.id, rows.map((row) => row.id)))
-    .returning({ id: people.id });
-
-  return returned.length;
-}
-
 async function upsertEntitySourcesBatch(
   db: Db,
   values: Array<typeof entitySources.$inferInsert>
@@ -1099,21 +773,6 @@ function emptyMetrics(): NormalizeMetrics {
   };
 }
 
-function m365PersonAttributes(linkId: string, row: M365IdentityInput): Record<string, unknown> {
-  return {
-    m365: {
-      linkId,
-      externalId: row.externalId,
-      email: row.normalizedEmail,
-      displayName: row.name || row.normalizedEmail
-    }
-  };
-}
-
-function personStatus(enabled: boolean): 'active' | 'inactive' {
-  return enabled ? 'active' : 'inactive';
-}
-
 function caseById(
   idColumn: unknown,
   values: Array<[string, unknown]>,
@@ -1145,10 +804,6 @@ function caseJsonById(
     values.map(([id, value]) => sql`when ${id} then ${JSON.stringify(value)}::jsonb`),
     sql.raw(' ')
   )} else ${fallback as never} end`;
-}
-
-function siteEmailKey(siteId: string | undefined, email: string): string {
-  return `${siteId ?? ''}:${email}`;
 }
 
 function assetMatchKey(input: {
@@ -1196,11 +851,6 @@ function groupBy<T>(values: T[], keyFn: (value: T) => string): Map<string, T[]> 
     groups.set(key, group);
   }
   return groups;
-}
-
-function normalizeEmail(value: string | null | undefined): string | undefined {
-  const email = value?.trim().toLowerCase();
-  return email && email.includes('@') ? email : undefined;
 }
 
 function normalizeHostname(value: string | null | undefined): string | undefined {

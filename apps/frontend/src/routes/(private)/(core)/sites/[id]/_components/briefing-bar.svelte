@@ -16,7 +16,6 @@
   } = $props();
 
   const RIBBON_KEYS = [
-    'people',
     'workstations',
     'servers',
     'networkAssets',
@@ -26,7 +25,6 @@
   ] as const;
 
   const RIBBON_LABELS: Record<(typeof RIBBON_KEYS)[number], string> = {
-    people: 'PEOPLE',
     workstations: 'WORKSTATIONS',
     servers: 'SERVERS',
     networkAssets: 'NET-DEVICES',

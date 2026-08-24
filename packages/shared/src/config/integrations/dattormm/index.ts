@@ -24,6 +24,11 @@ export const DATTO_RMM_CONFIG: Integration = {
     },
   ],
   navigation: [{ label: "Endpoints", route: "/endpoints", isNullable: false }],
+  info: {
+    summary: 'Connect Datto RMM to associate managed endpoint inventory with MSPByte sites.',
+    manages: ['Endpoint inventory and device attributes'],
+    requirements: ['Datto RMM API credentials with access to the intended sites.']
+  },
   linkMetaSchema: passthroughLinkMetaSchema,
   linkMetaVersion: DATTO_RMM_LINK_META_VERSION,
 };

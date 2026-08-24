@@ -57,7 +57,7 @@
     code = '01',
     title = 'VENDOR SOURCE RECORDS',
   }: {
-    canonicalType: 'person' | 'asset';
+    canonicalType: 'asset';
     canonicalId: string;
     canonicalLabel?: string;
     sources: SourceRecord[];
@@ -385,9 +385,7 @@
         />
         <Input
           class="pl-8"
-          placeholder={canonicalType === 'person'
-            ? 'Search identities by name, email, or external id'
-            : 'Search vendor devices by hostname or external id'}
+          placeholder="Search vendor devices by hostname or external id"
           bind:value={searchInput}
           autofocus
         />

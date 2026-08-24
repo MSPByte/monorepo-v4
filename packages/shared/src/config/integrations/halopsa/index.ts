@@ -29,6 +29,11 @@ export const HALOPSA_CONFIG: Integration = {
     }
   ],
   navigation: [{ label: 'Recurring Items', route: '/recurring-items', isNullable: false }],
+  info: {
+    summary: 'Connect HaloPSA to align recurring service items with the MSPByte sites they support.',
+    manages: ['Recurring billing and service items'],
+    requirements: ['HaloPSA API credentials with access to the intended clients.']
+  },
   linkMetaSchema: halopsaLinkMetaSchema,
   linkMetaVersion: HALOPSA_LINK_META_VERSION
 };

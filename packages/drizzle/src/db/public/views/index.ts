@@ -6,7 +6,6 @@ export const sitesWithCounts = pgView('sites_with_counts', {
   name: text('name').notNull(),
   description: text('description'),
   assetCount: integer('asset_count').notNull(),
-  peopleCount: integer('people_count').notNull(),
   openFindingCount: integer('open_finding_count').notNull(),
   frameworkScore: integer('framework_score').notNull(),
   policyHealth: integer('policy_health').notNull(),
@@ -20,7 +19,6 @@ export const sitesWithCounts = pgView('sites_with_counts', {
       s.name,
       s.description,
       coalesce(a.asset_count, 0)::int as asset_count,
-      coalesce(p.people_count, 0)::int as people_count,
       coalesce(f.open_finding_count, 0)::int as open_finding_count,
       100::int as framework_score,
       100::int as policy_health,
@@ -34,11 +32,6 @@ export const sitesWithCounts = pgView('sites_with_counts', {
       from canonical.assets a
       where a.site_id = s.id
     ) a on true
-    left join lateral (
-      select count(*)::int as people_count
-      from canonical.people p
-      where p.site_id = s.id
-    ) p on true
     left join lateral (
       select count(*)::int as open_finding_count
       from policy.findings pf

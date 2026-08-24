@@ -7,7 +7,6 @@ export type SiteRecord = {
   description: string | null;
   attributes: Record<string, unknown>;
   assetCount: number;
-  peopleCount: number;
   openFindingCount: number;
   sources: string[];
   frameworkScore: number;

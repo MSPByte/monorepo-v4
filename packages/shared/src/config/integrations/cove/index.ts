@@ -24,6 +24,11 @@ export const COVE_CONFIG: Integration = {
     },
   ],
   navigation: [{ label: "Endpoints", route: "/endpoints", isNullable: false }],
+  info: {
+    summary: 'Connect Cove Data Protection to surface backup-managed endpoint coverage by client.',
+    manages: ['Protected endpoint inventory'],
+    requirements: ['Cove API server URL, partner ID, and API credentials.']
+  },
   linkMetaSchema: passthroughLinkMetaSchema,
   linkMetaVersion: COVE_LINK_META_VERSION,
 };

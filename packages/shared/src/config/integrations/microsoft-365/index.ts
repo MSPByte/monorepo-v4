@@ -189,6 +189,24 @@ export const M365_INTEGRATION_CONFIG: Integration = {
     { label: 'Security', route: '/security', isNullable: false },
     { label: 'Compliance', route: '/compliance', isNullable: false }
   ],
+  info: {
+    summary:
+      'Connect Microsoft 365 customer tenants through GDAP so MSPByte can turn tenant signals into managed-service coverage and policy evidence.',
+    manages: [
+      'Identities, groups, devices, licenses, domains, Teams, Exchange, and OAuth grants',
+      'Conditional Access and identity-risk signals when the tenant is licensed for them',
+      'Tenant-to-site and domain-to-site attribution for managed reporting'
+    ],
+    requirements: [
+      'A Microsoft partner relationship with GDAP access to each customer tenant',
+      'Admin consent for the MSPByte application in every connected tenant',
+      'Entra ID P1 or P2 for Conditional Access and sign-in activity; Entra ID P2 for Identity Protection'
+    ],
+    notes: [
+      'MSPByte reports the coverage available from the data Microsoft Graph returns. Missing capability checks can indicate a licensing entitlement, not a connection failure.',
+      'Tenant capabilities are checked from the service plans present in the tenant and can be refreshed after a licensing change.'
+    ]
+  },
   linkMetaSchema: passthroughLinkMetaSchema,
   linkMetaVersion: M365_LINK_META_VERSION
 };

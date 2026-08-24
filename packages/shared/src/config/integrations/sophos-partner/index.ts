@@ -77,6 +77,11 @@ export const SOPHOS_PARTNER_CONFIG: Integration = {
     { label: "Licenses", route: "/licenses", isNullable: false },
     { label: "Migrations", route: "/migrations", isNullable: false },
   ],
+  info: {
+    summary: 'Connect Sophos Central Partner to bring endpoint, firewall, and license coverage into managed client views.',
+    manages: ['Endpoint and firewall inventory', 'Sophos license coverage', 'Tamper-protection state'],
+    requirements: ['A Sophos Central Partner account with API credentials and access to the managed customers.']
+  },
   linkMetaSchema: passthroughLinkMetaSchema,
   linkMetaVersion: SOPHOS_PARTNER_LINK_META_VERSION,
 };

@@ -4,7 +4,6 @@ import { sitesRouter } from './routers/sites.js';
 import { siteGroupsRouter } from './routers/site-groups.js';
 import { siteProfileRouter } from './routers/site-profile.js';
 import { assetsRouter } from './routers/assets.js';
-import { peopleRouter } from './routers/people.js';
 import { findingsRouter } from './routers/findings.js';
 import { policiesRouter } from './routers/policies.js';
 import { frameworksRouter } from './routers/frameworks.js';
@@ -34,7 +33,6 @@ export const appRouter = t.router({
   siteGroups: siteGroupsRouter,
   siteProfile: siteProfileRouter,
   assets: assetsRouter,
-  people: peopleRouter,
   policies: policiesRouter,
   frameworks: frameworksRouter,
   users: usersRouter,

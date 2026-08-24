@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-MSPByte is a multi-tenant operations platform for managed service providers. It ingests vendor data, normalises it into canonical people/assets, evaluates compliance policies, and executes automation packages — all scoped per-organisation.
+MSPByte is a multi-tenant operations platform for managed service providers. It ingests vendor data, normalises it into canonical assets, evaluates compliance policies, and executes automation packages — all scoped per-organisation.
 
 ---
 

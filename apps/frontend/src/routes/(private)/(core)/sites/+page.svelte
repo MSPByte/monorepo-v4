@@ -25,7 +25,6 @@
     description: string | null;
     openFindingCount: number;
     assetCount: number;
-    peopleCount: number;
     sources: string[];
     sourceList: string;
   };

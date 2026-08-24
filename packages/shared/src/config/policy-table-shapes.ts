@@ -6,7 +6,7 @@ export type PolicyTableShape = {
   table: string;
   label: string;
   resourceType: string;
-  targetType: 'tenant' | 'site' | 'integration_link' | 'person' | 'asset' | 'vendor';
+  targetType: 'tenant' | 'site' | 'integration_link' | 'asset' | 'vendor';
   providerId?: string;
   facet?: ProviderFacet;
   /**
@@ -116,63 +116,6 @@ export const CanonicalAssetsShape: SchemaFields = {
   }
 };
 
-export const CanonicalPeopleShape: SchemaFields = {
-  displayName: {
-    label: 'Display Name',
-    type: 'string',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'displayName',
-    required: true
-  },
-  email: {
-    label: 'Email',
-    type: 'string',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'email',
-    required: false
-  },
-  enabled: {
-    label: 'Status',
-    type: 'enum',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'status',
-    required: false,
-    options: [
-      { value: 'active', label: 'Active' },
-      { value: 'inactive', label: 'Inactive' },
-      { value: 'unknown', label: 'Unknown' }
-    ]
-  },
-  sources: {
-    label: 'Sources',
-    type: 'string',
-    modality: 'array',
-    trackable: true,
-    ingestPath: 'sources',
-    required: false,
-    options: sourceOptions
-  },
-  type: {
-    label: 'Person Type',
-    type: 'string',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'type',
-    required: false
-  },
-  lastSignInAt: {
-    label: 'Last Sign-In',
-    type: 'string',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'lastSignInAt',
-    required: false
-  }
-};
-
 export const PolicyTableShapes: PolicyTableShape[] = [
   {
     table: 'assets',
@@ -181,13 +124,6 @@ export const PolicyTableShapes: PolicyTableShape[] = [
     targetType: 'asset',
     siteScope: { via: 'direct', column: 'siteId' },
     shape: CanonicalAssetsShape
-  },
-  {
-    table: 'people',
-    label: 'People',
-    resourceType: 'person',
-    targetType: 'person',
-    shape: CanonicalPeopleShape
   },
   {
     table: 'm365Identities',

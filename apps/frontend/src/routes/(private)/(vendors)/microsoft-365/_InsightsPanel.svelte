@@ -9,7 +9,7 @@
     {
       id: 'identities',
       label: 'Identities',
-      match: (f) => f.resourceType === 'person' || f.resourceType === 'm365_identity',
+      match: (f) => f.resourceType === 'm365_identity',
     },
     {
       id: 'licenses',
@@ -37,7 +37,7 @@
   ];
 
   function moduleLabelForFinding(finding: { resourceType: string }) {
-    if (finding.resourceType === 'm365_identity' || finding.resourceType === 'person') return 'Identity';
+    if (finding.resourceType === 'm365_identity') return 'Identity';
     if (finding.resourceType === 'm365_license') return 'License';
     if (finding.resourceType === 'm365_policy') return 'Policy';
     if (finding.resourceType === 'm365_mailbox_forwarding') return 'Mailbox Forwarding';

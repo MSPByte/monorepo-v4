@@ -9,8 +9,6 @@ import {
   entitySources,
   integrationLinks,
   m365Devices,
-  m365Identities,
-  people,
   sophosEndpoints,
   sophosFirewalls
 } from '@mspbyte/drizzle';
@@ -20,7 +18,7 @@ import type { Context } from '../context.js';
 
 type Db = Context['db'];
 
-const canonicalType = z.enum(['person', 'asset']);
+const canonicalType = z.literal('asset');
 
 type CanonicalType = z.infer<typeof canonicalType>;
 
@@ -55,96 +53,20 @@ function requireAssetsDelete(ctx: Context) {
 
 async function loadCanonicalTarget(
   db: Db,
-  type: CanonicalType,
   id: string
 ): Promise<{ siteId: string | null; label: string } | null> {
-  if (type === 'asset') {
-    const [row] = await db
-      .select({
-        id: assets.id,
-        siteId: assets.siteId,
-        hostname: assets.hostname,
-        displayName: assets.displayName
-      })
-      .from(assets)
-      .where(eq(assets.id, id))
-      .limit(1);
-    if (!row) return null;
-    return { siteId: row.siteId, label: row.hostname ?? row.displayName };
-  }
   const [row] = await db
     .select({
-      id: people.id,
-      siteId: people.siteId,
-      displayName: people.displayName,
-      primaryEmail: people.primaryEmail
+      id: assets.id,
+      siteId: assets.siteId,
+      hostname: assets.hostname,
+      displayName: assets.displayName
     })
-    .from(people)
-    .where(eq(people.id, id))
+    .from(assets)
+    .where(eq(assets.id, id))
     .limit(1);
   if (!row) return null;
-  return { siteId: row.siteId, label: row.displayName || row.primaryEmail };
-}
-
-async function searchM365Identities(
-  ctxDb: Db,
-  opts: { search: string; siteId: string | null; limit: number }
-): Promise<VendorCandidate[]> {
-  const conds: SQL[] = [];
-  if (opts.search) {
-    const like = `%${opts.search}%`;
-    conds.push(
-      or(
-        ilike(m365Identities.name, like),
-        ilike(m365Identities.email, like),
-        ilike(m365Identities.externalId, like)
-      )!
-    );
-  }
-  const rows = await ctxDb
-    .select({
-      vendorRecordId: m365Identities.id,
-      externalId: m365Identities.externalId,
-      linkId: m365Identities.linkId,
-      siteId: m365Identities.siteId,
-      label: m365Identities.name,
-      subtitle: m365Identities.email,
-      linkName: integrationLinks.name,
-      linkStatus: integrationLinks.status,
-      integrationId: integrationLinks.integrationId,
-      currentSourceId: entitySources.id,
-      currentCanonicalId: entitySources.canonicalId,
-      currentStatus: entitySources.status,
-      currentConfidence: entitySources.confidence
-    })
-    .from(m365Identities)
-    .leftJoin(integrationLinks, eq(integrationLinks.id, m365Identities.linkId))
-    .leftJoin(
-      entitySources,
-      and(
-        eq(entitySources.vendorTable, 'm365_identities'),
-        eq(entitySources.vendorRecordId, m365Identities.id)
-      )
-    )
-    .where(conds.length ? and(...conds) : undefined)
-    .limit(opts.limit);
-
-  return rows.map((r) => ({
-    vendorTable: 'm365_identities',
-    vendorRecordId: r.vendorRecordId,
-    externalId: r.externalId,
-    linkId: r.linkId,
-    linkName: r.linkName,
-    linkStatus: r.linkStatus,
-    integrationId: r.integrationId,
-    siteId: r.siteId,
-    label: r.label,
-    subtitle: r.subtitle,
-    currentSourceId: r.currentSourceId,
-    currentCanonicalId: r.currentCanonicalId,
-    currentStatus: r.currentStatus,
-    currentConfidence: r.currentConfidence
-  }));
+  return { siteId: row.siteId, label: row.hostname ?? row.displayName };
 }
 
 async function searchM365Devices(
@@ -459,7 +381,6 @@ const TYPE_FOR_TABLE: Record<string, string> = {
 };
 
 const CANONICAL_TABLE_SUPPORT: Record<CanonicalType, readonly string[]> = {
-  person: ['m365_identities'],
   asset: [
     'm365_devices',
     'sophos_endpoints',
@@ -486,23 +407,14 @@ export const entitySourcesRouter = t.router({
       const search = input.search?.trim() ?? '';
       const perTable = Math.max(5, Math.ceil(input.limit));
 
-      let results: VendorCandidate[] = [];
-      if (input.canonicalType === 'person') {
-        results = await searchM365Identities(ctx.db, {
-          search,
-          siteId: null,
-          limit: perTable
-        });
-      } else {
-        const [devices, sEnd, sFw, datto, cove] = await Promise.all([
-          searchM365Devices(ctx.db, { search, siteId: null, limit: perTable }),
-          searchSophosEndpoints(ctx.db, { search, siteId: null, limit: perTable }),
-          searchSophosFirewalls(ctx.db, { search, siteId: null, limit: perTable }),
-          searchDattoEndpoints(ctx.db, { search, siteId: null, limit: perTable }),
-          searchCoveEndpoints(ctx.db, { search, siteId: null, limit: perTable })
-        ]);
-        results = [...devices, ...sEnd, ...sFw, ...datto, ...cove];
-      }
+      const [devices, sEnd, sFw, datto, cove] = await Promise.all([
+        searchM365Devices(ctx.db, { search, siteId: null, limit: perTable }),
+        searchSophosEndpoints(ctx.db, { search, siteId: null, limit: perTable }),
+        searchSophosFirewalls(ctx.db, { search, siteId: null, limit: perTable }),
+        searchDattoEndpoints(ctx.db, { search, siteId: null, limit: perTable }),
+        searchCoveEndpoints(ctx.db, { search, siteId: null, limit: perTable })
+      ]);
+      const results = [...devices, ...sEnd, ...sFw, ...datto, ...cove];
 
       const alreadyLinkedHere = (r: VendorCandidate) =>
         r.currentCanonicalId === input.canonicalId && r.currentStatus === 'confirmed';
@@ -540,7 +452,7 @@ export const entitySourcesRouter = t.router({
         });
       }
 
-      const target = await loadCanonicalTarget(ctx.db, input.canonicalType, input.canonicalId);
+      const target = await loadCanonicalTarget(ctx.db, input.canonicalId);
       if (!target) throw new TRPCError({ code: 'NOT_FOUND', message: 'Canonical entity not found' });
 
       const provider = PROVIDER_FOR_TABLE[input.vendorTable];
@@ -657,7 +569,7 @@ export const entitySourcesRouter = t.router({
         .limit(1);
       if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'Source binding not found' });
 
-      const target = await loadCanonicalTarget(ctx.db, row.canonicalType, row.canonicalId);
+      const target = await loadCanonicalTarget(ctx.db, row.canonicalId);
 
       const [deleted] = await ctx.db
         .delete(entitySources)
@@ -722,7 +634,7 @@ export const entitySourcesRouter = t.router({
         .where(eq(entitySources.id, input.id))
         .returning({ id: entitySources.id });
 
-      const target = await loadCanonicalTarget(ctx.db, row.canonicalType, row.canonicalId);
+      const target = await loadCanonicalTarget(ctx.db, row.canonicalId);
 
       await ctx.db.insert(customerLogs).values({
         siteId: row.siteId ?? target?.siteId ?? null,
@@ -778,7 +690,7 @@ export const entitySourcesRouter = t.router({
         .where(eq(entitySources.id, input.id))
         .returning({ id: entitySources.id });
 
-      const target = await loadCanonicalTarget(ctx.db, row.canonicalType, row.canonicalId);
+      const target = await loadCanonicalTarget(ctx.db, row.canonicalId);
 
       await ctx.db.insert(customerLogs).values({
         siteId: row.siteId ?? target?.siteId ?? null,
@@ -817,19 +729,6 @@ async function lookupVendorRecord(
   vendorRecordId: string
 ): Promise<{ externalId: string; linkId: string | null; siteId: string | null; label: string | null } | null> {
   switch (vendorTable) {
-    case 'm365_identities': {
-      const [row] = await db
-        .select({
-          externalId: m365Identities.externalId,
-          linkId: m365Identities.linkId,
-          siteId: m365Identities.siteId,
-          label: m365Identities.name
-        })
-        .from(m365Identities)
-        .where(eq(m365Identities.id, vendorRecordId))
-        .limit(1);
-      return row ?? null;
-    }
     case 'm365_devices': {
       const [row] = await db
         .select({

@@ -12,7 +12,6 @@ import {
   integrationLinks,
   integrationLinkSiteAssignments,
   m365Identities,
-  people,
   siteProfileFacts,
   siteProfileFields,
   siteProfileNotes,
@@ -73,7 +72,6 @@ async function auditSiteChange(
 
 const SUPPORTED_METRIC_KEYS = [
   'totalAssets',
-  'people',
   'workstations',
   'servers',
   'networkAssets',
@@ -85,7 +83,6 @@ type MetricKey = (typeof SUPPORTED_METRIC_KEYS)[number];
 
 const METRIC_LABELS: Record<MetricKey, string> = {
   totalAssets: 'Total Assets',
-  people: 'People',
   workstations: 'Workstations',
   servers: 'Servers',
   networkAssets: 'Network Assets',
@@ -95,7 +92,6 @@ const METRIC_LABELS: Record<MetricKey, string> = {
 
 const METRIC_ORIGINS: Record<MetricKey, string> = {
   totalAssets: 'canonical.assets',
-  people: 'canonical.people',
   workstations: 'canonical.assets',
   servers: 'canonical.assets',
   networkAssets: 'canonical.assets',
@@ -114,7 +110,6 @@ export const sitesRouter = t.router({
         connectedSites: 0,
         sitesWithFindings: 0,
         totalAssets: 0,
-        totalPeople: 0,
         severity: { critical: 0, high: 0, medium: 0, low: 0 },
         hotspot: null as null | { id: string; name: string; openFindingCount: number }
       };
@@ -128,7 +123,6 @@ export const sitesRouter = t.router({
           connectedSites: sql<number>`count(*) filter (where coalesce(array_length(${sitesWithCounts.sources}, 1), 0) > 0)::int`,
           sitesWithFindings: sql<number>`count(*) filter (where ${sitesWithCounts.openFindingCount} > 0)::int`,
           totalAssets: sql<number>`coalesce(sum(${sitesWithCounts.assetCount}), 0)::int`,
-          totalPeople: sql<number>`coalesce(sum(${sitesWithCounts.peopleCount}), 0)::int`
         })
         .from(sitesWithCounts)
         .where(scopeWhere)
@@ -138,7 +132,6 @@ export const sitesRouter = t.router({
             connectedSites: 0,
             sitesWithFindings: 0,
             totalAssets: 0,
-            totalPeople: 0
           }
         ]),
       ctx.db
@@ -183,7 +176,6 @@ export const sitesRouter = t.router({
       connectedSites: 0,
       sitesWithFindings: 0,
       totalAssets: 0,
-      totalPeople: 0
     };
 
     const hotspot = hotspotRow[0] && hotspotRow[0].openFindingCount > 0 ? hotspotRow[0] : null;
@@ -233,7 +225,6 @@ export const sitesRouter = t.router({
       ...site,
       openFindingCount: site.openFindingCount,
       assetCount: site.assetCount,
-      peopleCount: site.peopleCount,
       frameworkScore: 100,
       policyHealth: 100,
       sources: site.sources,
@@ -274,7 +265,6 @@ export const sitesRouter = t.router({
       ...site,
       openFindingCount: site.openFindingCount,
       assetCount: site.assetCount,
-      peopleCount: site.peopleCount,
       frameworkScore: 100,
       policyHealth: 100,
       sources: site.sources,
@@ -306,7 +296,6 @@ export const sitesRouter = t.router({
         stackEntryRows,
         linkRows,
         assetRows,
-        peopleCountRow,
         openFindingsRow,
         networkAssetRows,
         firewallRows
@@ -369,11 +358,6 @@ export const sitesRouter = t.router({
           .where(eq(assets.siteId, siteId))
           .groupBy(assets.assetType)
           .catch(() => []),
-        ctx.db
-          .select({ count: count() })
-          .from(people)
-          .where(eq(people.siteId, siteId))
-          .catch(() => [{ count: 0 }]),
         ctx.db
           .select({ count: count() })
           .from(findings)
@@ -489,7 +473,6 @@ export const sitesRouter = t.router({
 
       const metricValues: Record<MetricKey, number> = {
         totalAssets,
-        people: Number(peopleCountRow[0]?.count ?? 0),
         workstations: assetTypeCounts.get('workstation') ?? 0,
         servers: assetTypeCounts.get('server') ?? 0,
         networkAssets: assetTypeCounts.get('network') ?? 0,

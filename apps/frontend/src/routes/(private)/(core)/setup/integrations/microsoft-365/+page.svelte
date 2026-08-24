@@ -88,11 +88,23 @@
     return siteMappings.domainMappings.filter((mapping) => mapping.linkId === link.id).length;
   };
 
+  const missingCapsCount = (link: Link): number =>
+    Object.keys(MS_CAPABILITIES).filter(
+      (key) =>
+        (
+          (link.meta as Record<string, unknown>)?.capabilities as
+            | Record<string, boolean>
+            | undefined
+        )?.[key] === false
+    ).length;
+
   const metrics = $derived({
     total: tenantLinks.length,
     active: activeLinks.length,
     withIssues: activeLinks.filter(
-      (l) => (l.meta as Record<string, unknown>)?.consentVersion !== CONSENT_VERSION
+      (l) =>
+        (l.meta as Record<string, unknown>)?.consentVersion !== CONSENT_VERSION ||
+        missingCapsCount(l) > 0
     ).length,
     totalUnmapped: activeLinks.reduce((acc, al) => {
       const domainCount = (((al.meta as Record<string, unknown>)?.domains as unknown[]) ?? [])
@@ -141,16 +153,6 @@
     }
     return map;
   });
-
-  const missingCapsCount = (link: Link): number =>
-    Object.keys(MS_CAPABILITIES).filter(
-      (key) =>
-        (
-          (link.meta as Record<string, unknown>)?.capabilities as
-            | Record<string, boolean>
-            | undefined
-        )?.[key] === false
-    ).length;
 
   const evaluateLinkFilter = (active: typeof activeFilter, link: Link) => {
     switch (active) {
@@ -528,12 +530,15 @@
             >
               {#each filteredLinks as link (link.id)}
                 {@const missing = missingCapsCount(link)}
+                {@const needsConsent =
+                  link.status === 'active' &&
+                  (link.meta as Record<string, unknown>)?.consentVersion !== CONSENT_VERSION}
                 <button
                   class="w-full text-left"
                   onclick={() => (selectedLinkId = selectedLinkId === link.id ? null : link.id)}
                 >
                   <Card.Root
-                    class="h-24 cursor-pointer p-3 transition-colors hover:border-primary/50 {selectedLinkId ===
+                    class="min-h-24 cursor-pointer p-3 transition-colors hover:border-primary/50 {selectedLinkId ===
                     link.id
                       ? 'border-primary bg-primary/10'
                       : 'bg-card/70'}"
@@ -579,6 +584,12 @@
                           </span>
                         {/if}
                       </div>
+                      {#if needsConsent}
+                        <div class="flex items-center gap-1.5 rounded bg-warning/10 px-1.5 py-1 text-[11px] font-medium text-warning">
+                          <TriangleAlert class="size-3 shrink-0" />
+                          Re-consent required to restore access
+                        </div>
+                      {/if}
                     </div>
                   </Card.Root>
                 </button>

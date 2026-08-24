@@ -16,7 +16,6 @@ import {
   m365Policies,
   m365RiskyUsers,
   m365TeamsConfig,
-  peopleWithSites,
   policies,
   policyDependencies,
   policyAssignments,
@@ -90,11 +89,6 @@ type TableEntry = {
 };
 
 const tableRegistry: Record<string, TableEntry> = {
-  people: {
-    table: peopleWithSites,
-    resourceType: 'person',
-    resourceTable: 'canonical.people'
-  },
   assets: {
     table: assetsWithSites,
     resourceType: 'asset',

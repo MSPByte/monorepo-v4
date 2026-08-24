@@ -22,7 +22,7 @@ export const policies = policySchema.table(
       onDelete: 'set null'
     }),
     targetType: text('target_type', {
-      enum: ['tenant', 'site', 'integration_link', 'person', 'asset', 'vendor']
+      enum: ['tenant', 'site', 'integration_link', 'asset', 'vendor']
     }).notNull(),
     severity: integer('severity').notNull(),
     enabled: boolean('enabled').notNull().default(true),
@@ -282,7 +282,7 @@ export const findingsWithContext = policySchema
       f.resource_type,
       f.resource_table,
       f.resource_id,
-      coalesce(a.display_name, pe.display_name, f.resource_external_id, f.resource_id) as resource_name,
+      coalesce(a.display_name, f.resource_external_id, f.resource_id) as resource_name,
       f.resource_external_id,
       f.fingerprint,
       f.title,
@@ -302,7 +302,6 @@ export const findingsWithContext = policySchema
     left join public.sites s on s.id = f.site_id
     left join public.integration_links l on l.id = f.link_id
     left join canonical.assets a on f.resource_type = 'asset' and f.resource_id = a.id::text
-    left join canonical.people pe on f.resource_type = 'person' and f.resource_id = pe.id::text
   `);
 
 export const policiesWithStats = policySchema

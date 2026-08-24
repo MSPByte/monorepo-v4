@@ -14,38 +14,6 @@ import { integrationLinks, sites } from "../public/index.js";
 
 const rls = crudPolicy({ role: authenticatedRole, read: true, modify: false });
 
-export const people = canonicalSchema.table(
-  "people",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    siteId: uuid("site_id").references(() => sites.id, {
-      onDelete: "set null",
-    }),
-    primaryEmail: text("primary_email").notNull(),
-    displayName: text("display_name").notNull(),
-    status: text("status", { enum: ["active", "inactive", "unknown"] })
-      .notNull()
-      .default("unknown"),
-    sourceConfidence: text("source_confidence", {
-      enum: ["high", "medium", "low"],
-    })
-      .notNull()
-      .default("high"),
-    attributes: jsonb("attributes").notNull().default({}),
-    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
-      .notNull()
-      .defaultNow(),
-  },
-  (t) => [
-    unique("people_site_email").on(t.siteId, t.primaryEmail),
-    index("people_email_idx").on(t.primaryEmail),
-    rls,
-  ],
-);
-
 export const assets = canonicalSchema.table(
   "assets",
   {
@@ -90,7 +58,7 @@ export const entitySources = canonicalSchema.table(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     canonicalType: text("canonical_type", {
-      enum: ["person", "asset"],
+      enum: ["asset"],
     }).notNull(),
     canonicalId: uuid("canonical_id").notNull(),
     vendorTable: text("vendor_table").notNull(),
@@ -199,66 +167,6 @@ export const assetsWithSites = canonicalSchema
     ) f on true
   `);
 
-export const peopleWithSites = canonicalSchema
-  .view("people_with_sites", {
-    id: uuid("id").notNull(),
-    siteId: uuid("site_id"),
-    siteName: text("site_name").notNull(),
-    primaryEmail: text("primary_email").notNull(),
-    displayName: text("display_name").notNull(),
-    status: text("status", { enum: ["active", "inactive", "unknown"] }).notNull(),
-    sourceConfidence: text("source_confidence", {
-      enum: ["high", "medium", "low"],
-    }).notNull(),
-    sources: text("sources").array().notNull(),
-    sourceList: text("source_list").notNull(),
-    openFindingCount: integer("open_finding_count").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
-  })
-  .with({ securityInvoker: true })
-  .as(sql`
-    select
-      p.id,
-      p.site_id,
-      coalesce(s.name, 'Unassigned') as site_name,
-      p.primary_email,
-      p.display_name,
-      p.status,
-      p.source_confidence,
-      coalesce(src.sources, array[]::text[]) as sources,
-      coalesce(array_to_string(src.sources, ', '), '') as source_list,
-      coalesce(f.open_finding_count, 0)::int as open_finding_count,
-      p.created_at,
-      p.updated_at
-    from canonical.people p
-    left join public.sites s on s.id = p.site_id
-    left join lateral (
-      select array_agg(distinct es.provider order by es.provider) as sources
-      from canonical.entity_sources es
-      where es.canonical_type = 'person'
-        and es.canonical_id = p.id
-        and es.status = 'confirmed'
-    ) src on true
-    left join lateral (
-      select count(*)::int as open_finding_count
-      from policy.findings pf
-      where pf.status in ('open', 'acknowledged', 'regressed')
-        and (
-          (pf.resource_type = 'person' and pf.resource_id = p.id::text)
-          or pf.resource_id in (
-            select es.vendor_record_id::text
-            from canonical.entity_sources es
-            where es.canonical_type = 'person'
-              and es.canonical_id = p.id
-              and es.status = 'confirmed'
-          )
-        )
-    ) f on true
-  `);
-
 export type EntitySource = typeof entitySources.$inferSelect;
-export type Person = typeof people.$inferSelect;
 export type Asset = typeof assets.$inferSelect;
 export type AssetWithSite = typeof assetsWithSites.$inferSelect;
-export type PersonWithSite = typeof peopleWithSites.$inferSelect;

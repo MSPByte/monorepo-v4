@@ -40,6 +40,14 @@ export type IntegrationNavItem = {
   isNullable: boolean;
 };
 
+/** Product knowledge shown before and after an integration is connected. */
+export type IntegrationInfo = {
+  summary: string;
+  manages: string[];
+  requirements?: string[];
+  notes?: string[];
+};
+
 export const META_VERSION_KEY = "_v" as const;
 
 export type LinkMeta = Record<string, unknown> & { [META_VERSION_KEY]?: number };
@@ -51,6 +59,7 @@ export type Integration = {
   scope: IntegrationScope;
   supportedFacets: IngestTypeConfig[];
   navigation: IntegrationNavItem[];
+  info: IntegrationInfo;
   linkMetaSchema: z.ZodTypeAny;
   linkMetaVersion: number;
 };

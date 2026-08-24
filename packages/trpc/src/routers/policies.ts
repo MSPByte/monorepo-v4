@@ -27,7 +27,6 @@ const targetTypeSchema = z.enum([
   "tenant",
   "site",
   "integration_link",
-  "person",
   "asset",
   "vendor",
 ]);

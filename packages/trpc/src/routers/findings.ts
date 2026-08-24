@@ -70,7 +70,7 @@ function physicalTableName(table: string): string | null {
   if (!shape) return null;
   const snake = shape.table.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
   const schema =
-    shape.targetType === 'person' || shape.targetType === 'asset' ? 'canonical' : 'vendors';
+    shape.targetType === 'asset' ? 'canonical' : 'vendors';
   return `${schema}.${snake}`;
 }
 
@@ -107,7 +107,6 @@ function canonicalHref(
   resourceTable: string | null,
   linkId: string | null
 ): string | null {
-  if (resourceType === 'person') return `/people/${resourceId}`;
   if (resourceType === 'asset') return `/assets/${resourceId}`;
   // Vendor-scoped resources (typically integration_link findings like "no CA
   // policy matches"): deep-link to the vendor table for the tenant so users can
@@ -313,7 +312,7 @@ export const findingsRouter = t.router({
     // If the resource is a vendor row (e.g. m365_identity), the view coalesces
     // resource_name down to the external id. Swap in a friendly field from the
     // vendor row (email/hostname/display_name/name) when available.
-    if (row.resourceTable && row.resourceType !== 'person' && row.resourceType !== 'asset') {
+    if (row.resourceTable && row.resourceType !== 'asset') {
       const friendly = await friendlyVendorName(ctx.db, row.resourceTable, row.resourceId);
       if (friendly) canonicalName = friendly;
     }
@@ -327,7 +326,7 @@ export const findingsRouter = t.router({
       provider: null
     });
 
-    if (row.resourceType === 'person' || row.resourceType === 'asset') {
+    if (row.resourceType === 'asset') {
       const sources = await ctx.db
         .select()
         .from(entitySources)

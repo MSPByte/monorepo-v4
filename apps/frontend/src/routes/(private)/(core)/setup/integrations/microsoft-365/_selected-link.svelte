@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CONSENT_VERSION } from '@mspbyte/shared';
+  import { CONSENT_VERSION, M365_LICENSE_REQUIREMENTS } from '@mspbyte/shared';
   import * as Tabs from '$lib/components/ui/tabs/index.js';
   import Button from '$lib/components/ui/button/button.svelte';
   import { Input } from '$lib/components/ui/input/index.js';
@@ -46,6 +46,9 @@
       description: 'Risky user detection via Azure AD Identity Protection',
     },
   };
+  const licenseRequirementByCapability = new Map<string, (typeof M365_LICENSE_REQUIREMENTS)[number]>(
+    M365_LICENSE_REQUIREMENTS.map((requirement) => [requirement.value, requirement])
+  );
 
   const {
     selectedLink,
@@ -418,6 +421,7 @@
                 | Record<string, boolean>
                 | undefined}
               {@const hasCapability = capsMeta?.[key] as boolean | undefined}
+              {@const licenseRequirement = licenseRequirementByCapability.get(key)}
               <div class="flex items-start gap-3 p-3 rounded border bg-muted/30">
                 {#if hasCapability === true}
                   <CircleCheck class="size-4 text-primary mt-0.5 shrink-0" />
@@ -431,6 +435,12 @@
                   <span class="text-xs text-muted-foreground">{cap.description}</span>
                   {#if hasCapability === undefined}
                     <span class="text-xs text-muted-foreground/60 italic">not yet checked</span>
+                  {:else if hasCapability === false && licenseRequirement}
+                    <div class="mt-1 rounded-md border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-xs text-amber-800 dark:text-amber-300">
+                      <span class="font-medium">Needed to enable:</span>
+                      {licenseRequirement.label}
+                      <span class="text-muted-foreground"> — {licenseRequirement.description}</span>
+                    </div>
                   {/if}
                 </div>
               </div>

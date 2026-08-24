@@ -47,7 +47,6 @@ const ROUTES: Route[] = [
       { label: 'Groups', href: '/groups', permission: 'Sites.Read' },
       { label: 'Assets', href: '/assets', permission: 'Assets.Read' },
       { label: 'Wiki', href: '/wiki', permission: 'Wiki.Read' },
-      // { label: 'People', href: '/people', permission: 'People.Read' },
     ],
   },
   {

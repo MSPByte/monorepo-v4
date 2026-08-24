@@ -8,7 +8,6 @@ export const mockSites = [
     description: 'Primary managed tenant with Microsoft 365, Datto, Sophos, and Cove coverage.',
     openFindingCount: 9,
     assetCount: 42,
-    peopleCount: 38,
     frameworkScore: 86,
     policyHealth: 82,
     sources: ['Microsoft 365', 'Datto RMM', 'Sophos', 'Cove'],
@@ -20,7 +19,6 @@ export const mockSites = [
     description: 'Multi-site client with server backup and endpoint coverage policies enabled.',
     openFindingCount: 5,
     assetCount: 64,
-    peopleCount: 71,
     frameworkScore: 91,
     policyHealth: 88,
     sources: ['Microsoft 365', 'Datto RMM', 'Sophos'],
@@ -32,7 +30,6 @@ export const mockSites = [
     description: 'Warehouse devices and shared identities.',
     openFindingCount: 2,
     assetCount: 18,
-    peopleCount: 12,
     frameworkScore: 78,
     policyHealth: 74,
     sources: ['Datto RMM', 'Sophos'],
@@ -79,45 +76,6 @@ export const mockAssets = [
     openFindingCount: 2,
     relatedPeople: ['Warehouse Shared'],
     vendorEvidence: ['No heartbeat for 46 days']
-  }
-];
-
-export const mockPeople = [
-  {
-    id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1',
-    siteId: mockSites[0]!.id,
-    displayName: 'Avery Nguyen',
-    primaryEmail: 'avery.nguyen@northwind.example',
-    status: 'active',
-    sources: ['Microsoft 365', 'PSA Contact'],
-    openFindingCount: 2,
-    relatedAssets: ['ND-LAP-022'],
-    licenses: ['Microsoft 365 Business Premium'],
-    vendorEvidence: ['MFA disabled', 'Last sign-in 2 hours ago']
-  },
-  {
-    id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2',
-    siteId: mockSites[1]!.id,
-    displayName: 'Maya Patel',
-    primaryEmail: 'maya.patel@contoso.example',
-    status: 'active',
-    sources: ['Microsoft 365'],
-    openFindingCount: 1,
-    relatedAssets: ['CM-WKS-144'],
-    licenses: [],
-    vendorEvidence: ['Enabled user has no assigned license']
-  },
-  {
-    id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb3',
-    siteId: mockSites[0]!.id,
-    displayName: 'Legacy Billing',
-    primaryEmail: 'legacy.billing@northwind.example',
-    status: 'inactive',
-    sources: ['Microsoft 365', 'PSA Contact'],
-    openFindingCount: 1,
-    relatedAssets: [],
-    licenses: ['Exchange Online Plan 1'],
-    vendorEvidence: ['No interactive sign-in for 74 days']
   }
 ];
 
@@ -200,8 +158,8 @@ export const mockFindings = [
     severity: 3,
     status: 'open',
     siteId: mockSites[0]!.id,
-    resourceType: 'person',
-    resourceId: mockPeople[0]!.id,
+    resourceType: 'm365_identity',
+    resourceId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1',
     policyId: mockPolicies[0]!.id,
     evidenceSummary: 'Microsoft 365 identity is enabled and mfaEnforced=false.',
     recommendation: 'Enable MFA or document an approved exception.',
@@ -248,8 +206,8 @@ export const mockFindings = [
     severity: 2,
     status: 'open',
     siteId: mockSites[1]!.id,
-    resourceType: 'person',
-    resourceId: mockPeople[1]!.id,
+    resourceType: 'm365_identity',
+    resourceId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2',
     policyId: mockPolicies[0]!.id,
     evidenceSummary: 'User is enabled but assignedLicenses is empty.',
     recommendation: 'Assign the expected license or disable the account.',

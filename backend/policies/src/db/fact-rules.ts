@@ -15,7 +15,6 @@ import {
   m365Policies,
   m365RiskyUsers,
   m365TeamsConfig,
-  peopleWithSites,
   siteProfileFacts,
   sophosEndpoints,
   sophosFirewalls,
@@ -32,7 +31,6 @@ type TableEntry = {
 };
 
 const tableRegistry: Record<string, TableEntry> = {
-  people: { table: peopleWithSites },
   assets: { table: assetsWithSites },
   m365Identities: { table: m365Identities },
   m365Policies: { table: m365Policies },
