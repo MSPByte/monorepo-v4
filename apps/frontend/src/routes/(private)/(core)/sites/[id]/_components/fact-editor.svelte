@@ -24,6 +24,7 @@
     label: string;
     type: 'string' | 'number' | 'boolean';
     valueMode: 'single' | 'multiple';
+    valueType: string | null;
     values: string[] | null;
   };
 
@@ -60,6 +61,15 @@
   let supportStart = $state('08:00');
   let supportEnd = $state('17:00');
   let editing = $state(false);
+
+  // Resolve the effective semantic type — prefer the field's valueType, fall back
+  // to key-based heuristics so built-ins behave correctly without a DB value_type.
+  const effectiveValueType = $derived.by(() => {
+    if (field?.valueType) return field.valueType;
+    if (fact.valueType) return fact.valueType;
+    if (fact.key === 'time_zone') return 'timezone';
+    return null;
+  });
 
   $effect(() => {
     if (open) {
@@ -131,6 +141,33 @@
     );
   }
 
+  function timezoneOptionLabel(tz: string): string {
+    try {
+      const offset = new Intl.DateTimeFormat('en', {
+        timeZone: tz,
+        timeZoneName: 'shortOffset',
+      })
+        .formatToParts(new Date())
+        .find((p) => p.type === 'timeZoneName')?.value ?? '';
+      const city = tz.split('/').pop()?.replace(/_/g, ' ') ?? tz;
+      return offset ? `${city} (${offset})` : city;
+    } catch {
+      return tz;
+    }
+  }
+
+  const timezoneOptions = $derived.by(() => {
+    if (effectiveValueType !== 'timezone') return [];
+    const tzValues = field?.values?.length
+      ? field.values
+      : (Intl.supportedValuesOf('timeZone') as string[]);
+    return tzValues.map((tz) => ({
+      value: tz,
+      label: timezoneOptionLabel(tz),
+      subLabel: tz,
+    }));
+  });
+
   const optionItems = $derived(
     (field?.values ?? []).map((value) => ({ value, label: labelForValue(value) }))
   );
@@ -149,6 +186,7 @@
     if (Array.isArray(fact.value)) return fact.value.map(labelForValue).join(', ');
     if (typeof fact.value === 'boolean') return fact.value ? 'Yes' : 'No';
     if (typeof fact.value === 'number') return fact.value.toLocaleString();
+    if (effectiveValueType === 'timezone') return timezoneOptionLabel(String(fact.value));
     return labelForValue(String(fact.value));
   });
 
@@ -170,7 +208,7 @@
       } else if (field?.type === 'boolean') {
         value = boolValue === 'true';
         source = 'user_options';
-      } else if (field?.values && field.values.length) {
+      } else if (effectiveValueType === 'timezone' || (field?.values && field.values.length)) {
         value = stringValue || null;
         source = 'user_options';
       } else {
@@ -294,6 +332,14 @@
                   </div>
                 {/if}
               </div>
+            {:else if effectiveValueType === 'timezone'}
+              <SingleSelect
+                options={timezoneOptions}
+                bind:selected={stringValue}
+                placeholder="Select time zone..."
+                searchPlaceholder="Search by city or offset..."
+                disableSort={true}
+              />
             {:else if field?.valueMode === 'multiple'}
               <div class="space-y-2">
                 {#if field.values && field.values.length}
@@ -355,10 +401,10 @@
                 value={boolValue}
                 onValueChange={(v) => v && (boolValue = v as 'true' | 'false')}
               >
-                <Select.Trigger>{boolValue}</Select.Trigger>
+                <Select.Trigger>{boolValue === 'true' ? 'Yes' : 'No'}</Select.Trigger>
                 <Select.Content>
-                  <Select.Item value="true">True</Select.Item>
-                  <Select.Item value="false">False</Select.Item>
+                  <Select.Item value="true">Yes</Select.Item>
+                  <Select.Item value="false">No</Select.Item>
                 </Select.Content>
               </Select.Root>
             {:else if field?.values && field.values.length}

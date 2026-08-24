@@ -32,7 +32,7 @@ export type FieldTypeId = keyof typeof FIELD_TYPES;
 const PACKAGE_HINT_TYPES: Record<string, FieldTypeId> = {
   text: 'text', boolean: 'boolean', number: 'number', stringArray: 'text_list',
   password: 'secret', upn: 'upn', postalCode: 'postal_code', city: 'city',
-  countryCode: 'country_code', state: 'region',
+  countryCode: 'country_code', state: 'region', timezone: 'timezone', uuid: 'uuid',
 };
 const RESOURCE_TYPES: Record<string, FieldTypeId> = {
   site: 'site', integration_link: 'integration_link', m365_identity: 'm365_identity',
@@ -62,9 +62,9 @@ export function resolvePackageOutputFieldType(meta: { valueType?: FieldTypeId; o
 }
 
 export function resolveSiteFactFieldType(field: {
-  key: string; type?: string | null; valueMode?: string | null; valueType?: FieldTypeId;
+  key: string; type?: string | null; valueMode?: string | null; valueType?: FieldTypeId | string | null;
 }): FieldTypeId {
-  if (field.valueType) return field.valueType;
+  if (field.valueType && field.valueType in FIELD_TYPES) return field.valueType as FieldTypeId;
   // Semantic built-ins can be adopted without rewriting existing fact rows.
   if (field.key === 'time_zone') return 'timezone';
   if (field.valueMode === 'multiple') return 'text_list';

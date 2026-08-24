@@ -10,6 +10,7 @@ export type ProfileFact = {
   category: 'executive' | 'context' | string;
   value: FactValue;
   valueMode: 'single' | 'multiple';
+  valueType: string | null;
   source: FieldSource;
   origin: string | null;
   confidence: FactConfidence;

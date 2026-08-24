@@ -28,14 +28,11 @@ import {
 } from '@mspbyte/drizzle';
 import {
   ActionLabels,
-  BUILT_IN_PROFILE_FIELDS,
-  BUILT_IN_STACK_CATEGORIES,
   type Permission
 } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
 import { t, authProcedure } from '../trpc.js';
 import { queryTableData, tableDataInputSchema } from './table-data.js';
-import { ensureCatalogDefaults } from './site-profile.js';
 import type { Context } from '../context.js';
 
 type SiteRow = typeof sites.$inferSelect;
@@ -292,8 +289,6 @@ export const sitesRouter = t.router({
       if (scope !== 'all' && !scope.includes(siteId)) {
         throw new TRPCError({ code: 'NOT_FOUND' });
       }
-      await ensureCatalogDefaults(ctx.db);
-
       const [site] = await ctx.db
         .select()
         .from(sites)
@@ -422,17 +417,9 @@ export const sitesRouter = t.router({
         section: 'executive' | 'context';
         displayOrder: number;
         valueMode: 'single' | 'multiple';
+        valueType: string | null;
       };
       const fieldByKey = new Map<string, MergedField>();
-      for (const f of BUILT_IN_PROFILE_FIELDS) {
-        fieldByKey.set(f.key, {
-          key: f.key,
-          label: f.label,
-          section: f.section,
-          displayOrder: f.displayOrder,
-          valueMode: f.valueMode
-        });
-      }
       for (const f of fieldRows) {
         if (!f.active) continue;
         fieldByKey.set(f.key, {
@@ -440,7 +427,8 @@ export const sitesRouter = t.router({
           label: f.label,
           section: f.section as 'executive' | 'context',
           displayOrder: f.displayOrder ?? 0,
-          valueMode: (f.valueMode ?? 'single') as 'single' | 'multiple'
+          valueMode: (f.valueMode ?? 'single') as 'single' | 'multiple',
+          valueType: f.valueType ?? null
         });
       }
 
@@ -455,6 +443,7 @@ export const sitesRouter = t.router({
             category: field.section,
             value: (row?.value ?? null) as string | number | boolean | string[] | null,
             valueMode: field.valueMode,
+            valueType: field.valueType,
             source: (row?.source ?? 'user_free') as
               | 'generated'
               | 'user_options'
@@ -515,15 +504,6 @@ export const sitesRouter = t.router({
         }>;
       };
       const categoryByKey = new Map<string, MergedCategory>();
-      for (const c of BUILT_IN_STACK_CATEGORIES) {
-        categoryByKey.set(c.key, {
-          key: c.key,
-          label: c.label,
-          required: c.required,
-          displayOrder: c.displayOrder,
-          metadataFields: c.metadataFields ?? []
-        });
-      }
       for (const c of stackCategoryRows) {
         categoryByKey.set(c.key, {
           key: c.key,

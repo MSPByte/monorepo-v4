@@ -143,6 +143,7 @@
         label: string;
         type: 'string' | 'number' | 'boolean';
         valueMode: 'single' | 'multiple';
+        valueType: string | null;
         values: string[] | null;
       }
     >();
@@ -152,6 +153,7 @@
         label: f.label,
         type: f.type,
         valueMode: f.valueMode ?? 'single',
+        valueType: f.valueType ?? null,
         values: f.values ?? null,
       });
     }

@@ -246,7 +246,15 @@
       if (typeHint === 'boolean') return f.type === 'boolean' && f.valueMode === 'single';
       if (typeHint === 'number') return f.type === 'number' && f.valueMode === 'single';
       if (typeHint === 'stringArray') return f.type === 'string' && f.valueMode === 'multiple';
-      // text / password / upn: any single-value string field.
+      // Semantic types: match by resolved fieldType so only correctly-typed facts appear.
+      if (typeHint === 'timezone') return f.fieldType === 'timezone';
+      if (typeHint === 'uuid') return f.fieldType === 'uuid';
+      if (typeHint === 'upn') return f.fieldType === 'upn';
+      if (typeHint === 'postalCode') return f.fieldType === 'postal_code';
+      if (typeHint === 'city') return f.fieldType === 'city';
+      if (typeHint === 'countryCode') return f.fieldType === 'country_code';
+      if (typeHint === 'state') return f.fieldType === 'region';
+      // text / password / generic: any single-value string field.
       return f.type === 'string' && f.valueMode === 'single';
     });
   }

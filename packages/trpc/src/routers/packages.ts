@@ -1390,7 +1390,9 @@ export const packagesRouter = t.router({
         label: siteProfileFields.label,
         type: siteProfileFields.type,
         valueMode: siteProfileFields.valueMode,
+        valueType: siteProfileFields.valueType,
         section: siteProfileFields.section,
+        displayOrder: siteProfileFields.displayOrder,
       })
       .from(siteProfileFields)
       .where(eq(siteProfileFields.active, true))

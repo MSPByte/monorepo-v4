@@ -36,6 +36,7 @@ export const siteProfileFields = pgTable(
     valueMode: text('value_mode', { enum: ['single', 'multiple'] })
       .notNull()
       .default('single'),
+    valueType: text('value_type'),
     values: jsonb('values'),
 
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })

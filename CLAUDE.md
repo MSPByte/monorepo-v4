@@ -102,6 +102,20 @@ This same DB-bridge pattern should be used for any new backend work triggered fr
 
 ---
 
+## Design principles
+
+These apply to every editor, dialog, and data entry surface across the product. They represent validated decisions, not suggestions — do not override them without explicit instruction.
+
+- **Hide internals from the end user.** DB keys, value modes, display orders, and type enums are implementation details. Never expose them as raw labels. Auto-generate keys from labels; map all enums through plain-English display strings (sentence-case, not lowercase).
+- **One type picker, not three fields.** Merge `type`, `valueMode`, and `valueType`/semantic type into a single unified "Field Type" selector with friendly names: Text, Number, Yes / No, List, Time Zone, UUID, etc. Each option fully resolves the underlying tuple.
+- **Managed inputs over raw inputs.** If a type has a smart widget (timezone picker with offsets, country selector, UUID validator), the UI must use it. Never fall back to a free-text box for a type with a managed experience.
+- **Compress binary choices.** A 2-option dropdown (single/multiple, yes/no, executive/context) should be replaced with inline toggle buttons or a segmented control — never a full Select component.
+- **Drag-to-reorder, not an order number field.** Sortable tables use drag handles; the `displayOrder` column is an implementation detail that the user never sees or types.
+- **No auto-seeding.** Do not add `BUILT_IN_*` constant arrays to `packages/shared` for production features. Default catalog entries are created by the user through the UI, not injected on first query. `ensureCatalogDefaults`-style patterns are MVP scaffolding and must not be introduced in new features.
+- **The product should feel like it's doing the work.** Prefer derived/computed fields, smart defaults, and context-aware inputs. Empty forms are a last resort.
+
+---
+
 ## Conventions
 
 - **Authorization in tRPC, not UI.** Use `ctx.scopeFor()` / `ctx.linkScopeFor()` to constrain all DB queries; never rely on hiding a frontend page.

@@ -10,8 +10,6 @@ import {
 } from '@mspbyte/drizzle';
 import {
   ActionLabels,
-  BUILT_IN_PROFILE_FIELDS,
-  BUILT_IN_STACK_CATEGORIES,
   fieldTypeLabel,
   resolveSiteFactFieldType,
   type Permission
@@ -58,7 +56,7 @@ const profileFieldTypeEnum = z.enum(['string', 'number', 'boolean']);
 const profileFieldValueModeEnum = z.enum(['single', 'multiple']);
 
 type CatalogFieldOut = {
-  id: string | null;
+  id: string;
   key: string;
   label: string;
   section: 'executive' | 'context';
@@ -67,65 +65,19 @@ type CatalogFieldOut = {
   displayOrder: number;
   values: string[] | null;
   active: boolean;
-  builtIn: boolean;
   valueType: string;
   valueTypeLabel: string;
 };
 
 type CatalogCategoryOut = {
-  id: string | null;
+  id: string;
   key: string;
   label: string;
   description: string;
   required: boolean;
   displayOrder: number;
   metadataFields: z.infer<typeof stackMetadataFieldSchema>[];
-  builtIn: boolean;
 };
-
-export async function ensureCatalogDefaults(db: Context['db']) {
-  await Promise.all([
-    ...BUILT_IN_PROFILE_FIELDS.map((field) =>
-      db
-        .insert(siteProfileFields)
-        .values({
-          key: field.key,
-          active: true,
-          label: field.label,
-          section: field.section,
-          type: field.type,
-          valueMode: field.valueMode,
-          displayOrder: field.displayOrder,
-          values: field.values ?? null
-        })
-        .onConflictDoNothing({ target: siteProfileFields.key })
-        .catch(() => null)
-    ),
-    ...BUILT_IN_STACK_CATEGORIES.map((category) =>
-      db
-        .insert(siteStackCategories)
-        .values({
-          key: category.key,
-          label: category.label,
-          description: category.description,
-          required: category.required,
-          displayOrder: category.displayOrder,
-          metadataFields: normalizeStackMetadataFields(category.metadataFields)
-        })
-        .onConflictDoUpdate({
-          target: siteStackCategories.key,
-          set: {
-            label: category.label,
-            description: category.description,
-            required: category.required,
-            displayOrder: category.displayOrder,
-            metadataFields: normalizeStackMetadataFields(category.metadataFields)
-          }
-        })
-        .catch(() => null)
-    )
-  ]);
-}
 
 function actorLabel(ctx: Context) {
   return ctx.user.name || ctx.user.email;
@@ -217,22 +169,15 @@ async function auditCatalogChange(
 
 export const siteProfileRouter = t.router({
   catalog: authProcedure.query(async ({ ctx }) => {
-    await ensureCatalogDefaults(ctx.db);
-    const [customFields, customCategories] = await Promise.all([
-      ctx.db
-        .select()
-        .from(siteProfileFields)
-        .catch(() => []),
-      ctx.db
-        .select()
-        .from(siteStackCategories)
-        .catch(() => [])
+    const [fieldRows, categoryRows] = await Promise.all([
+      ctx.db.select().from(siteProfileFields).catch(() => []),
+      ctx.db.select().from(siteStackCategories).catch(() => [])
     ]);
 
-    const fieldByKey = new Map<string, CatalogFieldOut>(
-      customFields.map((f) => {
+    const fields: CatalogFieldOut[] = fieldRows
+      .map((f) => {
         const valueType = resolveSiteFactFieldType(f);
-        return [f.key, {
+        return {
           id: f.id,
           key: f.key,
           label: f.label,
@@ -242,66 +187,27 @@ export const siteProfileRouter = t.router({
           displayOrder: f.displayOrder ?? 0,
           values: (f.values as string[] | null) ?? null,
           active: f.active,
-          builtIn: BUILT_IN_PROFILE_FIELDS.some((builtIn) => builtIn.key === f.key),
           valueType,
           valueTypeLabel: fieldTypeLabel(valueType),
-        }] as const;
+        };
       })
-    );
-    for (const f of BUILT_IN_PROFILE_FIELDS) {
-      if (fieldByKey.has(f.key)) continue;
-      const valueType = resolveSiteFactFieldType(f);
-      fieldByKey.set(f.key, {
-        id: null,
-        key: f.key,
-        label: f.label,
-        section: f.section,
-        type: f.type,
-        valueMode: f.valueMode,
-        displayOrder: f.displayOrder,
-        values: f.values ?? null,
-        active: true,
-        builtIn: true,
-        valueType,
-        valueTypeLabel: fieldTypeLabel(valueType),
-      });
-    }
+      .sort((a, b) => a.displayOrder - b.displayOrder);
 
-    const categoryByKey = new Map<string, CatalogCategoryOut>(
-      customCategories.map((c) => [
-        c.key,
-        {
-          id: c.id,
-          key: c.key,
-          label: c.label,
-          description: c.description,
-          required: c.required,
-          displayOrder: c.displayOrder,
-          metadataFields: normalizeStackMetadataFields(
-            c.metadataFields as z.infer<typeof stackMetadataFieldSchema>[] | null
-          ),
-          builtIn: BUILT_IN_STACK_CATEGORIES.some((builtIn) => builtIn.key === c.key)
-        }
-      ])
-    );
-    for (const c of BUILT_IN_STACK_CATEGORIES) {
-      if (categoryByKey.has(c.key)) continue;
-      categoryByKey.set(c.key, {
-        id: null,
+    const categories: CatalogCategoryOut[] = categoryRows
+      .map((c) => ({
+        id: c.id,
         key: c.key,
         label: c.label,
         description: c.description,
         required: c.required,
         displayOrder: c.displayOrder,
-        metadataFields: normalizeStackMetadataFields(c.metadataFields),
-        builtIn: true
-      });
-    }
+        metadataFields: normalizeStackMetadataFields(
+          c.metadataFields as z.infer<typeof stackMetadataFieldSchema>[] | null
+        ),
+      }))
+      .sort((a, b) => a.displayOrder - b.displayOrder);
 
-    return {
-      fields: [...fieldByKey.values()].sort((a, b) => a.displayOrder - b.displayOrder),
-      categories: [...categoryByKey.values()].sort((a, b) => a.displayOrder - b.displayOrder)
-    };
+    return { fields, categories };
   }),
 
   upsertField: authProcedure
@@ -316,6 +222,7 @@ export const siteProfileRouter = t.router({
         section: profileFieldSectionEnum,
         type: profileFieldTypeEnum,
         valueMode: profileFieldValueModeEnum.default('single'),
+        valueType: z.string().nullable().optional(),
         displayOrder: z.number().int().default(0),
         values: z.array(z.string()).nullable().optional(),
         active: z.boolean().default(true)
@@ -323,7 +230,6 @@ export const siteProfileRouter = t.router({
     )
     .mutation(async ({ ctx, input }) => {
       requireSitePermission(ctx, 'Sites.Write');
-      await ensureCatalogDefaults(ctx.db);
       if (input.id) {
         const [row] = await ctx.db
           .update(siteProfileFields)
@@ -332,6 +238,7 @@ export const siteProfileRouter = t.router({
             section: input.section,
             type: input.type,
             valueMode: input.valueMode,
+            valueType: input.valueType ?? null,
             displayOrder: input.displayOrder,
             values: input.values ?? null,
             active: input.active
@@ -350,6 +257,7 @@ export const siteProfileRouter = t.router({
             section: row.section,
             type: row.type,
             valueMode: row.valueMode,
+            valueType: row.valueType,
             active: row.active
           }
         });
@@ -363,6 +271,7 @@ export const siteProfileRouter = t.router({
           section: input.section,
           type: input.type,
           valueMode: input.valueMode,
+          valueType: input.valueType ?? null,
           displayOrder: input.displayOrder,
           values: input.values ?? null,
           active: input.active
@@ -426,7 +335,6 @@ export const siteProfileRouter = t.router({
     )
     .mutation(async ({ ctx, input }) => {
       requireSitePermission(ctx, 'Sites.Write');
-      await ensureCatalogDefaults(ctx.db);
       if (input.id) {
         const [row] = await ctx.db
           .update(siteStackCategories)
@@ -501,6 +409,36 @@ export const siteProfileRouter = t.router({
           metadata: { key: existing.key }
         });
       }
+      return { ok: true };
+    }),
+
+  reorderFields: authProcedure
+    .input(z.array(z.object({ id: z.string().uuid(), displayOrder: z.number().int() })))
+    .mutation(async ({ ctx, input }) => {
+      requireSitePermission(ctx, 'Sites.Write');
+      await Promise.all(
+        input.map((item) =>
+          ctx.db
+            .update(siteProfileFields)
+            .set({ displayOrder: item.displayOrder })
+            .where(eq(siteProfileFields.id, item.id))
+        )
+      );
+      return { ok: true };
+    }),
+
+  reorderCategories: authProcedure
+    .input(z.array(z.object({ id: z.string().uuid(), displayOrder: z.number().int() })))
+    .mutation(async ({ ctx, input }) => {
+      requireSitePermission(ctx, 'Sites.Write');
+      await Promise.all(
+        input.map((item) =>
+          ctx.db
+            .update(siteStackCategories)
+            .set({ displayOrder: item.displayOrder })
+            .where(eq(siteStackCategories.id, item.id))
+        )
+      );
       return { ok: true };
     }),
 
