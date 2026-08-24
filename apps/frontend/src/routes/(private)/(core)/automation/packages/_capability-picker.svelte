@@ -97,6 +97,7 @@
           : 'Choose the next one-way reaction for this terminal lane.'}
       </Dialog.Description>
     </Dialog.Header>
+    <Dialog.Body class="p-0">
 
     <div class="border-b bg-background px-6 py-4">
       <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -277,5 +278,6 @@
         >
       </div>
     </div>
-  </Dialog.Content>
+
+    </Dialog.Body></Dialog.Content>
 </Dialog.Root>

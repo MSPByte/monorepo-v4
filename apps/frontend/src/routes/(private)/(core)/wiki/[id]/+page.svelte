@@ -482,8 +482,9 @@
             Update article contexts and tags without creating a draft or article version.
           </Dialog.Description>
         </Dialog.Header>
+        <Dialog.Body>
 
-        <div class="flex flex-col gap-4 py-2 px-4">
+        <div class="flex flex-col gap-4">
           <div class="flex flex-col gap-1.5">
             <label class="text-xs font-medium uppercase text-muted-foreground" for="meta-primary">
               Primary Context
@@ -523,7 +524,8 @@
           </div>
         </div>
 
-        <Dialog.Footer>
+
+        </Dialog.Body><Dialog.Footer>
           <Button variant="outline" onclick={() => (metaDialogOpen = false)}>Cancel</Button>
           <Button disabled={!metaPrimaryContextId || updateMetaMut.isPending} onclick={saveMeta}>
             Save Meta

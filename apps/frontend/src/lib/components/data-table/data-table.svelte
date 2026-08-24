@@ -779,11 +779,13 @@
         <Dialog.Title>Export {pendingExportFormat?.toUpperCase()}</Dialog.Title>
         <Dialog.Description>Choose which columns to include in the export.</Dialog.Description>
       </Dialog.Header>
+      <Dialog.Body>
       <div class="flex gap-2 justify-end">
         <Button variant="outline" onclick={() => executeExport('visible')}>Visible columns</Button>
         <Button onclick={() => executeExport('all')}>All columns</Button>
       </div>
-    </Dialog.Content>
+
+      </Dialog.Body></Dialog.Content>
   </Dialog.Root>
 
   <!-- Destructive action confirmation -->
@@ -797,7 +799,8 @@
           {pendingActionRows.length === 1 ? 'row' : 'rows'}? This cannot be undone.
         </Dialog.Description>
       </Dialog.Header>
-      <div class="flex gap-2 justify-end p-4">
+      <Dialog.Body>
+      <div class="flex gap-2 justify-end">
         <Button
           variant="outline"
           disabled={actionRunning}
@@ -810,6 +813,7 @@
           {actionRunning ? 'Processing...' : (pendingAction?.label ?? 'Confirm')}
         </Button>
       </div>
-    </Dialog.Content>
+
+      </Dialog.Body></Dialog.Content>
   </Dialog.Root>
 </div>

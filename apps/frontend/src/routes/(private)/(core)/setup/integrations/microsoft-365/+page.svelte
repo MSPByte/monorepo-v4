@@ -261,7 +261,7 @@
       <form
         method="POST"
         action="?/addTenant"
-        class="flex flex-col gap-4"
+        class="contents"
         use:enhance={({ formElement }) => {
           addingTenant = true;
           return async ({ result }) => {
@@ -290,6 +290,7 @@
           };
         }}
       >
+        <Dialog.Body class="flex flex-col gap-4">
         <div class="flex flex-col gap-2">
           <label for="tenantId" class="text-sm font-medium">Tenant ID or domain</label>
           <Input
@@ -303,6 +304,7 @@
           <label for="tenantName" class="text-sm font-medium">Display name</label>
           <Input id="tenantName" name="name" placeholder="Contoso" />
         </div>
+        </Dialog.Body>
         <Dialog.Footer>
           <Button type="button" variant="outline" onclick={() => (addTenantOpen = false)}>
             Cancel

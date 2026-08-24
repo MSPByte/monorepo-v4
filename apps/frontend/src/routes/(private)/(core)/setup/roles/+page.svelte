@@ -349,6 +349,7 @@
           : 'Create a custom role for your organization.'}
       </Dialog.Description>
     </Dialog.Header>
+    <Dialog.Body class="p-0">
 
     <div class="grid min-h-0 grid-rows-[1fr] overflow-hidden">
       <div class="grid min-h-0 gap-6 p-5 sm:p-6 xl:grid-cols-[300px_minmax(0,1fr)]">
@@ -514,7 +515,8 @@
       </div>
     </div>
 
-    <Dialog.Footer class="border-t bg-muted/20 px-5 py-4 sm:px-6">
+
+    </Dialog.Body><Dialog.Footer class="border-t bg-muted/20 px-5 py-4 sm:px-6">
       <Button
         type="button"
         variant="outline"
@@ -551,7 +553,9 @@
         {/if}
       </Dialog.Description>
     </Dialog.Header>
-    <Dialog.Footer>
+    <Dialog.Body class="p-0">
+
+    </Dialog.Body><Dialog.Footer>
       <Button type="button" variant="outline" onclick={() => (deleteOpen = false)}>Cancel</Button>
       <Button type="button" variant="destructive" onclick={confirmDelete} disabled={submitting}>
         {submitting ? 'Deleting...' : 'Delete'}

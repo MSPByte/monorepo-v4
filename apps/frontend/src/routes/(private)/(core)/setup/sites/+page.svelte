@@ -784,7 +784,8 @@
         Fields appear on every site profile under the section you choose.
       </Dialog.Description>
     </Dialog.Header>
-    <div class="grid gap-5 p-4">
+    <Dialog.Body>
+    <div class="grid gap-5">
       <!-- Label -->
       <div class="grid gap-1.5">
         <Label for="field-label">Label</Label>
@@ -919,7 +920,8 @@
         </div>
       {/if}
     </div>
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       <Button variant="ghost" onclick={() => (fieldOpen = false)}>Cancel</Button>
       <Button disabled={fieldSaveDisabled} onclick={() => saveField.mutate(fieldDraft)}>Save field</Button>
     </Dialog.Footer>
@@ -935,7 +937,8 @@
         Stack categories define what platforms every site is expected to document.
       </Dialog.Description>
     </Dialog.Header>
-    <div class="grid max-h-[72vh] gap-5 overflow-y-auto p-4">
+    <Dialog.Body>
+    <div class="grid max-h-[72vh] gap-5 overflow-y-auto">
       <!-- Label -->
       <div class="grid gap-1.5">
         <Label for="cat-label">Label</Label>
@@ -1045,7 +1048,8 @@
         {/if}
       </div>
     </div>
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       <Button variant="ghost" onclick={() => (catOpen = false)}>Cancel</Button>
       <Button disabled={catSaveDisabled} onclick={() => saveCategory.mutate(catDraft)}>Save category</Button>
     </Dialog.Footer>

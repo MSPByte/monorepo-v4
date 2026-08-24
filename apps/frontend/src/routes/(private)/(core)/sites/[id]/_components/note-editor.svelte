@@ -96,9 +96,10 @@
         {/if}
       </Dialog.Description>
     </Dialog.Header>
+    <Dialog.Body>
 
     {#if !editing}
-      <div class="grid gap-3 p-4">
+      <div class="grid gap-3">
         <div class="grid gap-1">
           <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
             Title
@@ -152,7 +153,8 @@
       </div>
     {/if}
 
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       {#if note?.id && canDelete}
         <Button
           variant="ghost"

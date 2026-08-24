@@ -634,6 +634,7 @@
         {/if}
       </Dialog.Description>
     </Dialog.Header>
+    <Dialog.Body class="p-0">
 
     <div class="space-y-4 overflow-y-auto px-1 pb-2 pt-1">
       {#if isDialogLoading}
@@ -1009,7 +1010,8 @@
       {/if}
     </div>
 
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       {#if scheduleMode && scheduleId && onRequestDeleteSchedule}
         <Button variant="destructive" onclick={onRequestDeleteSchedule}>Delete schedule</Button>
       {/if}

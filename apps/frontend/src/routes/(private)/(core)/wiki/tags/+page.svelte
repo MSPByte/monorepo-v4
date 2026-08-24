@@ -448,8 +448,9 @@
         Tags cut across contexts. Pick a color and give it a short label.
       </Dialog.Description>
     </Dialog.Header>
+    <Dialog.Body>
 
-    <div class="flex flex-col gap-3 px-4 py-2">
+    <div class="flex flex-col gap-3">
       <div class="flex flex-wrap items-center gap-2">
         {#each PRESET_COLORS as color (color)}
           <button
@@ -487,7 +488,8 @@
       {/if}
     </div>
 
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       <Button variant="outline" onclick={() => (newTagDialogOpen = false)}>Cancel</Button>
       <Button disabled={!newTagLabel.trim()} onclick={commitAdd}>Create</Button>
     </Dialog.Footer>

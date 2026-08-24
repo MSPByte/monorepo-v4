@@ -57,6 +57,7 @@
         exposed outputs can be wired to later steps.
       </Dialog.Description>
     </Dialog.Header>
+    <Dialog.Body class="p-0">
 
     <div class="border-b bg-background px-6 py-4">
       <div class="relative">
@@ -109,5 +110,6 @@
         {/if}
       </div>
     </ScrollArea.Root>
-  </Dialog.Content>
+
+    </Dialog.Body></Dialog.Content>
 </Dialog.Root>

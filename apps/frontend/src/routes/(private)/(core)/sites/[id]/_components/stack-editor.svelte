@@ -181,9 +181,9 @@
           : 'Review the documented vendor, ownership, caveats, and operational details.'}
       </Dialog.Description>
     </Dialog.Header>
-    <Separator />
+    <Dialog.Body>
     {#if !editing}
-      <div class="grid max-h-[70vh] gap-4 overflow-y-auto p-4">
+      <div class="grid max-h-[70vh] gap-4 overflow-y-auto">
         <div class="grid gap-1">
           <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
             Relationship
@@ -320,7 +320,8 @@
       </div>
     {/if}
 
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       {#if canDelete}
         <Button variant="destructive" onclick={() => clear.mutate()} disabled={clear.isPending}>
           Clear

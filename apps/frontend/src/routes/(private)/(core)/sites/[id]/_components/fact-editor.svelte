@@ -266,9 +266,9 @@
           : 'Review the recorded value and source context.'}</Dialog.Description
       >
     </Dialog.Header>
-    <Separator />
+    <Dialog.Body>
     {#if !editing}
-      <div class="grid gap-3 p-4">
+      <div class="grid gap-3">
         <div class="grid gap-1">
           <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
             Applicability
@@ -446,7 +446,8 @@
       </div>
     {/if}
 
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       {#if fact.updatedAt !== null && canDelete}
         <Button
           variant="destructive"

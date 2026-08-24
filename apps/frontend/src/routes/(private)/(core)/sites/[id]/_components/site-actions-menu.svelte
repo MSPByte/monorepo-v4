@@ -113,8 +113,9 @@
       <Dialog.Title>Rename site</Dialog.Title>
       <Dialog.Description>Update the display name for this site.</Dialog.Description>
     </Dialog.Header>
+    <Dialog.Body>
 
-    <div class="grid gap-2 px-4 pb-2">
+    <div class="grid gap-2">
       <Label for="site-rename-input">Name</Label>
       <Input
         id="site-rename-input"
@@ -130,7 +131,8 @@
       />
     </div>
 
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       <Button variant="ghost" onclick={() => (renameOpen = false)}>Cancel</Button>
       <Button disabled={!canSubmitRename} onclick={() => rename.mutate()}>Save</Button>
     </Dialog.Footer>

@@ -94,8 +94,9 @@
         {/if}
       </Dialog.Description>
     </Dialog.Header>
+    <Dialog.Body>
 
-    <div class="grid gap-4 px-4 pb-2">
+    <div class="grid gap-4">
       <!-- Segmented control -->
       <div
         role="tablist"
@@ -158,7 +159,8 @@
       </div>
     </div>
 
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       <Button type="button" variant="ghost" disabled={submitting} onclick={() => onOpenChange(false)}>
         Cancel
       </Button>

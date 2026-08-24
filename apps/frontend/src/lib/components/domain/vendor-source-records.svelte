@@ -377,8 +377,9 @@
         be replaced.
       </Dialog.Description>
     </Dialog.Header>
+    <Dialog.Body>
 
-    <div class="grid gap-3 px-4 pb-2">
+    <div class="grid gap-3">
       <div class="relative">
         <Search
           class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
@@ -468,7 +469,8 @@
       </div>
     </div>
 
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       <Button variant="ghost" onclick={() => (addOpen = false)}>Close</Button>
     </Dialog.Footer>
   </Dialog.Content>

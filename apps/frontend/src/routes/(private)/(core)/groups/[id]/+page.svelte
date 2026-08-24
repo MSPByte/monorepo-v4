@@ -517,8 +517,8 @@
         Pick one or more sites or tenant links. Existing members are hidden.
       </Dialog.Description>
     </Dialog.Header>
-    <Separator />
-    <div class="grid gap-3 p-4">
+    <Dialog.Body>
+    <div class="grid gap-3">
       <div class="grid gap-2">
         <Label>Sites</Label>
         <MultiSelect
@@ -545,7 +545,8 @@
         {selectedSiteIds.length + selectedLinkIds.length} selected
       </p>
     </div>
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       <Button variant="ghost" disabled={adding} onclick={() => (addOpen = false)}>Cancel</Button>
       <Button
         disabled={adding || selectedSiteIds.length + selectedLinkIds.length === 0}
@@ -573,8 +574,9 @@
       <Dialog.Title>Edit group</Dialog.Title>
       <Dialog.Description>Update the group's name and description.</Dialog.Description>
     </Dialog.Header>
+    <Dialog.Body>
 
-    <div class="grid gap-3 px-4 pb-2">
+    <div class="grid gap-3">
       <div class="grid gap-1.5">
         <Label for="group-name">Name</Label>
         <Input
@@ -601,7 +603,8 @@
       </div>
     </div>
 
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       <Button variant="ghost" disabled={rename.isPending} onclick={() => (renameOpen = false)}>
         Cancel
       </Button>
@@ -666,7 +669,7 @@
       <Dialog.Title>Activity log</Dialog.Title>
       <Dialog.Description>Full audit trail for this group.</Dialog.Description>
     </Dialog.Header>
-    <Separator />
+    <Dialog.Body>
     <div class="max-h-[60vh] overflow-y-auto">
       {#if (activityQuery.data ?? []).length}
         <ol class="divide-y divide-border/50">
@@ -702,5 +705,6 @@
         </p>
       {/if}
     </div>
-  </Dialog.Content>
+
+    </Dialog.Body></Dialog.Content>
 </Dialog.Root>

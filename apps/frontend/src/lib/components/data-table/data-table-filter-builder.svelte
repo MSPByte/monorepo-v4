@@ -98,8 +98,8 @@
       <Dialog.Title>Add Filter</Dialog.Title>
       <Dialog.Description>Create a new filter to narrow down your results.</Dialog.Description>
     </Dialog.Header>
-    <Separator />
-    <div class="space-y-4 p-4">
+    <Dialog.Body>
+    <div class="space-y-4">
       <!-- Field Selection -->
       <div class="space-y-2">
         <Label for="field">Field</Label>
@@ -158,7 +158,8 @@
       {/if}
     </div>
 
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       <Button variant="outline" onclick={() => (open = false)}>Cancel</Button>
       <Button onclick={handleAddFilter} disabled={!selectedField || value === ''}>
         Add Filter

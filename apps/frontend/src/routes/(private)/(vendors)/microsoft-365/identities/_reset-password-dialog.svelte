@@ -150,9 +150,10 @@
         {/if}
       </Dialog.Description>
     </Dialog.Header>
+    <Dialog.Body>
 
     {#if resultPassword}
-      <div class="grid gap-3 px-4 pb-2">
+      <div class="grid gap-3">
         {#if resultSummary}
           <div class="text-sm text-muted-foreground">{resultSummary}</div>
         {/if}
@@ -168,18 +169,8 @@
           </Button>
         </div>
       </div>
-      <Dialog.Footer>
-        <Button
-          onclick={() => {
-            resultPassword = null;
-            onOpenChange(false);
-          }}
-        >
-          Done
-        </Button>
-      </Dialog.Footer>
     {:else}
-      <div class="grid gap-4 px-4 pb-2">
+      <div class="grid gap-4">
         <div class="grid gap-2">
           <Label>Password source</Label>
           <RadioGroup.Root
@@ -242,7 +233,19 @@
         {/if}
       </div>
 
-      <Dialog.Footer>
+    {/if}
+    </Dialog.Body>
+    <Dialog.Footer>
+      {#if resultPassword}
+        <Button
+          onclick={() => {
+            resultPassword = null;
+            onOpenChange(false);
+          }}
+        >
+          Done
+        </Button>
+      {:else}
         <Button type="button" variant="ghost" disabled={busy} onclick={() => onOpenChange(false)}>
           Cancel
         </Button>
@@ -252,7 +255,7 @@
           {/if}
           {submitLabel}
         </Button>
-      </Dialog.Footer>
-    {/if}
+      {/if}
+    </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

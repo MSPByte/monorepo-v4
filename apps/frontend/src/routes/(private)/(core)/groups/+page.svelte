@@ -113,8 +113,8 @@
         Groups let you assign policies, billing, frameworks, and packages to a slice of sites or tenant links.
       </Dialog.Description>
     </Dialog.Header>
-    <Separator />
-    <div class="grid gap-3 p-4">
+    <Dialog.Body>
+    <div class="grid gap-3">
       <label class="grid gap-1 text-xs font-medium text-muted-foreground">
         Name
         <input
@@ -134,7 +134,8 @@
         ></textarea>
       </label>
     </div>
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       <button
         type="button"
         class="rounded-sm px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"

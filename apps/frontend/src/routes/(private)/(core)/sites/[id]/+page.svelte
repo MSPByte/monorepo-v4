@@ -715,8 +715,8 @@
         Choose a hidden {addMode === 'stack' ? 'stack category' : 'profile field'} to add to this panel.
       </Dialog.Description>
     </Dialog.Header>
-    <Separator />
-    <div class="grid gap-2 p-4">
+    <Dialog.Body>
+    <div class="grid gap-2">
       <SingleSelect
         options={addOptions}
         bind:selected={addSelection}
@@ -725,7 +725,8 @@
       />
     </div>
 
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       <button
         type="button"
         class="rounded-sm px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
@@ -757,8 +758,8 @@
           : 'Create a new group and add this site to it.'}
       </Dialog.Description>
     </Dialog.Header>
-    <Separator />
-    <div class="grid gap-3 p-4">
+    <Dialog.Body>
+    <div class="grid gap-3">
       <div class="flex gap-2 text-xs">
         <button
           type="button"
@@ -820,7 +821,8 @@
       {/if}
     </div>
 
-    <Dialog.Footer>
+
+    </Dialog.Body><Dialog.Footer>
       <button
         type="button"
         class="rounded-sm px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"

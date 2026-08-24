@@ -250,8 +250,9 @@
           <Dialog.Title>New Context</Dialog.Title>
           <Dialog.Description>Create a subcontext under {context.name}.</Dialog.Description>
         </Dialog.Header>
+        <Dialog.Body>
 
-        <div class="flex flex-col gap-3 px-4 py-2">
+        <div class="flex flex-col gap-3">
           <Input
             bind:value={newContextName}
             placeholder="Context name"
@@ -268,7 +269,8 @@
           />
         </div>
 
-        <Dialog.Footer>
+
+        </Dialog.Body><Dialog.Footer>
           <Button
             variant="outline"
             onclick={() => {

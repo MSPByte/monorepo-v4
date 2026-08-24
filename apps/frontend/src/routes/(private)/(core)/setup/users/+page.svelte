@@ -270,11 +270,10 @@
               <Dialog.Title>Add User</Dialog.Title>
               <Dialog.Description>Create a new user in your organization.</Dialog.Description>
             </Dialog.Header>
-            <Separator />
             <form
               method="POST"
               action="?/addUser"
-              class="flex flex-col gap-4"
+              class="contents"
               use:enhance={() => {
                 submitting = true;
                 formError = null;
@@ -292,7 +291,8 @@
                 };
               }}
             >
-              <div class="flex flex-col gap-4 p-4">
+              <Dialog.Body class="flex flex-col gap-4">
+              <div class="flex flex-col gap-4">
                 <div class="flex flex-col gap-2">
                   <Label for="name">Name</Label>
                   <Input id="name" name="name" placeholder="John Doe" required />
@@ -324,7 +324,8 @@
               {#if formError}
                 <p class="text-sm text-destructive px-4">{formError}</p>
               {/if}
-              <Dialog.Footer class="px-4 pb-4">
+              </Dialog.Body>
+              <Dialog.Footer>
                 <Button type="button" variant="outline" onclick={() => (addDialogOpen = false)}>
                   Cancel
                 </Button>
@@ -361,9 +362,9 @@
         Each grant assigns a role at a specific scope. A user may hold multiple grants.
       </Dialog.Description>
     </Dialog.Header>
-    <Separator />
+    <Dialog.Body>
 
-    <div class="flex flex-col gap-4 p-4">
+    <div class="flex flex-col gap-4">
       <div class="flex flex-col gap-2">
         <h4 class="text-sm font-medium">Current grants</h4>
         {#if grantsQuery.isLoading}
@@ -512,7 +513,8 @@
       </div>
     </div>
 
-    <Dialog.Footer class="px-4 pb-4">
+
+    </Dialog.Body><Dialog.Footer class="px-4 pb-4">
       <Button type="button" variant="outline" onclick={() => (grantsOpen = false)}>Close</Button>
     </Dialog.Footer>
   </Dialog.Content>

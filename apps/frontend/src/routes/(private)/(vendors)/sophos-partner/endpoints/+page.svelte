@@ -661,8 +661,9 @@
           Sophos tenant.
         </Dialog.Description>
       </Dialog.Header>
+      <Dialog.Body>
 
-      <div class="flex flex-col gap-4 py-2 px-4 text-sm">
+      <div class="flex flex-col gap-4 text-sm">
         {#if !moveDialog.jobId}
           <div class="flex flex-col gap-1.5">
             <label class="text-xs font-medium text-muted-foreground" for="move-target-site">
@@ -736,7 +737,8 @@
         {/if}
       </div>
 
-      <Dialog.Footer>
+
+      </Dialog.Body><Dialog.Footer>
         {#if !moveDialog.jobId}
           <Button variant="outline" onclick={closeMoveDialog} disabled={moveDialog.starting}>
             Cancel

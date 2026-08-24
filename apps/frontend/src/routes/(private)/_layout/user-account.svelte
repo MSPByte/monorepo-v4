@@ -107,6 +107,7 @@
       <Dialog.Title>Switch Organization</Dialog.Title>
       <Dialog.Description>Select an organization to switch to.</Dialog.Description>
     </Dialog.Header>
+    <Dialog.Body>
     {#if loadingOrgs}
       <div class="flex items-center justify-center py-8">
         <p class="text-sm text-muted-foreground">Loading organizations...</p>
@@ -117,5 +118,6 @@
         <p class="text-sm text-muted-foreground text-center">Switching...</p>
       {/if}
     {/if}
-  </Dialog.Content>
+
+    </Dialog.Body></Dialog.Content>
 </Dialog.Root>
