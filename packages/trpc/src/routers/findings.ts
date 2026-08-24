@@ -7,6 +7,7 @@ import {
   entitySources,
   policies,
   policyDependencies,
+  policySetItems,
   userReportPrefs,
   users
 } from '@mspbyte/drizzle';
@@ -47,6 +48,7 @@ const listInput = z
     status: z.string().optional(),
     siteId: z.string().optional(),
     policyId: z.string().optional(),
+    policySetId: z.string().optional(),
     resourceType: z.string().optional()
   })
   .optional();
@@ -210,6 +212,18 @@ export const findingsRouter = t.router({
   list: authProcedure.input(listInput).query(async ({ ctx, input }) => {
     const scope = ctx.scopeFor('Findings.Read');
     if (scope !== 'all' && scope.length === 0) return [];
+
+    let policySetPolicyIds: string[] | null = null;
+    if (input?.policySetId) {
+      const items = await ctx.db
+        .select({ policyId: policySetItems.policyId })
+        .from(policySetItems)
+        .where(eq(policySetItems.policySetId, input.policySetId))
+        .catch(() => []);
+      policySetPolicyIds = items.map((i) => i.policyId);
+      if (policySetPolicyIds.length === 0) return [];
+    }
+
     const rows = await ctx.db
       .select(findingSelection)
       .from(findingsWithContext)
@@ -241,6 +255,7 @@ export const findingsRouter = t.router({
         if (input?.status && finding.status !== input.status) return false;
         if (input?.siteId && finding.siteId !== input.siteId) return false;
         if (input?.policyId && finding.policyId !== input.policyId) return false;
+        if (policySetPolicyIds && !policySetPolicyIds.includes(finding.policyId)) return false;
         if (input?.resourceType && finding.resourceType !== input.resourceType) return false;
         return true;
       });

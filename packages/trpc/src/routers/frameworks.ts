@@ -262,6 +262,27 @@ export const frameworksRouter = t.router({
       return { policySetId: input.policySetId, policyIds: nextIds };
     }),
 
+  delete: authProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ ctx, input }) => {
+    requireWrite(ctx);
+    const [existing] = await ctx.db
+      .select({ id: policySets.id, name: policySets.name })
+      .from(policySets)
+      .where(eq(policySets.id, input.id))
+      .limit(1);
+    if (!existing) throw new TRPCError({ code: 'NOT_FOUND' });
+
+    await ctx.db.delete(policySets).where(eq(policySets.id, input.id));
+
+    await auditFrameworkChange(ctx, {
+      frameworkId: input.id,
+      action: 'delete',
+      actionLabel: ActionLabels.FrameworkDelete,
+      targetLabel: existing.name
+    });
+
+    return { id: input.id };
+  }),
+
   listPolicies: authProcedure.input(z.object({ policySetId: z.string().uuid() })).query(async ({ ctx, input }) => {
     requireRead(ctx);
     return ctx.db

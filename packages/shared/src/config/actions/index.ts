@@ -46,6 +46,7 @@ export enum ActionLabels {
   UserGrantRemove = 'user.grant.remove',
   FrameworkCreate = 'framework.create',
   FrameworkUpdate = 'framework.update',
+  FrameworkDelete = 'framework.delete',
   FrameworkSetPolicies = 'framework.set_policies',
   PolicyAssignmentCreate = 'policy_assignment.create',
   PolicyAssignmentDelete = 'policy_assignment.delete',
@@ -301,6 +302,10 @@ export const ActionResources = {
   [ActionLabels.FrameworkUpdate]: {
     label: ActionLabels.FrameworkUpdate,
     name: 'Framework update'
+  },
+  [ActionLabels.FrameworkDelete]: {
+    label: ActionLabels.FrameworkDelete,
+    name: 'Framework delete'
   },
   [ActionLabels.FrameworkSetPolicies]: {
     label: ActionLabels.FrameworkSetPolicies,

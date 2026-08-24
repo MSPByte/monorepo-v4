@@ -1,8 +1,9 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { page } from '$app/state';
+  import { goto } from '$app/navigation';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
-  import { Plus, Save, Trash2, Undo2 } from '@lucide/svelte';
+  import { Plus, Save, Trash2, Undo2, X } from '@lucide/svelte';
   import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
   import { toast } from 'svelte-sonner';
   import { showErrorToast } from '$lib/utils/errors';
@@ -12,8 +13,9 @@
   import SectionPanel from '$lib/components/panel/section-panel.svelte';
   import MetaRow from '$lib/components/panel/meta-row.svelte';
   import FindingSeverityBadge from '$lib/components/domain/finding-severity-badge.svelte';
-  import FindingCard from '$lib/components/domain/finding-card.svelte';
+  import FindingStatusBadge from '$lib/components/domain/finding-status-badge.svelte';
   import SourceBadge from '$lib/components/domain/source-badge.svelte';
+  import ConfirmDialog from '$lib/components/fields/confirm-dialog.svelte';
   import FadeIn from '$lib/components/transition/fade-in.svelte';
   import Loader from '$lib/components/transition/loader.svelte';
 
@@ -21,7 +23,6 @@
   import Input from '$lib/components/ui/input/input.svelte';
   import Textarea from '$lib/components/ui/textarea/textarea.svelte';
   import { Switch } from '$lib/components/ui/switch/index.js';
-  import MultiSelect from '$lib/components/multi-select.svelte';
   import SingleSelect from '$lib/components/single-select.svelte';
   import { formatRelativeDate, prettyText } from '$lib/utils/format';
 
@@ -51,12 +52,23 @@
     queryKey: ['policies.assignmentOptions'],
     queryFn: () => trpc.policies.assignmentOptions.query()
   }));
+  const findingsQuery = createQuery(() => ({
+    queryKey: ['findings.list', { policySetId: id }],
+    queryFn: () => trpc.findings.list.query({ policySetId: id })
+  }));
 
   const siteName = (siteId: string) =>
     sitesQuery.data?.find((site) => site.id === siteId)?.name ?? siteId;
-  const policyOptions = $derived(
-    (policiesQuery.data ?? []).map((policy) => ({ value: policy.id, label: policy.name }))
-  );
+
+  // Policies not yet in this framework
+  const addablePolicyOptions = $derived.by(() => {
+    const framework = frameworkQuery.data;
+    const all = policiesQuery.data ?? [];
+    const current = new Set(framework?.policies ?? []);
+    return all
+      .filter((p) => !current.has(p.id))
+      .map((p) => ({ value: p.id, label: p.name }));
+  });
 
   // --- Identity edit state --------------------------------------------------
   let loadedIdentityFor = $state('');
@@ -67,9 +79,9 @@
   let savingIdentity = $state(false);
 
   // --- Policy membership state ----------------------------------------------
-  let loadedMembershipFor = $state('');
-  let selectedPolicyIds = $state<string[]>([]);
+  let addingPolicyId = $state('');
   let savingMembership = $state(false);
+  let removingPolicyId = $state<string | null>(null);
 
   // --- Mapping form state ---------------------------------------------------
   let scopeType = $state<'global' | 'site' | 'site_group' | 'integration_link'>('global');
@@ -77,6 +89,9 @@
   let assignmentEnabled = $state(true);
   let savingAssignment = $state(false);
   let deletingAssignmentId = $state<string | null>(null);
+
+  // --- Delete state ---------------------------------------------------------
+  let deletingFramework = $state(false);
 
   const scopeOptions = [
     { value: 'global', label: 'Global — every site' },
@@ -117,10 +132,6 @@
       enabledDraft = framework.enabled;
       loadedIdentityFor = framework.id;
     }
-    if (loadedMembershipFor !== framework.id) {
-      selectedPolicyIds = [...(framework.policies ?? [])];
-      loadedMembershipFor = framework.id;
-    }
   });
 
   const identityDirty = $derived.by(() => {
@@ -132,15 +143,6 @@
       categoryDraft !== (framework.category ?? '') ||
       enabledDraft !== framework.enabled
     );
-  });
-
-  const membershipDirty = $derived.by(() => {
-    const framework = frameworkQuery.data;
-    if (!framework) return false;
-    const prev = [...(framework.policies ?? [])].sort();
-    const next = [...selectedPolicyIds].sort();
-    if (prev.length !== next.length) return true;
-    return prev.some((value, index) => value !== next[index]);
   });
 
   async function refreshFramework() {
@@ -163,12 +165,6 @@
     descriptionDraft = framework.description ?? '';
     categoryDraft = framework.category ?? '';
     enabledDraft = framework.enabled;
-  }
-
-  function discardMembership() {
-    const framework = frameworkQuery.data;
-    if (!framework) return;
-    selectedPolicyIds = [...(framework.policies ?? [])];
   }
 
   async function saveIdentity() {
@@ -198,19 +194,38 @@
     }
   }
 
-  async function saveMembership() {
+  async function addPolicy() {
+    const framework = frameworkQuery.data;
+    if (!framework || !addingPolicyId) return;
     savingMembership = true;
     try {
-      await trpc.frameworks.setPolicies.mutate({
-        policySetId: id,
-        policyIds: selectedPolicyIds
-      });
+      const next = [...(framework.policies ?? []), addingPolicyId];
+      await trpc.frameworks.setPolicies.mutate({ policySetId: id, policyIds: next });
+      addingPolicyId = '';
       await refreshFramework();
-      toast.success('Framework policies updated');
+      await queryClient.invalidateQueries({ queryKey: ['findings.list', { policySetId: id }] });
+      toast.success('Policy added');
     } catch (error) {
-      showErrorToast(error, 'Failed to update framework policies.');
+      showErrorToast(error, 'Failed to add policy.');
     } finally {
       savingMembership = false;
+    }
+  }
+
+  async function removePolicy(policyId: string) {
+    const framework = frameworkQuery.data;
+    if (!framework) return;
+    removingPolicyId = policyId;
+    try {
+      const next = (framework.policies ?? []).filter((pid) => pid !== policyId);
+      await trpc.frameworks.setPolicies.mutate({ policySetId: id, policyIds: next });
+      await refreshFramework();
+      await queryClient.invalidateQueries({ queryKey: ['findings.list', { policySetId: id }] });
+      toast.success('Policy removed');
+    } catch (error) {
+      showErrorToast(error, 'Failed to remove policy.');
+    } finally {
+      removingPolicyId = null;
     }
   }
 
@@ -257,6 +272,18 @@
     }
   }
 
+  async function deleteFramework() {
+    deletingFramework = true;
+    try {
+      await trpc.frameworks.delete.mutate({ id });
+      toast.success('Framework deleted');
+      await goto('/frameworks');
+    } catch (error) {
+      showErrorToast(error, 'Failed to delete framework.');
+      deletingFramework = false;
+    }
+  }
+
   function scopeDot(kind: string): string {
     if (kind === 'global') return 'bg-primary';
     if (kind === 'site') return 'bg-primary/70';
@@ -281,6 +308,7 @@
 {#if frameworkQuery.data}
   {@const framework = frameworkQuery.data}
   {@const assignments = assignmentsQuery.data ?? []}
+  {@const findings = findingsQuery.data ?? []}
   <FadeIn class="size-full overflow-auto">
     <FrameworkBriefing
       id={framework.id}
@@ -309,8 +337,9 @@
           {/if}
         </div>
         <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          {framework.policyCount} policy{framework.policyCount === 1 ? '' : 'ies'} ·
-          {assignments.length} mapping{assignments.length === 1 ? '' : 's'}
+          {framework.policyCount} polic{framework.policyCount === 1 ? 'y' : 'ies'} ·
+          {assignments.length} mapping{assignments.length === 1 ? '' : 's'} ·
+          {findings.length} open finding{findings.length === 1 ? '' : 's'}
         </div>
       </div>
 
@@ -397,87 +426,124 @@
               {framework.containedPolicies?.length ?? 0} in bundle
             {/snippet}
             <div class="space-y-3 text-sm">
-              <div class="grid gap-2">
-                <span
-                  class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+              <!-- Add policy row -->
+              <div class="flex gap-2">
+                <div class="min-w-0 flex-1">
+                  <SingleSelect
+                    options={addablePolicyOptions}
+                    bind:selected={addingPolicyId}
+                    placeholder="Add a policy to this bundle"
+                  />
+                </div>
+                <Button
+                  onclick={addPolicy}
+                  disabled={!addingPolicyId || savingMembership}
                 >
-                  Policy membership
-                </span>
-                <MultiSelect
-                  options={policyOptions}
-                  bind:selected={selectedPolicyIds}
-                  placeholder="Add policies to this bundle"
-                />
-                {#if membershipDirty}
-                  <div
-                    class="flex items-center justify-between gap-3 border-t border-border/50 pt-2"
-                  >
-                    <span
-                      class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
-                    >
-                      {selectedPolicyIds.length} selected · audit-logged on save
-                    </span>
-                    <div class="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        onclick={discardMembership}
-                        disabled={savingMembership}
-                      >
-                        <Undo2 class="size-4" /> Discard
-                      </Button>
-                      <Button onclick={saveMembership} disabled={savingMembership}>
-                        <Save class="size-4" /> Save policies
-                      </Button>
-                    </div>
-                  </div>
-                {/if}
+                  <Plus class="size-4" /> Add
+                </Button>
               </div>
 
+              <!-- Policy list -->
               <div>
                 {#each framework.containedPolicies ?? [] as policy}
-                  <a
-                    href={`/policies/${policy.id}`}
-                    class="grid gap-3 border-b border-border/40 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto] lg:items-center"
+                  <div
+                    class="grid gap-3 border-b border-border/40 py-2 last:border-b-0 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto] lg:items-center"
                   >
-                    <div class="min-w-0">
+                    <a
+                      href={`/policies/${policy.id}`}
+                      class="min-w-0 transition-colors hover:text-foreground/80"
+                    >
                       <div class="truncate">{policy.name}</div>
                       <div
                         class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground"
                       >
                         {policy.category ?? 'operational'} · scope {prettyText(policy.scope)}
                       </div>
-                    </div>
+                    </a>
                     <div class="min-w-0 truncate text-sm text-muted-foreground">
                       {policy.expectation ?? '—'}
                     </div>
                     <div class="flex shrink-0 items-center gap-1.5 lg:justify-end">
                       <FindingSeverityBadge severity={policy.severity} />
-                      <ArrowUpRight class="size-3 text-muted-foreground" />
+                      <a
+                        href={`/policies/${policy.id}`}
+                        class="text-muted-foreground hover:text-foreground"
+                        title="View policy"
+                      >
+                        <ArrowUpRight class="size-3" />
+                      </a>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="Remove from framework"
+                        onclick={() => removePolicy(policy.id)}
+                        disabled={removingPolicyId === policy.id || savingMembership}
+                      >
+                        <X class="size-4" />
+                      </Button>
                     </div>
-                  </a>
+                  </div>
                 {:else}
                   <p
                     class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70"
                   >
-                    no policies in this bundle
+                    no policies in this bundle — add one above
                   </p>
                 {/each}
               </div>
             </div>
           </SectionPanel>
 
-          {#if framework.recentFailures && framework.recentFailures.length}
-            <SectionPanel code="03" title="RECENT FAILURES">
-              {#snippet aside()}
-                {framework.recentFailures.length} open
-              {/snippet}
-              <div class="space-y-2">
-                {#each framework.recentFailures as finding}
-                  <FindingCard {finding} policyName={finding.policyId} />
-                {/each}
-              </div>
-            </SectionPanel>
-          {/if}
+          <SectionPanel code="03" title="OPEN FINDINGS">
+            {#snippet aside()}
+              <a
+                href={`/findings?policySetId=${framework.id}`}
+                class="inline-flex items-center gap-1 hover:text-foreground"
+              >
+                view all <ArrowUpRight class="size-3" />
+              </a>
+            {/snippet}
+            <div>
+              {#each findings as finding}
+                <a
+                  href={`/findings/${finding.id}`}
+                  class="grid gap-3 border-b border-border/40 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] lg:items-center"
+                >
+                  <div class="min-w-0">
+                    <div class="truncate">{finding.title}</div>
+                    {#if finding.evidenceSummary}
+                      <div
+                        class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground"
+                      >
+                        {finding.evidenceSummary}
+                      </div>
+                    {/if}
+                  </div>
+                  <div class="min-w-0 text-sm text-muted-foreground">
+                    <div class="truncate font-mono text-[10.5px] uppercase tracking-wider">
+                      {finding.policyName ?? '—'}
+                    </div>
+                    {#if finding.lastSeenAt}
+                      <div class="font-mono text-[10.5px] uppercase tracking-wider">
+                        last seen {formatRelativeDate(finding.lastSeenAt)}
+                      </div>
+                    {/if}
+                  </div>
+                  <div class="flex shrink-0 flex-wrap items-center gap-1.5 lg:justify-end">
+                    <FindingSeverityBadge severity={finding.severity} />
+                    <FindingStatusBadge status={finding.status} />
+                    <ArrowUpRight class="size-3 text-muted-foreground" />
+                  </div>
+                </a>
+              {:else}
+                <p
+                  class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70"
+                >
+                  no open findings
+                </p>
+              {/each}
+            </div>
+          </SectionPanel>
         </div>
 
         <!-- RIGHT COLUMN -->
@@ -616,6 +682,34 @@
                 {#each framework.sitesAffected as siteId}
                   <SourceBadge source={siteName(siteId)} />
                 {/each}
+              </div>
+            </SectionPanel>
+          {/if}
+
+          {#if framework.source === 'custom'}
+            <SectionPanel code="!" title="DANGER ZONE">
+              <div class="space-y-2">
+                <p class="text-sm text-muted-foreground">
+                  Deleting this framework removes all its mappings. Open findings are not closed automatically.
+                </p>
+                <ConfirmDialog
+                  title="Delete framework"
+                  description={'This will permanently delete "' + framework.name + '" and all its scope mappings. Open findings linked to its policies will remain until their next evaluation cycle.'}
+                  confirmLabel="Delete"
+                  destructive
+                  onconfirm={deleteFramework}
+                >
+                  {#snippet trigger(props)}
+                    <Button
+                      variant="destructive"
+                      class="w-full"
+                      disabled={deletingFramework}
+                      {...props}
+                    >
+                      <Trash2 class="size-4" /> Delete framework
+                    </Button>
+                  {/snippet}
+                </ConfirmDialog>
               </div>
             </SectionPanel>
           {/if}
