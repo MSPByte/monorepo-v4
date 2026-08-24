@@ -726,6 +726,11 @@ async function scopedRows(
   if (scope.siteId && siteColumn) {
     conditions.push(eq(siteColumn as never, scope.siteId));
   }
+  // A domain-mapped M365 identity belongs to one site. Tenant-wide M365
+  // resources intentionally remain visible to every site assigned to the link.
+  if (context.siteId && entry.resourceType === 'm365_identity' && siteColumn) {
+    conditions.push(eq(siteColumn as never, context.siteId));
+  }
 
   const filterSql = buildSqlFilter(table, definition.filter);
   if (filterSql) conditions.push(filterSql);
@@ -913,9 +918,13 @@ function buildFinding(
     linkIdOverride?: string | null;
   }
 ): ProducedFinding {
+  const linkId = context.linkId ?? input.linkIdOverride ?? context.assignment.linkId ?? null;
+  const siteId = context.siteId ?? input.siteIdOverride ?? context.assignment.siteId ?? null;
   const fingerprint = [
     context.assignment.id,
     context.policy.id,
+    linkId,
+    siteId,
     input.resourceType,
     input.resourceTable,
     input.resourceId
@@ -928,8 +937,8 @@ function buildFinding(
     policySetId: context.policySetId,
     policyAssignmentId: context.assignment.id,
     providerId: context.policy.providerId ?? context.provider,
-    linkId: context.linkId ?? input.linkIdOverride ?? context.assignment.linkId ?? null,
-    siteId: context.siteId ?? input.siteIdOverride ?? context.assignment.siteId ?? null,
+    linkId,
+    siteId,
     resourceType: input.resourceType,
     resourceTable: input.resourceTable,
     resourceId: input.resourceId,

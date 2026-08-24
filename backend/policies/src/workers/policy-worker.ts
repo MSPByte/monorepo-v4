@@ -1,5 +1,7 @@
 import { Worker } from "bullmq";
+import { integrationLinkSiteAssignments } from "@mspbyte/drizzle";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
+import { eq } from "drizzle-orm";
 import type { PolicyJobData } from "@mspbyte/pipeline";
 import { env, requireEncryptionKey } from "../env.js";
 import { serializeError } from "../errors.js";
@@ -46,8 +48,29 @@ export function createPolicyWorker(
       });
 
       try {
-        const metrics = await evaluatePolicies(db, data);
-        await evaluateFactRules(db, data);
+        const assignedSiteIds = data.provider === "microsoft-365" && !data.siteId
+          ? (await db
+              .select({ siteId: integrationLinkSiteAssignments.siteId })
+              .from(integrationLinkSiteAssignments)
+              .where(eq(integrationLinkSiteAssignments.linkId, data.linkId)))
+              .map((assignment: { siteId: string }) => assignment.siteId)
+          : [];
+        const evaluationTargets = assignedSiteIds.length
+          ? assignedSiteIds.map((siteId: string) => ({ ...data, siteId }))
+          : [data];
+        // This is intentionally serial: it adds no provider/API calls, avoids
+        // a burst of duplicate tenant-table reads, and keeps a large tenant's
+        // policy job within one predictable DB-work stream.
+        const metrics = { assignmentsEvaluated: 0, policiesEvaluated: 0, findingsOpen: 0, findingsResolved: 0, failedCt: 0 };
+        for (const target of evaluationTargets) {
+          const current = await evaluatePolicies(db, target);
+          await evaluateFactRules(db, target);
+          metrics.assignmentsEvaluated += current.assignmentsEvaluated;
+          metrics.policiesEvaluated += current.policiesEvaluated;
+          metrics.findingsOpen += current.findingsOpen;
+          metrics.findingsResolved += current.findingsResolved;
+          metrics.failedCt += current.failedCt;
+        }
         await completePolicyStage(db, stageId, data.syncRunId, metrics);
 
         logger.info("Policy job completed", {

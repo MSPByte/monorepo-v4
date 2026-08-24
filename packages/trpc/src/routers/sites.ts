@@ -10,6 +10,7 @@ import {
   findings,
   haloPsaRecurringItems,
   integrationLinks,
+  integrationLinkSiteAssignments,
   m365Identities,
   people,
   siteProfileFacts,
@@ -334,15 +335,30 @@ export const sitesRouter = t.router({
           .from(siteStackEntries)
           .where(eq(siteStackEntries.siteId, siteId))
           .catch(() => []),
-        ctx.db
-          .select()
-          .from(integrationLinks)
-          .where(
-            and(
-              eq(integrationLinks.siteId, siteId),
-              inArray(integrationLinks.status, ['active', 'mapping'])
+        Promise.all([
+          ctx.db
+            .select()
+            .from(integrationLinks)
+            .where(
+              and(
+                eq(integrationLinks.siteId, siteId),
+                inArray(integrationLinks.status, ['active', 'mapping'])
+              )
+            ),
+          ctx.db
+            .select({ link: integrationLinks })
+            .from(integrationLinkSiteAssignments)
+            .innerJoin(integrationLinks, eq(integrationLinks.id, integrationLinkSiteAssignments.linkId))
+            .where(
+              and(
+                eq(integrationLinkSiteAssignments.siteId, siteId),
+                eq(integrationLinks.status, 'active')
+              )
             )
-          )
+        ])
+          .then(([direct, assigned]) => [
+            ...new Map([...direct, ...assigned.map((row) => row.link)].map((link) => [link.id, link])).values()
+          ])
           .catch(() => []),
         ctx.db
           .select({

@@ -1,7 +1,7 @@
 // TODO: Findings Implementation
 import { z } from 'zod';
-import { customerLogs, integrationLinks } from '@mspbyte/drizzle';
-import { eq, and, inArray, ne, or } from 'drizzle-orm';
+import { customerLogs, integrationLinks, integrationLinkSiteAssignments, m365DomainSiteMappings, m365Identities, sites } from '@mspbyte/drizzle';
+import { eq, and, inArray, ne, or, isNull, exists, sql } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
 import { ActionLabels, INTEGRATIONS, META_VERSION_KEY, type ProviderId } from '@mspbyte/shared';
 import type { Context } from '../context.js';
@@ -120,18 +120,32 @@ export const integrationLinksRouter = t.router({
       const conditions = [];
       if (input.integrationId)
         conditions.push(eq(integrationLinks.integrationId, input.integrationId));
-      if (input.siteId) conditions.push(eq(integrationLinks.siteId, input.siteId));
+      const assignedToSites = (siteIds: readonly string[]) =>
+        exists(
+          ctx.db
+            .select({ linkId: integrationLinkSiteAssignments.linkId })
+            .from(integrationLinkSiteAssignments)
+            .where(
+              and(
+                eq(integrationLinkSiteAssignments.linkId, integrationLinks.id),
+                inArray(integrationLinkSiteAssignments.siteId, [...siteIds])
+              )
+            )
+        );
+      if (input.siteId) {
+        conditions.push(or(eq(integrationLinks.siteId, input.siteId), assignedToSites([input.siteId])));
+      }
       if (input.status) conditions.push(eq(integrationLinks.status, input.status));
 
       if (input.groupId) {
         const targets = await loadGroupTargets(ctx.db, input.groupId);
         if (targets.siteIds.length === 0 && targets.linkIds.length === 0) return [];
         if (targets.siteIds.length > 0 && targets.linkIds.length > 0) {
-          conditions.push(or(inArray(integrationLinks.id, targets.linkIds), inArray(integrationLinks.siteId, targets.siteIds)));
+          conditions.push(or(inArray(integrationLinks.id, targets.linkIds), inArray(integrationLinks.siteId, targets.siteIds), assignedToSites(targets.siteIds)));
         } else if (targets.linkIds.length > 0) {
           conditions.push(inArray(integrationLinks.id, targets.linkIds));
         } else {
-          conditions.push(inArray(integrationLinks.siteId, targets.siteIds));
+          conditions.push(or(inArray(integrationLinks.siteId, targets.siteIds), assignedToSites(targets.siteIds)));
         }
       }
 
@@ -140,7 +154,7 @@ export const integrationLinksRouter = t.router({
         if (siteScope === 'all') {
           scopeConditions.push(ne(integrationLinks.id, '00000000-0000-0000-0000-000000000000'));
         } else if (siteScope.length > 0) {
-          scopeConditions.push(inArray(integrationLinks.siteId, [...siteScope]));
+          scopeConditions.push(or(inArray(integrationLinks.siteId, [...siteScope]), assignedToSites(siteScope)));
         }
         if (linkScope === 'all') {
           scopeConditions.push(ne(integrationLinks.id, '00000000-0000-0000-0000-000000000000'));
@@ -399,16 +413,70 @@ export const integrationLinksRouter = t.router({
       }
     ),
 
-  syncSiteMappings: authProcedure
+  m365SiteMappings: authProcedure
+    .input(z.object({ linkId: z.string().uuid().optional() }).default({}))
+    .query(async ({ ctx, input }) => {
+      if (!ctx.can('Integrations.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Integrations.Read permission required' });
+      }
+      const siteScope = ctx.scopeFor('Integrations.Read');
+      const linkScope = ctx.linkScopeFor('Integrations.Read');
+      const noSiteScope = Array.isArray(siteScope) && siteScope.length === 0;
+      const noLinkScope = Array.isArray(linkScope) && linkScope.length === 0;
+      if (noSiteScope && noLinkScope) return { assignments: [], domainMappings: [] };
+      const visibleBySite = Array.isArray(siteScope) && siteScope.length
+        ? exists(
+            ctx.db
+              .select({ linkId: integrationLinkSiteAssignments.linkId })
+              .from(integrationLinkSiteAssignments)
+              .where(
+                and(
+                  eq(integrationLinkSiteAssignments.linkId, integrationLinks.id),
+                  inArray(integrationLinkSiteAssignments.siteId, siteScope)
+                )
+              )
+          )
+        : undefined;
+      const visibleByLink = Array.isArray(linkScope) && linkScope.length
+        ? inArray(integrationLinks.id, linkScope)
+        : undefined;
+      const visibility = siteScope === 'all' || linkScope === 'all'
+        ? ne(integrationLinks.id, '00000000-0000-0000-0000-000000000000')
+        : or(visibleBySite, visibleByLink);
+      const links = await ctx.db
+        .select({ id: integrationLinks.id })
+        .from(integrationLinks)
+        .where(and(
+          eq(integrationLinks.integrationId, 'microsoft-365'),
+          isNull(integrationLinks.siteId),
+          visibility,
+          input.linkId ? eq(integrationLinks.id, input.linkId) : undefined
+        ));
+      if (input.linkId && links.length === 0) {
+        throw new TRPCError({ code: 'NOT_FOUND' });
+      }
+      const linkIds = links.map((link) => link.id);
+      if (linkIds.length === 0) return { assignments: [], domainMappings: [] };
+
+      const [assignments, domainMappings] = await Promise.all([
+        ctx.db
+          .select({ linkId: integrationLinkSiteAssignments.linkId, siteId: integrationLinkSiteAssignments.siteId })
+          .from(integrationLinkSiteAssignments)
+          .where(inArray(integrationLinkSiteAssignments.linkId, linkIds)),
+        ctx.db
+          .select({ linkId: m365DomainSiteMappings.linkId, domain: m365DomainSiteMappings.domain, siteId: m365DomainSiteMappings.siteId })
+          .from(m365DomainSiteMappings)
+          .where(inArray(m365DomainSiteMappings.linkId, linkIds))
+      ]);
+      return { assignments, domainMappings };
+    }),
+
+  syncM365SiteMappings: authProcedure
     .input(
       z.object({
-        parentLinkId: z.string().uuid(),
-        mappings: z.array(
-          z.object({
-            siteId: z.string().uuid(),
-            domains: z.array(z.string())
-          })
-        )
+        linkId: z.string().uuid(),
+        siteIds: z.array(z.string().uuid()),
+        domainMappings: z.array(z.object({ domain: z.string().min(1), siteId: z.string().uuid() }))
       })
     )
     .mutation(
@@ -416,116 +484,94 @@ export const integrationLinksRouter = t.router({
         ctx,
         input
       }): Promise<{
-        parent: IntegrationLinkRow;
-        created: number;
-        updated: number;
-        deleted: number;
+        link: IntegrationLinkRow;
+        assignments: number;
+        domainMappings: number;
       }> => {
+        if (!ctx.can('Integrations.Write') || !ctx.can('Sites.Write')) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Integrations.Write and Sites.Write permissions required' });
+        }
         const [parent] = await ctx.db
           .select()
           .from(integrationLinks)
-          .where(eq(integrationLinks.id, input.parentLinkId))
+          .where(eq(integrationLinks.id, input.linkId))
           .limit(1);
         if (!parent) throw new TRPCError({ code: 'NOT_FOUND' });
-        if (parent.siteId) {
+        if (parent.integrationId !== 'microsoft-365' || parent.siteId) {
           throw new TRPCError({
             code: 'BAD_REQUEST',
-            message: 'syncSiteMappings requires a tenant-scoped link (siteId must be null)'
+            message: 'M365 site mappings require a tenant-scoped Microsoft 365 link'
           });
         }
-        if (!parent.externalId) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Parent link is missing externalId'
-          });
+        const siteIds = [...new Set(input.siteIds)];
+        const permittedSites = ctx.scopeFor('Sites.Write');
+        if (permittedSites !== 'all' && siteIds.some((siteId) => !permittedSites.includes(siteId))) {
+          throw new TRPCError({ code: 'NOT_FOUND' });
         }
-
-        const dedupedMappings = new Map<string, string[]>();
-        for (const mapping of input.mappings) {
-          if (mapping.domains.length === 0) continue;
-          const existing = dedupedMappings.get(mapping.siteId) ?? [];
-          for (const domain of mapping.domains) {
-            if (!existing.includes(domain)) existing.push(domain);
-          }
-          dedupedMappings.set(mapping.siteId, existing);
-        }
-
-        const parentMeta = (parent.meta as Record<string, unknown> | null) ?? {};
-        const nextParentMeta = {
-          ...parentMeta,
-          siteMappings: [...dedupedMappings.entries()].map(([siteId, domains]) => ({
-            siteId,
-            domains
-          }))
-        };
-        const parentMetaStamped = stampMeta(parent.integrationId, nextParentMeta);
-
-        const existingChildren = (await ctx.db
-          .select()
-          .from(integrationLinks)
-          .where(
-            and(
-              eq(integrationLinks.integrationId, parent.integrationId),
-              eq(integrationLinks.externalId, parent.externalId),
-              ne(integrationLinks.id, parent.id)
-            )
-          )) as IntegrationLinkRow[];
-        const existingBySite = new Map(
-          existingChildren.filter((c) => c.siteId).map((c) => [c.siteId as string, c])
+        const domainMappings = new Map<string, string>();
+        const knownDomains = new Set(
+          (((parent.meta as Record<string, unknown> | null)?.domains as string[] | undefined) ?? [])
+            .map((domain) => domain.trim().toLowerCase())
         );
-
-        const toCreate: Array<typeof integrationLinks.$inferInsert> = [];
-        const toUpdate: Array<{
-          id: string;
-          meta: Record<string, unknown> | null;
-          status: 'mapping';
-        }> = [];
-        const now = new Date().toISOString();
-
-        for (const [siteId, domains] of dedupedMappings) {
-          const childMeta = stampMeta(parent.integrationId, {
-            source: 'domain-mapping',
-            parentLinkId: parent.id,
-            domains
-          });
-          const existing = existingBySite.get(siteId);
-          if (existing) {
-            toUpdate.push({ id: existing.id, meta: childMeta, status: 'mapping' });
-          } else {
-            toCreate.push({
-              integrationId: parent.integrationId,
-              siteId,
-              externalId: parent.externalId,
-              name: parent.name,
-              status: 'mapping',
-              meta: childMeta
+        for (const mapping of input.domainMappings) {
+          const domain = mapping.domain.trim().toLowerCase();
+          if (!domain) continue;
+          if (!knownDomains.has(domain)) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: `Domain ${domain} is not available on this Microsoft 365 tenant` });
+          }
+          if (!siteIds.includes(mapping.siteId)) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: 'A domain can only be attributed to an assigned site' });
+          }
+          if (domainMappings.has(domain)) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: `Domain ${domain} is mapped more than once` });
+          }
+          domainMappings.set(domain, mapping.siteId);
+        }
+        if (siteIds.length) {
+          const existingSites = await ctx.db.select({ id: sites.id }).from(sites).where(inArray(sites.id, siteIds));
+          if (existingSites.length !== siteIds.length) throw new TRPCError({ code: 'NOT_FOUND' });
+          const conflicts = await ctx.db
+            .select({ siteId: integrationLinkSiteAssignments.siteId })
+            .from(integrationLinkSiteAssignments)
+            .innerJoin(integrationLinks, eq(integrationLinks.id, integrationLinkSiteAssignments.linkId))
+            .where(
+              and(
+                inArray(integrationLinkSiteAssignments.siteId, siteIds),
+                eq(integrationLinks.integrationId, 'microsoft-365'),
+                ne(integrationLinkSiteAssignments.linkId, parent.id)
+              )
+            );
+          if (conflicts.length) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'A site can only be assigned to one Microsoft 365 tenant'
             });
           }
         }
 
-        const toDelete = existingChildren
-          .filter((c) => c.siteId && c.status === 'mapping' && !dedupedMappings.has(c.siteId))
-          .map((c) => c.id);
-
-        const [updatedParent] = await ctx.db
-          .update(integrationLinks)
-          .set({ meta: parentMetaStamped, updatedAt: now })
-          .where(eq(integrationLinks.id, parent.id))
-          .returning();
-        if (!updatedParent) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
-
-        if (toDelete.length > 0) {
-          await ctx.db.delete(integrationLinks).where(inArray(integrationLinks.id, toDelete));
-        }
-        for (const update of toUpdate) {
-          await ctx.db
-            .update(integrationLinks)
-            .set({ meta: update.meta, status: update.status, updatedAt: now })
-            .where(eq(integrationLinks.id, update.id));
-        }
-        if (toCreate.length > 0) {
-          await ctx.db.insert(integrationLinks).values(toCreate);
-        }
+        await ctx.db.transaction(async (tx) => {
+          await tx.delete(m365DomainSiteMappings).where(eq(m365DomainSiteMappings.linkId, parent.id));
+          await tx.delete(integrationLinkSiteAssignments).where(eq(integrationLinkSiteAssignments.linkId, parent.id));
+          if (siteIds.length) {
+            await tx.insert(integrationLinkSiteAssignments).values(siteIds.map((siteId) => ({ linkId: parent.id, siteId })));
+          }
+          if (domainMappings.size) {
+            await tx.insert(m365DomainSiteMappings).values([...domainMappings].map(([domain, siteId]) => ({ linkId: parent.id, domain, siteId })));
+          }
+          // Keep domain-attributed identities consistent immediately. This is
+          // a local projection update; it does not schedule another M365 API
+          // request or ingestion job.
+          await tx.update(m365Identities).set({ siteId: null }).where(eq(m365Identities.linkId, parent.id));
+          for (const [domain, siteId] of domainMappings) {
+            await tx
+              .update(m365Identities)
+              .set({ siteId })
+              .where(and(
+                eq(m365Identities.linkId, parent.id),
+                sql`lower(split_part(${m365Identities.email}, '@', 2)) = ${domain}`
+              ));
+          }
+        });
 
         await auditLinkChange(ctx, {
           linkId: parent.id,
@@ -535,20 +581,16 @@ export const integrationLinksRouter = t.router({
           siteId: null,
           metadata: {
             integrationId: parent.integrationId,
-            changedFields: ['meta.siteMappings'],
-            mappingCounts: {
-              created: toCreate.length,
-              updated: toUpdate.length,
-              deleted: toDelete.length
-            }
+            changedFields: ['siteAssignments', 'domainMappings'],
+            assignments: siteIds.length,
+            domainMappings: domainMappings.size
           }
         });
 
         return {
-          parent: updatedParent,
-          created: toCreate.length,
-          updated: toUpdate.length,
-          deleted: toDelete.length
+          link: parent,
+          assignments: siteIds.length,
+          domainMappings: domainMappings.size
         };
       }
     ),

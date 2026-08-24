@@ -1,7 +1,11 @@
 import { z } from 'zod';
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import {
   customerLogs,
+  integrationLinks,
+  integrationLinkSiteAssignments,
+  m365Identities,
+  m365Licenses,
   siteProfileFacts,
   siteProfileFields,
   siteProfileNotes,
@@ -11,7 +15,10 @@ import {
 import {
   ActionLabels,
   fieldTypeLabel,
+  getSiteFactFieldType,
+  isSiteFactFieldType,
   resolveSiteFactFieldType,
+  siteFactFieldTypesForIntegrations,
   type Permission
 } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
@@ -52,9 +59,6 @@ const stackMetadataFieldSchema = z.object({
 const noteTypeEnum = z.enum(['special', 'tribal']);
 
 const profileFieldSectionEnum = z.enum(['executive', 'context']);
-const profileFieldTypeEnum = z.enum(['string', 'number', 'boolean']);
-const profileFieldValueModeEnum = z.enum(['single', 'multiple']);
-
 type CatalogFieldOut = {
   id: string;
   key: string;
@@ -83,9 +87,15 @@ function actorLabel(ctx: Context) {
   return ctx.user.name || ctx.user.email;
 }
 
-function requireSitePermission(ctx: Context, permission: Permission) {
+function requireSitePermission(ctx: Context, permission: Permission, siteId?: string) {
   if (!ctx.can(permission)) {
     throw new TRPCError({ code: 'FORBIDDEN', message: `${permission} permission required` });
+  }
+  if (siteId) {
+    const scope = ctx.scopeFor(permission);
+    if (scope !== 'all' && !scope.includes(siteId)) {
+      throw new TRPCError({ code: 'NOT_FOUND' });
+    }
   }
 }
 
@@ -93,6 +103,33 @@ function normalizeStackStatus(status: z.infer<typeof stackStatusEnum>) {
   if (status === 'managed') return 'msp_managed';
   if (status === 'third_party') return 'vendor_managed';
   return status;
+}
+
+async function m365LinksForSite(ctx: Context, siteId: string) {
+  const [directLinks, assignedLinks] = await Promise.all([
+    ctx.db
+      .select({ id: integrationLinks.id, name: integrationLinks.name })
+      .from(integrationLinks)
+      .where(
+        and(
+          eq(integrationLinks.siteId, siteId),
+          eq(integrationLinks.integrationId, 'microsoft-365'),
+          inArray(integrationLinks.status, ['active', 'mapping'])
+        )
+      ),
+    ctx.db
+      .select({ id: integrationLinks.id, name: integrationLinks.name })
+      .from(integrationLinkSiteAssignments)
+      .innerJoin(integrationLinks, eq(integrationLinks.id, integrationLinkSiteAssignments.linkId))
+      .where(
+        and(
+          eq(integrationLinkSiteAssignments.siteId, siteId),
+          eq(integrationLinks.integrationId, 'microsoft-365'),
+          eq(integrationLinks.status, 'active')
+        )
+      )
+  ]);
+  return [...new Map([...directLinks, ...assignedLinks].map((link) => [link.id, link])).values()];
 }
 
 function normalizeStackMetadataFields(
@@ -108,6 +145,67 @@ function normalizeStackMetadataFields(
     required: field.required ?? false,
     helpText: field.helpText ?? null
   }));
+}
+
+async function validateManagedFactValue(
+  ctx: Context,
+  input: { siteId: string; key: string; value: z.infer<typeof factValueSchema> }
+) {
+  const [field] = await ctx.db
+    .select({ key: siteProfileFields.key, valueType: siteProfileFields.valueType, valueMode: siteProfileFields.valueMode })
+    .from(siteProfileFields)
+    .where(eq(siteProfileFields.key, input.key))
+    .limit(1);
+  if (!field) return;
+
+  const fieldType = resolveSiteFactFieldType(field);
+  const definition = getSiteFactFieldType(fieldType);
+  if (!definition?.entityType || input.value === null) return;
+
+  const values = Array.isArray(input.value) ? input.value : [input.value];
+  if (
+    values.some((value) => typeof value !== 'string') ||
+    (definition.valueMode === 'multiple' ? !Array.isArray(input.value) : Array.isArray(input.value))
+  ) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: `${definition.label} requires ${definition.valueMode === 'multiple' ? 'a list of' : 'one'} valid selection${definition.valueMode === 'multiple' ? 's' : ''}` });
+  }
+
+  const links = definition.integrationId === 'microsoft-365'
+    ? await m365LinksForSite(ctx, input.siteId)
+    : await ctx.db
+        .select({ id: integrationLinks.id, name: integrationLinks.name })
+        .from(integrationLinks)
+        .where(
+          and(
+            eq(integrationLinks.siteId, input.siteId),
+            eq(integrationLinks.integrationId, definition.integrationId!),
+            inArray(integrationLinks.status, ['active', 'mapping'])
+          )
+        );
+  const linkIds = links.map((link) => link.id);
+  if (linkIds.length === 0) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: `${definition.label} requires an enabled ${definition.family} integration on this site` });
+  }
+
+  const requested = [...new Set(values as string[])];
+  if (definition.entityType === 'm365_identity') {
+    const matches = await ctx.db
+      .select({ id: m365Identities.id })
+      .from(m365Identities)
+      .where(and(inArray(m365Identities.id, requested), inArray(m365Identities.linkId, linkIds)));
+    if (matches.length !== requested.length) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Choose Microsoft 365 identities from this site\'s tenant' });
+    }
+  }
+  if (definition.entityType === 'm365_license') {
+    const matches = await ctx.db
+      .select({ skuId: m365Licenses.skuId })
+      .from(m365Licenses)
+      .where(and(inArray(m365Licenses.skuId, requested), inArray(m365Licenses.linkId, linkIds), eq(m365Licenses.isBloat, false)));
+    if (new Set(matches.map((match) => match.skuId)).size !== requested.length) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Choose Microsoft 365 licenses from this site\'s tenant' });
+    }
+  }
 }
 
 async function auditCustomerChange(
@@ -169,9 +267,14 @@ async function auditCatalogChange(
 
 export const siteProfileRouter = t.router({
   catalog: authProcedure.query(async ({ ctx }) => {
-    const [fieldRows, categoryRows] = await Promise.all([
+    const [fieldRows, categoryRows, enabledIntegrationRows] = await Promise.all([
       ctx.db.select().from(siteProfileFields).catch(() => []),
-      ctx.db.select().from(siteStackCategories).catch(() => [])
+      ctx.db.select().from(siteStackCategories).catch(() => []),
+      ctx.db
+        .select({ integrationId: integrationLinks.integrationId })
+        .from(integrationLinks)
+        .where(inArray(integrationLinks.status, ['active', 'mapping']))
+        .catch(() => [])
     ]);
 
     const fields: CatalogFieldOut[] = fieldRows
@@ -207,8 +310,78 @@ export const siteProfileRouter = t.router({
       }))
       .sort((a, b) => a.displayOrder - b.displayOrder);
 
-    return { fields, categories };
+    return {
+      fields,
+      categories,
+      fieldTypes: siteFactFieldTypesForIntegrations(
+        enabledIntegrationRows.map((row) => row.integrationId)
+      ),
+    };
   }),
+
+  // Resource-backed fact values are always scoped to the site's own active
+  // integration links. A license SKU or identity from another customer must
+  // never be selectable just because it exists in the tenant database.
+  entityOptions: authProcedure
+    .input(
+      z.object({
+        siteId: z.string().uuid(),
+        entityType: z.enum(['m365_identity', 'm365_license']),
+        limit: z.number().int().min(1).max(500).default(200),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      requireSitePermission(ctx, 'Sites.Read', input.siteId);
+      const links = await m365LinksForSite(ctx, input.siteId);
+      if (links.length === 0) return [];
+
+      const linkIds = links.map((link) => link.id);
+      const linkNames = new Map(links.map((link) => [link.id, link.name]));
+      if (input.entityType === 'm365_identity') {
+        const rows = await ctx.db
+          .select({
+            id: m365Identities.id,
+            linkId: m365Identities.linkId,
+            name: m365Identities.name,
+            email: m365Identities.email,
+          })
+          .from(m365Identities)
+          .where(inArray(m365Identities.linkId, linkIds))
+          .orderBy(asc(m365Identities.email))
+          .limit(input.limit);
+        return rows.map((row) => ({
+          id: row.id,
+          label: row.email || row.name || row.id,
+          subLabel: [row.email ? row.name : undefined, linkNames.get(row.linkId)].filter(Boolean).join(' · ') || undefined,
+        }));
+      }
+
+      const rows = await ctx.db
+        .select({
+          skuId: m365Licenses.skuId,
+          linkId: m365Licenses.linkId,
+          skuPartNumber: m365Licenses.skuPartNumber,
+          friendlyName: m365Licenses.friendlyName,
+          totalUnits: m365Licenses.totalUnits,
+          consumedUnits: m365Licenses.consumedUnits,
+          enabled: m365Licenses.enabled,
+        })
+        .from(m365Licenses)
+        .where(and(inArray(m365Licenses.linkId, linkIds), eq(m365Licenses.isBloat, false)))
+        .orderBy(asc(m365Licenses.friendlyName))
+        .limit(input.limit);
+      return rows
+        .filter((row) => row.enabled !== false)
+        .map((row) => {
+          const available = Math.max(0, row.totalUnits - row.consumedUnits);
+          return {
+            id: row.skuId,
+            label: row.friendlyName || row.skuPartNumber,
+            subLabel: `${linkNames.get(row.linkId) ?? 'Microsoft 365'} · ${available} of ${row.totalUnits} available`,
+            disabled: available === 0,
+          };
+        });
+    }),
 
   upsertField: authProcedure
     .input(
@@ -220,9 +393,7 @@ export const siteProfileRouter = t.router({
           .regex(/^[a-z0-9_]+$/, 'lowercase letters, digits, underscores'),
         label: z.string().min(1),
         section: profileFieldSectionEnum,
-        type: profileFieldTypeEnum,
-        valueMode: profileFieldValueModeEnum.default('single'),
-        valueType: z.string().nullable().optional(),
+        valueType: z.string().refine(isSiteFactFieldType, 'Choose a valid MSPByte field type'),
         displayOrder: z.number().int().default(0),
         values: z.array(z.string()).nullable().optional(),
         active: z.boolean().default(true)
@@ -230,17 +401,36 @@ export const siteProfileRouter = t.router({
     )
     .mutation(async ({ ctx, input }) => {
       requireSitePermission(ctx, 'Sites.Write');
+      const fieldType = getSiteFactFieldType(input.valueType);
+      if (fieldType.integrationId) {
+        const [enabledLink] = await ctx.db
+          .select({ id: integrationLinks.id })
+          .from(integrationLinks)
+          .where(
+            and(
+              eq(integrationLinks.integrationId, fieldType.integrationId),
+              inArray(integrationLinks.status, ['active', 'mapping'])
+            )
+          )
+          .limit(1);
+        if (!enabledLink) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `${fieldType.label} requires an enabled ${fieldType.family} integration`,
+          });
+        }
+      }
       if (input.id) {
         const [row] = await ctx.db
           .update(siteProfileFields)
           .set({
             label: input.label,
             section: input.section,
-            type: input.type,
-            valueMode: input.valueMode,
-            valueType: input.valueType ?? null,
+            type: fieldType.type,
+            valueMode: fieldType.valueMode,
+            valueType: input.valueType,
             displayOrder: input.displayOrder,
-            values: input.values ?? null,
+            values: fieldType.entityType ? null : input.values ?? null,
             active: input.active
           })
           .where(eq(siteProfileFields.id, input.id))
@@ -269,11 +459,11 @@ export const siteProfileRouter = t.router({
           key: input.key,
           label: input.label,
           section: input.section,
-          type: input.type,
-          valueMode: input.valueMode,
-          valueType: input.valueType ?? null,
+          type: fieldType.type,
+          valueMode: fieldType.valueMode,
+          valueType: input.valueType,
           displayOrder: input.displayOrder,
-          values: input.values ?? null,
+          values: fieldType.entityType ? null : input.values ?? null,
           active: input.active
         })
         .returning();
@@ -455,7 +645,8 @@ export const siteProfileRouter = t.router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      requireSitePermission(ctx, 'Sites.Write');
+      requireSitePermission(ctx, 'Sites.Write', input.siteId);
+      await validateManagedFactValue(ctx, input);
       const now = new Date().toISOString();
       const [existing] = await ctx.db
         .select()
@@ -525,7 +716,7 @@ export const siteProfileRouter = t.router({
   deleteFact: authProcedure
     .input(z.object({ siteId: z.string().uuid(), key: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      requireSitePermission(ctx, 'Sites.Delete');
+      requireSitePermission(ctx, 'Sites.Delete', input.siteId);
       const [existing] = await ctx.db
         .select()
         .from(siteProfileFacts)

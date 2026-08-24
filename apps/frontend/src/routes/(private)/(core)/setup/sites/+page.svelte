@@ -47,47 +47,41 @@
   type Tab = 'fields' | 'categories';
   let activeTab = $state<Tab>('fields');
 
-  // -- Unified type system --------------------------------------------------
+  // -- MSPByte field-type catalog ------------------------------------------
   type UnifiedType = {
     id: string;
     label: string;
     description: string;
+    family: string;
+    enabled: boolean;
     type: 'string' | 'number' | 'boolean';
     valueMode: 'single' | 'multiple';
-    valueType: string | null;
+    entityType?: string;
+    supportsMultiple?: boolean;
+    baseType?: string;
   };
 
-  const UNIFIED_TYPES: UnifiedType[] = [
-    { id: 'text', label: 'Text', description: 'Free-form text', type: 'string', valueMode: 'single', valueType: null },
-    { id: 'number', label: 'Number', description: 'Numeric value', type: 'number', valueMode: 'single', valueType: null },
-    { id: 'boolean', label: 'Yes / No', description: 'True or false toggle', type: 'boolean', valueMode: 'single', valueType: null },
-    { id: 'text_list', label: 'List', description: 'One or more text values', type: 'string', valueMode: 'multiple', valueType: null },
-    { id: 'timezone', label: 'Time Zone', description: 'IANA timezone picker with UTC offsets', type: 'string', valueMode: 'single', valueType: 'timezone' },
-    { id: 'uuid', label: 'UUID', description: 'Unique identifier (e.g. M365 Tenant ID)', type: 'string', valueMode: 'single', valueType: 'uuid' },
-    { id: 'upn', label: 'User Principal Name', description: 'Microsoft identity (user@domain.com)', type: 'string', valueMode: 'single', valueType: 'upn' },
-    { id: 'postal_code', label: 'Postal Code', description: 'ZIP or postal code', type: 'string', valueMode: 'single', valueType: 'postal_code' },
-    { id: 'city', label: 'City', description: 'City name', type: 'string', valueMode: 'single', valueType: 'city' },
-    { id: 'country_code', label: 'Country', description: 'ISO 3166-1 alpha-2 country code', type: 'string', valueMode: 'single', valueType: 'country_code' },
-    { id: 'region', label: 'State / Region', description: 'State, province, or region', type: 'string', valueMode: 'single', valueType: 'region' },
-  ];
-
-  const MANAGED_VALUE_TYPES = new Set(['timezone', 'uuid', 'upn', 'postal_code', 'city', 'country_code', 'region']);
-
-  const unifiedTypeOptions = UNIFIED_TYPES.map((t) => ({ value: t.id, label: t.label, subLabel: t.description }));
+  const unifiedTypes = $derived((catalogQuery.data?.fieldTypes ?? []) as UnifiedType[]);
+  const unifiedTypeById = $derived(new Map(unifiedTypes.map((type) => [type.id, type])));
 
   function deriveUnifiedTypeId(type: string, valueMode: string, valueType: string): string {
-    if (valueType && MANAGED_VALUE_TYPES.has(valueType)) {
-      return UNIFIED_TYPES.find((t) => t.valueType === valueType)?.id ?? 'text';
-    }
+    if (valueType && unifiedTypeById.has(valueType)) return valueType;
     if (valueMode === 'multiple') return 'text_list';
     if (type === 'number') return 'number';
     if (type === 'boolean') return 'boolean';
     return 'text';
   }
 
+  function baseUnifiedTypeId(typeId: string): string {
+    return unifiedTypeById.get(typeId)?.baseType ?? typeId;
+  }
+
   function getTypeLabel(f: { type: string; valueMode?: string | null; valueType?: string | null }): string {
     const id = deriveUnifiedTypeId(f.type, f.valueMode ?? 'single', f.valueType ?? '');
-    return UNIFIED_TYPES.find((t) => t.id === id)?.label ?? 'Text';
+    const type = unifiedTypeById.get(id);
+    const baseType = unifiedTypeById.get(baseUnifiedTypeId(id));
+    if (type?.baseType && baseType) return `${baseType.label} · Multiple`;
+    return type?.label ?? 'Text';
   }
 
   function labelToKey(label: string): string {
@@ -114,7 +108,7 @@
     section: 'context',
     type: 'string',
     valueMode: 'single',
-    valueType: '',
+    valueType: 'text',
     displayOrder: 0,
     values: [],
     active: true,
@@ -125,20 +119,46 @@
   let optionSearch = $state('');
   let newOptionValue = $state('');
 
-  const selectedUnifiedTypeId = $derived(
+  const resolvedUnifiedTypeId = $derived(
     deriveUnifiedTypeId(fieldDraft.type, fieldDraft.valueMode, fieldDraft.valueType)
   );
+  const selectedUnifiedTypeId = $derived(baseUnifiedTypeId(resolvedUnifiedTypeId));
+  const selectedUnifiedType = $derived(unifiedTypeById.get(selectedUnifiedTypeId));
+  const unifiedTypeOptions = $derived(
+    unifiedTypes
+      .filter((type) => !type.baseType && (type.enabled || type.id === selectedUnifiedTypeId))
+      .map((type) => ({
+        value: type.id,
+        label: type.label,
+        subLabel: type.enabled ? type.description : `${type.description} · integration not enabled`,
+        group: type.family,
+        disabled: !type.enabled,
+      }))
+  );
   const showOptionsBuilder = $derived(
-    !MANAGED_VALUE_TYPES.has(fieldDraft.valueType) && fieldDraft.type !== 'boolean'
+    !selectedUnifiedType?.entityType && selectedUnifiedTypeId !== 'timezone' && fieldDraft.type !== 'boolean'
   );
 
   function applyUnifiedType(id: string) {
-    const t = UNIFIED_TYPES.find((u) => u.id === id);
+    const t = unifiedTypeById.get(id);
     if (!t) return;
     fieldDraft.type = t.type;
-    fieldDraft.valueMode = t.valueMode;
-    fieldDraft.valueType = t.valueType ?? '';
-    if (MANAGED_VALUE_TYPES.has(t.valueType ?? '')) fieldDraft.values = [];
+    fieldDraft.valueMode = 'single';
+    fieldDraft.valueType = t.id;
+    if (t.entityType || t.id === 'timezone') fieldDraft.values = [];
+  }
+
+  function applyModality(valueMode: 'single' | 'multiple') {
+    const baseType = selectedUnifiedType;
+    if (!baseType) return;
+    const resolvedType = valueMode === 'multiple'
+      ? unifiedTypes.find((type) => type.baseType === baseType.id && type.valueMode === 'multiple')
+      : baseType;
+    if (!resolvedType) return;
+    fieldDraft.type = resolvedType.type;
+    fieldDraft.valueMode = resolvedType.valueMode;
+    fieldDraft.valueType = resolvedType.id;
+    fieldDraft.values = [];
   }
 
   function openNewField(section: 'executive' | 'context' = 'context') {
@@ -156,7 +176,7 @@
       section: row.section,
       type: row.type,
       valueMode: row.valueMode ?? 'single',
-      valueType: row.valueType ?? '',
+      valueType: deriveUnifiedTypeId(row.type, row.valueMode ?? 'single', row.valueType ?? ''),
       displayOrder: row.displayOrder ?? 0,
       values: [...(row.values ?? [])],
       active: row.active,
@@ -202,9 +222,7 @@
         key: input.key,
         label: input.label,
         section: input.section,
-        type: input.type,
-        valueMode: input.valueMode,
-        valueType: input.valueType || null,
+        valueType: input.valueType,
         displayOrder: input.id ? input.displayOrder : getNextFieldOrder(input.section),
         values: input.values.length ? input.values : null,
         active: input.active,
@@ -228,9 +246,7 @@
         key: row.key,
         label: row.label,
         section: row.section,
-        type: row.type,
-        valueMode: row.valueMode ?? 'single',
-        valueType: row.valueType ?? null,
+        valueType: deriveUnifiedTypeId(row.type, row.valueMode ?? 'single', row.valueType ?? ''),
         displayOrder: row.displayOrder ?? 0,
         values: row.values ?? null,
         active: !row.active,
@@ -819,6 +835,35 @@
           onchange={applyUnifiedType}
         />
       </div>
+
+      {#if selectedUnifiedType?.supportsMultiple}
+        <div class="grid gap-1.5">
+          <Label>Modality</Label>
+          <div class="grid grid-cols-2 gap-1.5 rounded-md border border-border bg-muted/30 p-1">
+            <button
+              type="button"
+              class="rounded-sm px-3 py-1.5 text-sm font-medium transition-colors {fieldDraft.valueMode === 'single'
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'}"
+              onclick={() => applyModality('single')}
+            >
+              Single value
+            </button>
+            <button
+              type="button"
+              class="rounded-sm px-3 py-1.5 text-sm font-medium transition-colors {fieldDraft.valueMode === 'multiple'
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'}"
+              onclick={() => applyModality('multiple')}
+            >
+              Multiple values
+            </button>
+          </div>
+          <p class="text-[11px] text-muted-foreground">
+            Choose whether each site stores one selection or a reusable set of selections.
+          </p>
+        </div>
+      {/if}
 
       <!-- Options builder (hidden for managed types and boolean) -->
       {#if showOptionsBuilder}

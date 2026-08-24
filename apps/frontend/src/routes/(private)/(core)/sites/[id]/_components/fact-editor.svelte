@@ -12,6 +12,7 @@
   import { Label } from '$lib/components/ui/label';
   import SingleSelect from '$lib/components/single-select.svelte';
   import MultiSelect from '$lib/components/multi-select.svelte';
+  import EntityPicker from '$lib/components/domain/entity-picker.svelte';
   import Plus from '@lucide/svelte/icons/plus';
   import Trash from '@lucide/svelte/icons/trash-2';
 
@@ -70,6 +71,14 @@
     if (fact.key === 'time_zone') return 'timezone';
     return null;
   });
+
+  const factEntityType = $derived(
+    effectiveValueType === 'm365_identity' || effectiveValueType === 'm365_identity_list'
+      ? 'm365_identity'
+      : effectiveValueType === 'm365_license' || effectiveValueType === 'm365_license_list'
+        ? 'm365_license'
+        : null
+  );
 
   $effect(() => {
     if (open) {
@@ -199,7 +208,10 @@
       } else if (field?.valueMode === 'multiple') {
         const values = newListValue.trim() ? [...listValue, newListValue.trim()] : listValue;
         value = [...new Set(values.map((v) => v.trim()).filter(Boolean))];
-        source = field.values?.length ? 'user_options' : 'user_free';
+        source = field.values?.length || factEntityType ? 'user_options' : 'user_free';
+      } else if (factEntityType) {
+        value = stringValue || null;
+        source = 'user_options';
       } else if (fact.key === 'support_hours') {
         value = supportHoursMode === '24x7' ? '24x7' : `${supportStart} - ${supportEnd}`;
         source = 'user_options';
@@ -332,6 +344,18 @@
                   </div>
                 {/if}
               </div>
+            {:else if factEntityType}
+              <EntityPicker
+                entityType={factEntityType}
+                {siteId}
+                multiple={field?.valueMode === 'multiple'}
+                value={field?.valueMode === 'multiple' ? listValue : stringValue}
+                onValueChange={(value) => {
+                  if (Array.isArray(value)) listValue = value;
+                  else stringValue = value ?? '';
+                }}
+                placeholder={factEntityType === 'm365_license' ? 'Choose licenses…' : 'Choose identities…'}
+              />
             {:else if effectiveValueType === 'timezone'}
               <SingleSelect
                 options={timezoneOptions}

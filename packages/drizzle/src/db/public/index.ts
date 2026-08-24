@@ -135,6 +135,66 @@ export const integrationLinks = pgTable(
   ]
 );
 
+/**
+ * Makes a tenant-scoped integration available to one or more MSPByte sites.
+ * The linked integration row remains the sole owner of credentials, ingestion,
+ * and vendor records; this table is relationship metadata only.
+ */
+export const integrationLinkSiteAssignments = pgTable(
+  'integration_link_site_assignments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    linkId: uuid('link_id')
+      .notNull()
+      .references(() => integrationLinks.id, { onDelete: 'cascade' }),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    source: text('source', { enum: ['manual', 'migration'] }).notNull().default('manual'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow()
+  },
+  (t) => [
+    unique('integration_link_site_assignments_unique').on(t.linkId, t.siteId),
+    index('integration_link_site_assignments_site_idx').on(t.siteId),
+    index('integration_link_site_assignments_link_idx').on(t.linkId),
+    crudPolicy({ role: authenticatedRole, read: true, modify: true })
+  ]
+);
+
+/**
+ * Optional identity-attribution rules for Microsoft 365. A domain chooses one
+ * default site; it does not control which sites can use the tenant.
+ */
+export const m365DomainSiteMappings = pgTable(
+  'm365_domain_site_mappings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    linkId: uuid('link_id')
+      .notNull()
+      .references(() => integrationLinks.id, { onDelete: 'cascade' }),
+    domain: text('domain').notNull(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow()
+  },
+  (t) => [
+    unique('m365_domain_site_mappings_unique').on(t.linkId, t.domain),
+    index('m365_domain_site_mappings_site_idx').on(t.siteId),
+    crudPolicy({ role: authenticatedRole, read: true, modify: true })
+  ]
+);
+
 export const siteGroupLinkMembers = pgTable(
   'site_group_link_members',
   {
@@ -161,6 +221,8 @@ export type UserRoleGrant = typeof userRoleGrants.$inferSelect;
 export type NewUserRoleGrant = typeof userRoleGrants.$inferInsert;
 export type Integration = typeof integrations.$inferSelect;
 export type IntegrationLink = typeof integrationLinks.$inferSelect;
+export type IntegrationLinkSiteAssignment = typeof integrationLinkSiteAssignments.$inferSelect;
+export type M365DomainSiteMapping = typeof m365DomainSiteMappings.$inferSelect;
 export type SiteGroupLinkMember = typeof siteGroupLinkMembers.$inferSelect;
 
 export * from './views/index.js';

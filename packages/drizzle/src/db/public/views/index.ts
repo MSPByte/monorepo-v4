@@ -46,10 +46,19 @@ export const sitesWithCounts = pgView('sites_with_counts', {
         and pf.status in ('open', 'acknowledged', 'regressed')
     ) f on true
     left join lateral (
-      select array_agg(distinct il.integration_id order by il.integration_id) as sources
-      from public.integration_links il
-      where il.site_id = s.id
-        and il.status in ('active', 'mapping')
+      select array_agg(distinct source.integration_id order by source.integration_id) as sources
+      from (
+        select il.integration_id
+        from public.integration_links il
+        where il.site_id = s.id
+          and il.status in ('active', 'mapping')
+        union
+        select il.integration_id
+        from public.integration_link_site_assignments ils
+        join public.integration_links il on il.id = ils.link_id
+        where ils.site_id = s.id
+          and il.status = 'active'
+      ) source
     ) src on true
   `);
 

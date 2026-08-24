@@ -53,13 +53,15 @@
       siteId ?? null,
     ],
     queryFn: () =>
-      trpc.packages.entityOptions.query({
-        entityType,
-        packageId,
-        integrationLinkId,
-        integrationId,
-        siteId,
-      }),
+      siteId && (entityType === 'm365_identity' || entityType === 'm365_license')
+        ? trpc.siteProfile.entityOptions.query({ siteId, entityType })
+        : trpc.packages.entityOptions.query({
+            entityType,
+            packageId,
+            integrationLinkId,
+            integrationId,
+            siteId,
+          }),
     staleTime: 30_000,
   }));
 
@@ -68,7 +70,7 @@
       value: o.id,
       label: o.label,
       subLabel: o.subLabel,
-      disabled: o.disabled,
+      disabled: 'disabled' in o && typeof o.disabled === 'boolean' ? o.disabled : undefined,
     })),
   );
 </script>

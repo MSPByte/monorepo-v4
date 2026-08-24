@@ -69,6 +69,11 @@
     queryFn: () => trpc.sites.list.query(),
   }));
 
+  const siteMappingsQuery = createQuery(() => ({
+    queryKey: ['integrationLinks.m365SiteMappings'],
+    queryFn: () => trpc.integrationLinks.m365SiteMappings.query(),
+  }));
+
   const dbIntegration = $derived(integrationQuery.data ?? null);
   const isConfigured = $derived(!!(dbIntegration && !dbIntegration.deletedAt));
   const loading = $derived(integrationQuery.isLoading || linksQuery.isLoading);
@@ -77,13 +82,10 @@
   const dbSites = $derived(sitesQuery.data ?? []);
 
   const activeLinks = $derived(tenantLinks.filter((l) => l.status === 'active'));
+  const siteMappings = $derived(siteMappingsQuery.data ?? { assignments: [], domainMappings: [] });
 
   const mappedDomainCount = (link: Link): number => {
-    const mappings =
-      ((link.meta as Record<string, unknown>)?.siteMappings as
-        | Array<{ domains?: string[] }>
-        | undefined) ?? [];
-    return mappings.reduce((acc, m) => acc + (m.domains?.length ?? 0), 0);
+    return siteMappings.domainMappings.filter((mapping) => mapping.linkId === link.id).length;
   };
 
   const metrics = $derived({
@@ -112,6 +114,20 @@
   let addingTenant = $state(false);
 
   const selectedLink = $derived(tenantLinks.find((l) => l.id === selectedLinkId) ?? null);
+  const unavailableSiteTenants = $derived.by(() => {
+    const tenantNameByLinkId = new Map(
+      tenantLinks.map((link) => [link.id, link.name ?? link.externalId ?? 'another tenant'])
+    );
+    const assignedTenantBySiteId = new Map<string, string>();
+    for (const assignment of siteMappings.assignments) {
+      if (assignment.linkId === selectedLink?.id) continue;
+      assignedTenantBySiteId.set(
+        assignment.siteId,
+        tenantNameByLinkId.get(assignment.linkId) ?? 'another tenant'
+      );
+    }
+    return assignedTenantBySiteId;
+  });
 
   const domainSiteMap = $derived.by(() => {
     const map = new Map<string, string>();
@@ -119,16 +135,9 @@
     const tlDomains = new Set(
       ((selectedLink.meta as Record<string, unknown>)?.domains as string[]) ?? []
     );
-    const mappings =
-      ((selectedLink.meta as Record<string, unknown>)?.siteMappings as
-        | Array<{ siteId: string; domains: string[] }>
-        | undefined) ?? [];
-    for (const mapping of mappings) {
-      if (!mapping.siteId) continue;
-      for (const domain of mapping.domains ?? []) {
-        if (!tlDomains.has(domain)) continue;
-        map.set(domain, mapping.siteId);
-      }
+    for (const mapping of siteMappings.domainMappings) {
+      if (mapping.linkId !== selectedLink.id || !tlDomains.has(mapping.domain)) continue;
+      map.set(mapping.domain, mapping.siteId);
     }
     return map;
   });
@@ -583,6 +592,10 @@
         <SelectedLink
           {selectedLink}
           {domainSiteMap}
+          assignedSiteIds={siteMappings.assignments
+            .filter((assignment) => assignment.linkId === selectedLink.id)
+            .map((assignment) => assignment.siteId)}
+          {unavailableSiteTenants}
           {dbSites}
           deselect={() => (selectedLinkId = null)}
         />

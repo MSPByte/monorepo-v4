@@ -1,5 +1,5 @@
 import {
-  integrationLinks,
+  m365DomainSiteMappings,
   m365Groups,
   m365Identities,
   m365IdentityGroups,
@@ -40,16 +40,6 @@ const MFA_TRIGGER_FACETS = new Set<string>([
 const IDENTITY_SITE_TRIGGER_FACETS = new Set<string>([
   ProviderFacet.M365Identities,
 ]);
-
-const SiteMappingsSchema = z
-  .array(
-    z.object({
-      siteId: z.string().uuid(),
-      domains: z.array(z.string()),
-    }),
-  )
-  .optional()
-  .default([]);
 
 const CAPolicyUsersSchema = z.looseObject({
   includeUsers: z.array(z.string()).optional().default([]),
@@ -109,23 +99,14 @@ type IdentitySiteRow = {
 async function enrichM365IdentitySite(
   context: ProjectionStepContext,
 ): Promise<Record<string, unknown>> {
-  const [link] = (await context.db
-    .select({ meta: integrationLinks.meta })
-    .from(integrationLinks)
-    .where(eq(integrationLinks.id, context.linkId))
-    .limit(1)) as Array<{ meta: Record<string, unknown> | null }>;
-
-  const rawMappings = (link?.meta as Record<string, unknown> | null)
-    ?.siteMappings;
-  const parsed = SiteMappingsSchema.safeParse(rawMappings ?? []);
-  const mappings = parsed.success ? parsed.data : [];
-
   const domainToSiteId = new Map<string, string>();
+  const mappings = await context.db
+    .select({ domain: m365DomainSiteMappings.domain, siteId: m365DomainSiteMappings.siteId })
+    .from(m365DomainSiteMappings)
+    .where(eq(m365DomainSiteMappings.linkId, context.linkId));
   for (const mapping of mappings) {
-    for (const domain of mapping.domains) {
-      const key = domain.trim().toLowerCase();
-      if (key) domainToSiteId.set(key, mapping.siteId);
-    }
+    const key = mapping.domain.trim().toLowerCase();
+    if (key) domainToSiteId.set(key, mapping.siteId);
   }
 
   const identities = (await context.db

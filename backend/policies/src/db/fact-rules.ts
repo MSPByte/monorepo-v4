@@ -222,6 +222,12 @@ async function scopedRowsForFact(
   if (linkColumn) {
     conditions.push(eq(linkColumn as never, linkId));
   }
+  // Domain attribution partitions M365 identities between sites. Other M365
+  // tables are tenant resources, so a fact rule can intentionally evaluate
+  // them for every site assigned to that tenant.
+  if (entry.table === m365Identities && table.siteId) {
+    conditions.push(eq(table.siteId as never, siteId));
+  }
 
   const filterSql = buildSqlFilter(table, definition.filter);
   if (filterSql) conditions.push(filterSql);

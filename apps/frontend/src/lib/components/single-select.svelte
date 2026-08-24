@@ -12,6 +12,9 @@
     // Optional muted line rendered under the label — e.g. availability count
     // for a license SKU, integration id for a tenant.
     subLabel?: string;
+    // Groups make a shared picker understandable when options originate from
+    // different platform domains, such as MSPByte and Microsoft 365.
+    group?: string;
     disabled?: boolean;
   };
 
@@ -80,6 +83,15 @@
       : sort(options).filter((opt) => opt.label.toLowerCase().includes(search.toLowerCase()));
   });
 
+  const groupedOptions = $derived.by(() => {
+    const groups = new Map<string, Option[]>();
+    for (const option of filteredOptions) {
+      const group = option.group ?? '';
+      groups.set(group, [...(groups.get(group) ?? []), option]);
+    }
+    return [...groups.entries()];
+  });
+
   const selectOption = (value: string) => {
     if (selected === value) {
       selected = undefined;
@@ -128,32 +140,39 @@
       {:else}
         <Command.Empty>No results found.</Command.Empty>
         <Command.Group class="max-h-64 overflow-auto">
-          {#each filteredOptions as option}
-            <Command.Item
-              value={option.value}
-              onSelect={() => !option.disabled && selectOption(option.value)}
-              disabled={option.disabled}
-              class={cn(option.disabled && 'opacity-50 cursor-not-allowed')}
-            >
-              <div
-                class={cn(
-                  'mr-2 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-primary',
-                  selected === option.value
-                    ? 'bg-primary text-primary-foreground'
-                    : 'opacity-50 [&_svg]:invisible'
-                )}
+          {#each groupedOptions as [group, groupOptions]}
+            {#if group}
+              <div class="px-2 pb-1 pt-2 font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                {group}
+              </div>
+            {/if}
+            {#each groupOptions as option}
+              <Command.Item
+                value={option.value}
+                onSelect={() => !option.disabled && selectOption(option.value)}
+                disabled={option.disabled}
+                class={cn(option.disabled && 'opacity-50 cursor-not-allowed')}
               >
-                <Check class="h-4 w-4" />
-              </div>
-              <div class="flex min-w-0 flex-col">
-                <span class="whitespace-normal leading-5">{option.label}</span>
-                {#if option.subLabel}
-                  <span class="whitespace-normal text-xs text-muted-foreground"
-                    >{option.subLabel}</span
-                  >
-                {/if}
-              </div>
-            </Command.Item>
+                <div
+                  class={cn(
+                    'mr-2 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-primary',
+                    selected === option.value
+                      ? 'bg-primary text-primary-foreground'
+                      : 'opacity-50 [&_svg]:invisible'
+                  )}
+                >
+                  <Check class="h-4 w-4" />
+                </div>
+                <div class="flex min-w-0 flex-col">
+                  <span class="whitespace-normal leading-5">{option.label}</span>
+                  {#if option.subLabel}
+                    <span class="whitespace-normal text-xs text-muted-foreground"
+                      >{option.subLabel}</span
+                    >
+                  {/if}
+                </div>
+              </Command.Item>
+            {/each}
           {/each}
           {#if loading && filteredOptions.length > 0}
             <div class="flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground">

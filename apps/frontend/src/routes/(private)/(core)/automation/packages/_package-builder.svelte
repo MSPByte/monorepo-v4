@@ -238,9 +238,16 @@
     staleTime: 5 * 60_000,
   }));
 
-  // Matches declared site facts to an input's loose type hint.
-  function factFieldsFor(typeHint: string | undefined) {
+  // Match a site fact to the capability's resolved platform type. Resource
+  // types are intentionally exact: a generic text list cannot masquerade as
+  // a Microsoft 365 license list at package execution time.
+  function factFieldsFor(meta: { typeHint?: string; fieldType?: string; entityType?: string }) {
     const all = siteFactFieldsQuery.data ?? [];
+    const expectedType = meta.fieldType;
+    if (expectedType?.startsWith('m365_') || expectedType === 'sophos_endpoint') {
+      return all.filter((field) => field.fieldType === expectedType);
+    }
+    const typeHint = meta.typeHint;
     if (!typeHint) return all;
     return all.filter((f) => {
       if (typeHint === 'boolean') return f.type === 'boolean' && f.valueMode === 'single';
@@ -248,8 +255,6 @@
       if (typeHint === 'stringArray') return f.type === 'string' && f.valueMode === 'multiple';
       // Semantic types: match by resolved fieldType so only correctly-typed facts appear.
       if (typeHint === 'timezone') return f.fieldType === 'timezone';
-      if (typeHint === 'uuid') return f.fieldType === 'uuid';
-      if (typeHint === 'upn') return f.fieldType === 'upn';
       if (typeHint === 'postalCode') return f.fieldType === 'postal_code';
       if (typeHint === 'city') return f.fieldType === 'city';
       if (typeHint === 'countryCode') return f.fieldType === 'country_code';
@@ -1919,7 +1924,7 @@
                         <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">{gen.description}</div>
                       {/if}
                     {:else if binding?.kind === 'siteFact'}
-                      {@const factOpts = factFieldsFor(meta.typeHint).map((f) => ({ value: f.key, label: f.label, subLabel: `${f.fieldTypeLabel ?? f.type} · ${f.section}` }))}
+                      {@const factOpts = factFieldsFor(meta).map((f) => ({ value: f.key, label: f.label, subLabel: `${f.fieldTypeLabel ?? f.type} · ${f.section}` }))}
                       <div class="space-y-3">
                         {#if factOpts.length === 0}
                           <div class="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500">
@@ -2323,7 +2328,7 @@
                     </div>
                   {:else if binding.kind === 'siteFact'}
                     <SingleSelect
-                      options={factFieldsFor(meta.typeHint).map((f) => ({ value: f.key, label: f.label, subLabel: `${f.fieldTypeLabel ?? f.type} · ${f.section}` }))}
+                      options={factFieldsFor(meta).map((f) => ({ value: f.key, label: f.label, subLabel: `${f.fieldTypeLabel ?? f.type} · ${f.section}` }))}
                       selected={binding.key}
                       placeholder="Choose a site profile field…"
                       onchange={(k) => setReactionBinding(inputName, { ...binding, key: k })}

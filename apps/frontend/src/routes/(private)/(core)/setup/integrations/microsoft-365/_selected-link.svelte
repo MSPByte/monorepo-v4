@@ -14,8 +14,11 @@
     Check,
     Pencil,
     LoaderCircle,
+    MapPin,
+    Network,
   } from '@lucide/svelte';
   import SingleSelect from '$lib/components/single-select.svelte';
+  import MultiSelect from '$lib/components/multi-select.svelte';
   import { getContext } from 'svelte';
   import { createMutation, useQueryClient } from '@tanstack/svelte-query';
   import type { createTrpcClient } from '$lib/trpc';
@@ -27,7 +30,6 @@
 
   type Link = inferRouterOutputs<AppRouter>['integrationLinks']['list'][number];
   type Site = inferRouterOutputs<AppRouter>['sites']['list'][number];
-  type SiteMapping = { siteId: string; domains: string[] };
 
   // MS_CAPABILITIES is not exported from v2 shared — define locally
   const MS_CAPABILITIES: Record<string, { label: string; description: string }> = {
@@ -48,12 +50,16 @@
   const {
     selectedLink,
     domainSiteMap,
+    assignedSiteIds,
+    unavailableSiteTenants,
     dbSites,
     deselect,
     onSaveMappings,
   }: {
     selectedLink: Link;
     domainSiteMap: Map<string, string>;
+    assignedSiteIds: string[];
+    unavailableSiteTenants: Map<string, string>;
     dbSites: Site[];
     deselect?: () => void;
     onSaveMappings?: () => void;
@@ -71,17 +77,33 @@
   }));
 
   const syncMappingsMut = createMutation(() => ({
-    mutationFn: (input: Parameters<typeof trpc.integrationLinks.syncSiteMappings.mutate>[0]) =>
-      trpc.integrationLinks.syncSiteMappings.mutate(input),
+    mutationFn: (input: Parameters<typeof trpc.integrationLinks.syncM365SiteMappings.mutate>[0]) =>
+      trpc.integrationLinks.syncM365SiteMappings.mutate(input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['integrationLinks.list'] });
+      void queryClient.invalidateQueries({ queryKey: ['integrationLinks.m365SiteMappings'] });
     },
   }));
 
   const mappings = $derived<Record<string, string | null>>(
     Object.fromEntries(domainSiteMap.entries())
   );
+  const siteOptions = $derived(
+    dbSites.map((site) => {
+      const assignedTenant = unavailableSiteTenants.get(site.id);
+      return {
+        label: site.name,
+        value: site.id,
+        disabled: !!assignedTenant,
+        subLabel: assignedTenant ? `Already assigned to ${assignedTenant}` : undefined,
+      };
+    })
+  );
+  const metaDomains = $derived(
+    ((selectedLink.meta as Record<string, unknown>)?.domains as string[] | undefined) ?? []
+  );
   let localMappings = $state<Record<string, string | null>>({});
+  let localSiteIds = $state<string[]>([]);
   let mappingsChanged = $state(false);
   let saving = $state(false);
   let editingName = $state(false);
@@ -91,6 +113,7 @@
 
   $effect(() => {
     localMappings = { ...mappings };
+    localSiteIds = [...assignedSiteIds];
     mappingsChanged = false;
   });
 
@@ -101,25 +124,27 @@
     );
   };
 
+  const onAssignedSitesChange = (siteIds: string[]) => {
+    localSiteIds = siteIds;
+    for (const [domain, siteId] of Object.entries(localMappings)) {
+      if (siteId && !siteIds.includes(siteId)) localMappings[domain] = null;
+    }
+    mappingsChanged = true;
+  };
+
   const handleSaveMappings = async () => {
     saving = true;
     try {
-      const siteDomainMap = new Map<string, string[]>();
+      const domainMappings: Array<{ domain: string; siteId: string }> = [];
       for (const [domain, siteId] of Object.entries(localMappings)) {
         if (!siteId) continue;
-        const existing = siteDomainMap.get(siteId);
-        if (existing) existing.push(domain);
-        else siteDomainMap.set(siteId, [domain]);
+        domainMappings.push({ domain, siteId });
       }
 
-      const mappings: SiteMapping[] = [...siteDomainMap.entries()].map(([siteId, domains]) => ({
-        siteId,
-        domains,
-      }));
-
       await syncMappingsMut.mutateAsync({
-        parentLinkId: selectedLink.id,
-        mappings,
+        linkId: selectedLink.id,
+        siteIds: localSiteIds,
+        domainMappings,
       });
 
       onSaveMappings?.();
@@ -228,35 +253,76 @@
         <Tabs.Trigger value="capabilities">Capabilities</Tabs.Trigger>
       </Tabs.List>
 
-      <Tabs.Content value="domains" class="flex flex-col overflow-y-auto p-4 gap-2">
-        {@const metaDomains =
-          ((selectedLink.meta as Record<string, unknown>)?.domains as string[] | undefined) ?? []}
-        {#if !metaDomains.length}
-          <div class="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
-            <Globe class="size-8 opacity-40" />
-            <span class="text-sm">No domains cached</span>
-          </div>
-        {:else}
-          <div class="flex flex-col h-full gap-3 overflow-auto">
-            <div class="grid grid-cols-2 gap-2 text-xs font-medium text-muted-foreground px-1">
-              <span>Domain</span>
-              <span>Mapped Site</span>
+      <Tabs.Content value="domains" class="flex flex-col overflow-y-auto p-4 gap-4">
+        <div class="relative flex flex-col gap-4">
+          <div class="absolute left-4 top-8 bottom-8 w-px bg-border" aria-hidden="true"></div>
+          <section class="relative grid grid-cols-[2rem_minmax(0,1fr)] gap-3">
+            <div class="flex size-8 items-center justify-center rounded-full border border-primary/30 bg-primary/10 text-primary">
+              <Network class="size-4" />
             </div>
-            {#each metaDomains as domain}
-              {@const mappedSiteId =
-                localMappings[domain as string] ?? domainSiteMap.get(domain as string)}
-              <div class="grid grid-cols-2 gap-2 items-center">
-                <span class="text-sm font-mono truncate">{domain}</span>
-                <SingleSelect
-                  options={dbSites.map((s) => ({ label: s.name, value: s.id }))}
-                  selected={mappedSiteId}
-                  onchange={(v) => onMappingChange(domain as string, v.length ? v : null)}
-                  disabled={!authStore.isAllowed('Integrations.Write')}
-                />
+            <div class="flex flex-col gap-2 rounded-lg border border-primary/20 bg-primary/[0.035] p-3">
+              <div class="flex items-baseline justify-between gap-3">
+                <div>
+                  <h3 class="text-sm font-semibold">Assign sites</h3>
+                  <p class="mt-0.5 text-xs text-muted-foreground">This tenant can be used by these sites. A site can belong to one Microsoft 365 tenant.</p>
+                </div>
+                <span class="shrink-0 font-mono text-xs text-primary">{localSiteIds.length} assigned</span>
               </div>
-            {/each}
-          </div>
-        {/if}
+              <MultiSelect
+                options={siteOptions}
+                selected={localSiteIds}
+                placeholder="Choose sites for this tenant..."
+                maxDisplay={2}
+                onchange={onAssignedSitesChange}
+                disabled={!authStore.isAllowed('Integrations.Write')}
+              />
+            </div>
+          </section>
+          <section class="relative grid grid-cols-[2rem_minmax(0,1fr)] gap-3">
+            <div class="flex size-8 items-center justify-center rounded-full border border-border bg-background text-muted-foreground">
+              <MapPin class="size-4" />
+            </div>
+            <div class="flex min-h-0 flex-col gap-3 rounded-lg border bg-card p-3">
+              <div>
+                <h3 class="text-sm font-semibold">Map domains</h3>
+                <p class="mt-0.5 text-xs text-muted-foreground">Domains attribute Microsoft 365 identities to one of the sites assigned above.</p>
+              </div>
+              {#if !metaDomains.length}
+                <div class="flex flex-col items-center justify-center gap-2 rounded border border-dashed py-7 text-muted-foreground">
+                  <Globe class="size-6 opacity-40" />
+                  <span class="text-sm">No domains cached</span>
+                </div>
+              {:else if localSiteIds.length === 0}
+                <div class="rounded border border-dashed px-3 py-5 text-center text-sm text-muted-foreground">
+                  Assign at least one site before mapping domains.
+                </div>
+              {:else}
+                <div class="flex flex-col gap-2 overflow-auto">
+                  <div class="grid grid-cols-[minmax(0,1fr)_minmax(11rem,1fr)] gap-3 px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    <span>Tenant domain</span>
+                    <span>Identity site</span>
+                  </div>
+                  {#each metaDomains as domain}
+                    {@const mappedSiteId =
+                      localMappings[domain as string] ?? domainSiteMap.get(domain as string)}
+                    <div class="grid grid-cols-[minmax(0,1fr)_minmax(11rem,1fr)] items-center gap-3 rounded-md border border-transparent px-1.5 py-1 transition-colors hover:border-border hover:bg-muted/30">
+                      <span class="truncate font-mono text-sm">{domain}</span>
+                      <SingleSelect
+                        options={dbSites
+                          .filter((site) => localSiteIds.includes(site.id))
+                          .map((site) => ({ label: site.name, value: site.id }))}
+                        selected={mappedSiteId}
+                        placeholder="No identity site"
+                        onchange={(v) => onMappingChange(domain as string, v.length ? v : null)}
+                        disabled={!authStore.isAllowed('Integrations.Write')}
+                      />
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </section>
+        </div>
         <div class="flex h-fit pt-4 gap-2">
           <Button
             size="sm"
