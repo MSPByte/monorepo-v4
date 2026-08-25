@@ -419,6 +419,54 @@
     })),
   );
 
+  // Halo enum dropdowns — priorities, ticket types, categories. All three
+  // refresh on every dialog open (staleTime: 0) and on window focus so the
+  // author sees the current Halo config without a manual refresh.
+  const hasHaloPriorityField = $derived(
+    runtimeFields.some((f) => f.dynamicSource === 'halopsaTicketPriorities')
+  );
+  const hasHaloTicketTypeField = $derived(
+    runtimeFields.some((f) => f.dynamicSource === 'halopsaTicketTypes')
+  );
+  const hasHaloCategoryField = $derived(
+    runtimeFields.some((f) => f.dynamicSource === 'halopsaTicketCategories')
+  );
+
+  const haloPrioritiesQuery = createQuery(() => ({
+    queryKey: ['vendor.halopsaTicketPriorities'],
+    queryFn: () => trpc.vendor.halopsaTicketPriorities.query(),
+    enabled: open && hasHaloPriorityField,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+  }));
+  const haloPriorityOptions = $derived(
+    (haloPrioritiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name })),
+  );
+
+  const haloTicketTypesQuery = createQuery(() => ({
+    queryKey: ['vendor.halopsaTicketTypes'],
+    queryFn: () => trpc.vendor.halopsaTicketTypes.query(),
+    enabled: open && hasHaloTicketTypeField,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+  }));
+  const haloTicketTypeOptions = $derived(
+    (haloTicketTypesQuery.data ?? []).map((t) => ({ value: String(t.id), label: t.name })),
+  );
+
+  const haloCategoriesQuery = createQuery(() => ({
+    queryKey: ['vendor.halopsaTicketCategories'],
+    queryFn: () => trpc.vendor.halopsaTicketCategories.query(),
+    enabled: open && hasHaloCategoryField,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+  }));
+  // Halo persists category_1 by name, not id — the value stored on the run
+  // input matches what create-ticket expects.
+  const haloCategoryOptions = $derived(
+    (haloCategoriesQuery.data ?? []).map((c) => ({ value: c.name, label: c.name })),
+  );
+
   function parseUpn(value: unknown): { local: string; domain: string } {
     const s = typeof value === 'string' ? value : '';
     const at = s.indexOf('@');
@@ -935,6 +983,27 @@
                                 ? 'Loading verified domains…'
                                 : 'Choose a verified domain…'}
                             disabled={!cascadeLinkId}
+                            onchange={(v) => (values[field.promptKey] = v)}
+                          />
+                        {:else if field.dynamicSource === 'halopsaTicketPriorities'}
+                          <SingleSelect
+                            options={haloPriorityOptions}
+                            selected={values[field.promptKey] != null ? String(values[field.promptKey]) : ''}
+                            placeholder={haloPrioritiesQuery.isLoading ? 'Loading priorities…' : 'Choose a priority…'}
+                            onchange={(v) => (values[field.promptKey] = v)}
+                          />
+                        {:else if field.dynamicSource === 'halopsaTicketTypes'}
+                          <SingleSelect
+                            options={haloTicketTypeOptions}
+                            selected={values[field.promptKey] != null ? String(values[field.promptKey]) : ''}
+                            placeholder={haloTicketTypesQuery.isLoading ? 'Loading ticket types…' : 'Choose a ticket type…'}
+                            onchange={(v) => (values[field.promptKey] = v)}
+                          />
+                        {:else if field.dynamicSource === 'halopsaTicketCategories'}
+                          <SingleSelect
+                            options={haloCategoryOptions}
+                            selected={typeof values[field.promptKey] === 'string' ? values[field.promptKey] as string : ''}
+                            placeholder={haloCategoriesQuery.isLoading ? 'Loading categories…' : 'Choose a category…'}
                             onchange={(v) => (values[field.promptKey] = v)}
                           />
                         {:else if field.typeHint === 'stringArray' && field.choices && field.choices.length > 0}

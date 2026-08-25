@@ -109,6 +109,33 @@ export type HaloPSARecurringInvoice = Record<string, unknown> & {
   site_name?: string;
 };
 
+// Normalized shape for enum-style lookups (priorities, ticket types, statuses,
+// categories). Halo returns richer objects — we surface only the fields the
+// package builder needs to render a dropdown and persist a selection.
+export interface HaloPSALookupOption {
+  id: number;
+  name: string;
+}
+
+// Minimum-viable action payload — Halo accepts many more fields but these
+// cover the log-time / add-note flows the packages system currently drives.
+// Time is passed in decimal hours; the log-time capability converts minutes.
+export interface HaloPSAActionBody {
+  ticket_id: number;
+  outcome?: string;
+  outcome_id?: number;
+  note?: string;
+  note_html?: string;
+  timetaken?: number;
+  actionchargable?: boolean;
+  actiondatecreated?: string;
+  who?: string;
+  who_agentid?: number;
+  utcoffset?: number;
+  sendemail?: boolean;
+  hiddenfromuser?: boolean;
+}
+
 // ─── Connector ────────────────────────────────────────────────────────────────
 
 export class HaloPSAConnector {
@@ -129,6 +156,22 @@ export class HaloPSAConnector {
 
   readonly tickets: {
     create: (body: HaloPSATicketBody) => Promise<string>;
+  };
+
+  readonly actions: {
+    create: (body: HaloPSAActionBody) => Promise<string>;
+  };
+
+  readonly priorities: {
+    list: () => Promise<HaloPSALookupOption[]>;
+  };
+
+  readonly ticketTypes: {
+    list: () => Promise<HaloPSALookupOption[]>;
+  };
+
+  readonly categories: {
+    list: () => Promise<HaloPSALookupOption[]>;
   };
 
   readonly attachment: {
@@ -218,6 +261,50 @@ export class HaloPSAConnector {
           'application/json-patch+json'
         );
         return String(data.id);
+      }
+    };
+
+    this.actions = {
+      create: async (body) => {
+        const params = new URLSearchParams({ idonly: 'true' });
+        // Halo's /api/actions accepts an array and returns the created action.
+        // Response shape varies (bare object vs { id } vs first-of-array), so
+        // pick the id defensively.
+        const data = await this.client.post<unknown>(
+          `/api/actions?${params}`,
+          [body],
+          'application/json-patch+json'
+        );
+        const id = pickHaloActionId(data);
+        if (id == null) throw new Error('HaloPSAConnector.actions.create: no id in response');
+        return String(id);
+      }
+    };
+
+    // Enum lookups feed the package builder / run dialog dropdowns. Halo's
+    // list endpoints return unwrapped arrays (unlike /api/site which nests).
+    // We coerce loose IDs to numbers and pick the display name from either
+    // `name` or `value` (categories use `value`).
+    this.priorities = {
+      list: async () => {
+        const data = await this.client.get<unknown>('/api/priority');
+        return normalizeHaloLookupList(data, ['priorities']);
+      }
+    };
+
+    this.ticketTypes = {
+      list: async () => {
+        const data = await this.client.get<unknown>('/api/tickettype');
+        return normalizeHaloLookupList(data, ['tickettypes', 'ticket_types']);
+      }
+    };
+
+    this.categories = {
+      list: async () => {
+        // type_id=1 filters to top-level ticket categories (category_1), which
+        // is the field the create-ticket capability writes to.
+        const data = await this.client.get<unknown>('/api/category?type_id=1');
+        return normalizeHaloLookupList(data, ['categories']);
       }
     };
 
@@ -350,4 +437,45 @@ function recurringInvoiceItems(value: unknown): HaloPSARecurringInvoice[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function pickHaloActionId(value: unknown): string | number | null {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  if (!isRecord(candidate)) return null;
+  const raw = candidate.id ?? candidate.actionid ?? candidate.action_id;
+  if (raw == null) return null;
+  return typeof raw === 'number' || typeof raw === 'string' ? raw : null;
+}
+
+// Halo lookup endpoints sometimes return a bare array and sometimes wrap it
+// under a resource-specific key (e.g. `{ categories: [...] }`). Pick either
+// and coerce to `{id, name}` — dropping entries that don't have both.
+function normalizeHaloLookupList(
+  value: unknown,
+  wrapKeys: readonly string[]
+): HaloPSALookupOption[] {
+  let items: unknown[] = [];
+  if (Array.isArray(value)) {
+    items = value;
+  } else if (isRecord(value)) {
+    for (const key of wrapKeys) {
+      const nested = value[key];
+      if (Array.isArray(nested)) {
+        items = nested;
+        break;
+      }
+    }
+  }
+  const out: HaloPSALookupOption[] = [];
+  for (const raw of items) {
+    if (!isRecord(raw)) continue;
+    const idRaw = raw.id;
+    const id = typeof idRaw === 'number' ? idRaw : Number(idRaw);
+    if (!Number.isFinite(id)) continue;
+    const nameRaw = raw.name ?? raw.value ?? raw.display_name;
+    const name = typeof nameRaw === 'string' ? nameRaw : String(nameRaw ?? '');
+    if (!name) continue;
+    out.push({ id, name });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }

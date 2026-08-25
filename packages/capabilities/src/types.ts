@@ -263,6 +263,10 @@ export interface CapabilityCtx {
   // MSPByte site. This capability context deliberately resolves the site link
   // instead of asking package authors to manage Halo IDs.
   getHaloPSAConnector: () => Promise<{ connector: HaloPSAConnector; haloSiteId: number }>;
+  // Tenant-wide HaloPSA connector — for capabilities that operate on Halo
+  // resources by ID (a ticket, an asset, an action) and don't need a Halo
+  // site link. Available on every run regardless of run.siteId.
+  getHaloPSAConnectorGlobal: () => Promise<HaloPSAConnector>;
   // Looks up a MSPByte site by id. Returns null if not found.
   lookupSite: (siteId: string) => Promise<{ id: string; name: string } | null>;
   // Creates a new MSPByte internal site. Returns the site id and name.

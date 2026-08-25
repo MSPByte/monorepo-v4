@@ -13,11 +13,32 @@
   import Loader from '$lib/components/transition/loader.svelte';
   import StepNode, { type StepStatus } from '$lib/components/domain/step-node.svelte';
   import { toast } from 'svelte-sonner';
-  import { ArrowLeft, Clock, DollarSign, RotateCcw, ShieldAlert, Eye, UserRound, CornerDownRight, ArrowUpRight } from '@lucide/svelte';
+  import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
+  import { toUserMessage } from '$lib/utils/errors';
+  import { ArrowLeft, Clock, DollarSign, RotateCcw, ShieldAlert, Eye, UserRound, CornerDownRight, ArrowUpRight, Trash2 } from '@lucide/svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
   const canRun = $derived(authStore.isAllowed('Packages.Run'));
+  const canDelete = $derived(authStore.isAllowed('Packages.Delete'));
+
+  // Terminal runs can be permanently removed — useful when a package's
+  // capabilities have been renamed and the historical run is unrepresentable
+  // in the current schema. In-flight runs must be canceled first.
+  const TERMINAL_RUN_STATUSES = new Set(['completed', 'succeeded', 'failed', 'halted', 'partial', 'canceled']);
+
+  let deleteDialogOpen = $state(false);
+  const deleteRun = createMutation(() => ({
+    mutationFn: () => trpc.packageRuns.delete.mutate({ runId }),
+    onSuccess: () => {
+      toast.success('Run deleted');
+      deleteDialogOpen = false;
+      void queryClient.invalidateQueries({ queryKey: ['packageRuns.list'] });
+      void queryClient.invalidateQueries({ queryKey: ['packages.list'] });
+      goto('/automation/runs');
+    },
+    onError: (err) => toast.error(toUserMessage(err, 'Failed to delete run')),
+  }));
 
   const runId = $derived(page.params.id!);
 
@@ -211,7 +232,20 @@
                 {#if run.startedAt}· started {formatRelativeDate(run.startedAt)}{/if}
               </p>
             </div>
-            <Badge variant="outline" class={badge.class + ' capitalize'}>{badge.label}</Badge>
+            <div class="flex items-center gap-2">
+              <Badge variant="outline" class={badge.class + ' capitalize'}>{badge.label}</Badge>
+              {#if canDelete && TERMINAL_RUN_STATUSES.has(run.status)}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="gap-1.5 text-destructive hover:text-destructive"
+                  onclick={() => (deleteDialogOpen = true)}
+                >
+                  <Trash2 class="size-3.5" />
+                  Delete run
+                </Button>
+              {/if}
+            </div>
           </div>
 
           <div class="flex flex-wrap items-center gap-6 text-sm text-muted-foreground">
@@ -422,3 +456,27 @@
     </div>
   </div>
 </div>
+
+<AlertDialog.Root
+  open={deleteDialogOpen}
+  onOpenChange={(o) => (deleteDialogOpen = o)}
+>
+  <AlertDialog.Content>
+    <AlertDialog.Header>
+      <AlertDialog.Title>Delete this run?</AlertDialog.Title>
+      <AlertDialog.Description>
+        Removes the run and all of its recorded step outputs. This can't be undone. The parent package and other runs are not affected.
+      </AlertDialog.Description>
+    </AlertDialog.Header>
+    <AlertDialog.Footer>
+      <AlertDialog.Cancel disabled={deleteRun.isPending}>Cancel</AlertDialog.Cancel>
+      <AlertDialog.Action
+        class="bg-destructive text-destructive-foreground hover:bg-destructive/80"
+        disabled={deleteRun.isPending}
+        onclick={() => deleteRun.mutate()}
+      >
+        {deleteRun.isPending ? 'Deleting…' : 'Delete'}
+      </AlertDialog.Action>
+    </AlertDialog.Footer>
+  </AlertDialog.Content>
+</AlertDialog.Root>

@@ -6,5 +6,7 @@ export type {
   HaloPSAUser,
   HaloPSATicketBody,
   HaloPSANewTicket,
-  HaloPSARecurringInvoice
+  HaloPSARecurringInvoice,
+  HaloPSALookupOption,
+  HaloPSAActionBody
 } from './connector.js';

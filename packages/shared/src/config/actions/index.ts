@@ -95,6 +95,7 @@ export enum ActionLabels {
   PackageUpdate = 'package.update',
   PackageDelete = 'package.delete',
   PackageRunStart = 'package.run.start',
+  PackageRunDelete = 'package.run.delete',
   PackageRunRevealOutput = 'package.run.reveal_output',
   PackageScheduleCreate = 'package.schedule.create',
   PackageScheduleUpdate = 'package.schedule.update',
@@ -104,7 +105,8 @@ export enum ActionLabels {
   DattoSiteCreate = 'datto.site.create',
   CoveSiteCreate = 'cove.site.create',
   CoreSiteProvision = 'core.site.provision',
-  CoreHaloPSATicketCreate = 'core.halopsa.ticket.create'
+  CoreHaloPSATicketCreate = 'core.halopsa.ticket.create',
+  CoreHaloPSATicketAddNote = 'core.halopsa.ticket.add_note'
 }
 
 export type ActionLabel = `${ActionLabels}`;
@@ -499,6 +501,10 @@ export const ActionResources = {
     label: ActionLabels.PackageRunStart,
     name: 'Package run start'
   },
+  [ActionLabels.PackageRunDelete]: {
+    label: ActionLabels.PackageRunDelete,
+    name: 'Package run delete'
+  },
   [ActionLabels.PackageRunRevealOutput]: {
     label: ActionLabels.PackageRunRevealOutput,
     name: 'Package run reveal output'
@@ -538,6 +544,10 @@ export const ActionResources = {
   [ActionLabels.CoreHaloPSATicketCreate]: {
     label: ActionLabels.CoreHaloPSATicketCreate,
     name: 'Create HaloPSA ticket'
+  },
+  [ActionLabels.CoreHaloPSATicketAddNote]: {
+    label: ActionLabels.CoreHaloPSATicketAddNote,
+    name: 'Add HaloPSA ticket note'
   }
 } satisfies Record<ActionLabel, ActionResource>;
 

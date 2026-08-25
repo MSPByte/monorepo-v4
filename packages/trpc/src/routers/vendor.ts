@@ -43,8 +43,9 @@ import {
   dattoEndpoints,
   coveEndpoints
 } from '@mspbyte/drizzle';
-import { Encryption, SophosConnector, CoveConnector, ActionLabels } from '@mspbyte/shared';
+import { Encryption, SophosConnector, CoveConnector, HaloPSAConnector, ActionLabels } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
+import type { Context } from '../context.js';
 import { loadGroupTargets } from './group-targets.js';
 
 const VENDOR_TABLE_MAP = {
@@ -3422,4 +3423,55 @@ export const vendorRouter = t.router({
       .map((c) => ({ id: c.Info.Id, name: c.Info.Name }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }),
+
+  // Halo lookup endpoints — feed the create-ticket capability's priority /
+  // ticket-type / category dropdowns without asking authors to know Halo's
+  // internal IDs. All three resolve the HaloPSA integration from the
+  // `integrations` table (tenant-wide config, not per-site link) and refresh
+  // on every dialog open (staleTime: 0 on the client).
+  halopsaTicketPriorities: authProcedure.query(async ({ ctx }) => {
+    const connector = await loadHaloPSAConnectorForOptions(ctx);
+    if (!connector) return [];
+    return connector.priorities.list().catch(() => []);
+  }),
+
+  halopsaTicketTypes: authProcedure.query(async ({ ctx }) => {
+    const connector = await loadHaloPSAConnectorForOptions(ctx);
+    if (!connector) return [];
+    return connector.ticketTypes.list().catch(() => []);
+  }),
+
+  halopsaTicketCategories: authProcedure.query(async ({ ctx }) => {
+    const connector = await loadHaloPSAConnectorForOptions(ctx);
+    if (!connector) return [];
+    return connector.categories.list().catch(() => []);
+  }),
 });
+
+async function loadHaloPSAConnectorForOptions(
+  ctx: Context
+): Promise<HaloPSAConnector | null> {
+  if (!ctx.can('Vendors.Read')) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Read permission required' });
+  }
+  const [integration] = await ctx.db
+    .select()
+    .from(integrations)
+    .where(eq(integrations.id, 'halopsa'))
+    .limit(1);
+  if (!integration || integration.deletedAt) return null;
+
+  const config = z.object({
+    url: z.string(),
+    clientId: z.string(),
+    clientSecret: z.string(),
+  }).safeParse(integration.config);
+  if (!config.success) return null;
+
+  const encryptionKey = ctx.encryptionKey ?? process.env.ENCRYPTION_KEY;
+  if (!encryptionKey) return null;
+  const decrypted = Encryption.decrypt(config.data.clientSecret, encryptionKey);
+  if (!decrypted) return null;
+
+  return new HaloPSAConnector(config.data.url, config.data.clientId, decrypted);
+}

@@ -10,6 +10,7 @@ import { m365ConditionalAccessPolicyCreate } from './m365/create-conditional-acc
 import { m365IdentityAssignRole } from './m365/assign-role.js';
 import { coreSiteProvision } from './core/provision-site.js';
 import { coreHaloPSATicketCreate } from './core/halopsa-create-ticket.js';
+import { coreHaloPSATicketAddNote } from './core/halopsa-add-note.js';
 import {
   legacySophosEndpointDisableTamper,
   legacySophosEndpointEnableTamper,
@@ -25,6 +26,7 @@ import { coveCreateSite } from './cove/create-site.js';
 export const CAPABILITIES = {
   [coreSiteProvision.id]: coreSiteProvision,
   [coreHaloPSATicketCreate.id]: coreHaloPSATicketCreate,
+  [coreHaloPSATicketAddNote.id]: coreHaloPSATicketAddNote,
   [m365IdentityResetPassword.id]: m365IdentityResetPassword,
   [m365IdentityCreate.id]: m365IdentityCreate,
   [m365LicenseAssign.id]: m365LicenseAssign,

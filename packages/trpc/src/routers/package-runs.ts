@@ -729,6 +729,54 @@ export const packageRunsRouter = t.router({
       return result;
     }),
 
+  delete: authProcedure.input(z.object({ runId: z.uuid() })).mutation(async ({ ctx, input }) => {
+    if (!ctx.can('Packages.Delete')) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Delete required' });
+    }
+    const [current] = await ctx.db
+      .select({
+        id: packageRuns.id,
+        status: packageRuns.status,
+        siteId: packageRuns.siteId,
+        packageId: packageRuns.packageId,
+      })
+      .from(packageRuns)
+      .where(eq(packageRuns.id, input.runId))
+      .limit(1);
+    if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Run not found' });
+
+    // Only terminal-state runs are safe to remove — an in-flight worker
+    // still expects its row to exist to persist step results.
+    const terminalStatuses = new Set(['succeeded', 'failed', 'halted', 'partial', 'canceled']);
+    if (!terminalStatuses.has(current.status)) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: `Run is ${current.status} — cancel it first, then delete once it settles.`,
+      });
+    }
+
+    // package_run_steps cascade via FK.
+    await ctx.db.delete(packageRuns).where(eq(packageRuns.id, input.runId));
+
+    await ctx.db.insert(customerLogs).values({
+      siteId: current.siteId,
+      actorType: 'user',
+      actorId: ctx.user.id,
+      actorLabel: ctx.user.name || ctx.user.email || ctx.user.id,
+      action: 'delete',
+      actionLabel: ActionLabels.PackageRunDelete,
+      targetType: 'package_run',
+      targetId: input.runId,
+      targetLabel: current.status,
+      result: 'success',
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+      metadata: { packageId: current.packageId, previousStatus: current.status },
+    });
+
+    return { id: input.runId };
+  }),
+
   cancel: authProcedure.input(z.object({ runId: z.uuid() })).mutation(async ({ ctx, input }) => {
     if (!ctx.can('Packages.Run')) {
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Run required' });

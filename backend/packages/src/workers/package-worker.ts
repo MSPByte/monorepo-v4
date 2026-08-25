@@ -283,6 +283,7 @@ async function runPackageRun(args: {
     let dattoConnectorSingleton: DattoConnector | null = null;
     let coveConnectorSingleton: { connector: CoveConnector; rootPartnerId: number } | null = null;
     let haloConnectorSingleton: { connector: HaloPSAConnector; haloSiteId: number } | null = null;
+    let haloConnectorGlobalSingleton: HaloPSAConnector | null = null;
 
     ctxBase = {
       encryptionKey,
@@ -326,6 +327,15 @@ async function runPackageRun(args: {
           haloConnectorSingleton = await getHaloPSAConnector(db, run.siteId, encryptionKey);
         }
         return haloConnectorSingleton;
+      },
+      getHaloPSAConnectorGlobal: async () => {
+        if (!haloConnectorGlobalSingleton) {
+          // Reuse the connector already loaded for a site-scoped run when
+          // possible, so both entry points share one auth token.
+          haloConnectorGlobalSingleton = haloConnectorSingleton?.connector
+            ?? (await getHaloPSAConnectorGlobal(db, encryptionKey));
+        }
+        return haloConnectorGlobalSingleton;
       },
       lookupSite: (siteId: string) =>
         lookupSite(db, siteId),
@@ -1546,6 +1556,26 @@ async function getHaloPSAConnector(
   const clientSecret = Encryption.decrypt(encryptedSecret, encryptionKey);
   if (!clientSecret) throw new Error("HaloPSA client secret could not be decrypted");
   return { connector: new HaloPSAConnector(url, clientId, clientSecret), haloSiteId };
+}
+
+async function getHaloPSAConnectorGlobal(
+  db: any,
+  encryptionKey: string,
+): Promise<HaloPSAConnector> {
+  const [row] = await db
+    .select({ config: integrations.config })
+    .from(integrations)
+    .where(eq(integrations.id, "halopsa"))
+    .limit(1);
+  if (!row) throw new Error("HaloPSA integration is not configured");
+  const config = row.config as Record<string, unknown>;
+  const url = config.url as string | undefined;
+  const clientId = config.clientId as string | undefined;
+  const encryptedSecret = config.clientSecret as string | undefined;
+  if (!url || !clientId || !encryptedSecret) throw new Error("HaloPSA integration missing credentials");
+  const clientSecret = Encryption.decrypt(encryptedSecret, encryptionKey);
+  if (!clientSecret) throw new Error("HaloPSA client secret could not be decrypted");
+  return new HaloPSAConnector(url, clientId, clientSecret);
 }
 
 async function lookupSite(

@@ -2400,8 +2400,72 @@
             </div>
           {/if}
         </div>
+      {:else if selectedWorkflowStep}
+        {@const orphanStep = selectedWorkflowStep}
+        {@const orphanLane = selected.kind === 'reaction' ? selected.lane : 'main'}
+        {@const orphanIndex = selected.index}
+        {@const orphanIsMain = orphanLane === 'main'}
+        {@const orphanCount = orphanIsMain
+          ? draft.steps.length
+          : draft.outcomeSteps[orphanLane as 'onSuccess' | 'onFailure'].length}
+        <div class="space-y-4 p-6">
+          <div class="rounded-md border border-rose-500/30 bg-rose-500/5 p-4 text-sm">
+            <div class="flex items-start gap-2">
+              <AlertTriangle class="mt-0.5 size-4 shrink-0 text-rose-600 dark:text-rose-400" />
+              <div class="min-w-0 flex-1 space-y-1">
+                <div class="font-medium text-rose-700 dark:text-rose-300">
+                  {capabilitiesQuery.isLoading ? 'Loading capability…' : 'Capability no longer available'}
+                </div>
+                {#if !capabilitiesQuery.isLoading}
+                  <p class="text-xs text-rose-700/80 dark:text-rose-400/80">
+                    This step references
+                    <code class="rounded bg-rose-500/10 px-1 py-0.5 font-mono">{orphanStep.capabilityId}</code>,
+                    which has been renamed or removed. Its inputs can't be edited — remove the step and add a replacement.
+                  </p>
+                {/if}
+              </div>
+            </div>
+          </div>
+          {#if !capabilitiesQuery.isLoading}
+            <div class="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={orphanIndex === 0}
+                onclick={() =>
+                  orphanIsMain
+                    ? moveStep(orphanIndex, -1)
+                    : moveReactionStep(orphanLane as 'onSuccess' | 'onFailure', orphanIndex, -1)}
+              >
+                <ArrowUp class="mr-1 size-3.5" /> Move up
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={orphanIndex >= orphanCount - 1}
+                onclick={() =>
+                  orphanIsMain
+                    ? moveStep(orphanIndex, 1)
+                    : moveReactionStep(orphanLane as 'onSuccess' | 'onFailure', orphanIndex, 1)}
+              >
+                <ArrowDown class="mr-1 size-3.5" /> Move down
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                class="ml-auto"
+                onclick={() =>
+                  orphanIsMain
+                    ? removeStep(orphanIndex)
+                    : removeOutcomeStep(orphanLane as 'onSuccess' | 'onFailure', orphanIndex)}
+              >
+                <Trash2 class="mr-1 size-3.5" /> Remove step
+              </Button>
+            </div>
+          {/if}
+        </div>
       {:else}
-        <div class="p-6 text-sm text-rose-500">Unknown capability.</div>
+        <div class="p-6 text-sm text-muted-foreground">Select a step to inspect.</div>
       {/if}
     </section>
   </div>
