@@ -103,7 +103,7 @@
   );
 
   let siteSearch = $state('');
-  let activeFilter = $state<'All' | 'Linked' | 'Unlinked'>('All');
+  let activeFilter = $state<'All' | 'Linked' | 'Unlinked' | 'Mismatched' | 'Missing'>('All');
   let configSheetOpen = $state(false);
   let savingConfig = $state(false);
   let showDeleteConfirm = $state(false);
@@ -124,6 +124,8 @@
       .filter((s) => {
         if (activeFilter === 'Linked') return linkedSiteIds.has(s.id);
         if (activeFilter === 'Unlinked') return !linkedSiteIds.has(s.id);
+        if (activeFilter === 'Mismatched') return getVarStatus(s.id)?.status === 'mismatch';
+        if (activeFilter === 'Missing') return getVarStatus(s.id)?.status === 'missing';
         return true;
       })
       .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
@@ -376,8 +378,10 @@
         />
       </div>
       <div class="flex gap-1.5 shrink-0">
-        {#each ['All', 'Linked', 'Unlinked'] as filter}
+        {#each ['All', 'Linked', 'Unlinked', 'Mismatched', 'Missing'] as filter}
           <button
+            type="button"
+            aria-pressed={activeFilter === filter}
             class="px-2.5 py-1 rounded-full text-xs font-medium border transition-colors
               {activeFilter === filter
               ? 'bg-primary text-primary-foreground border-primary'
