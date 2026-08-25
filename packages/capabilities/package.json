@@ -15,7 +15,10 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "import:openapi": "bun run scripts/import-openapi.ts",
+    "review:openapi": "bun run scripts/review-openapi-candidate.ts",
+    "scaffold:openapi": "bun run scripts/scaffold-openapi-capability.ts"
   },
   "dependencies": {
     "@mspbyte/connectors": "*",

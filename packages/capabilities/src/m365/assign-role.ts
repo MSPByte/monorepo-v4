@@ -20,6 +20,7 @@ const outputs = z.object({
 export const m365IdentityAssignRole: Capability<z.infer<typeof inputs>, z.infer<typeof outputs>> = {
   id: 'm365.identity.role.assign',
   vendor: 'microsoft-365',
+  integration: { integrationId: 'microsoft-365', connection: 'activeLink' },
   name: 'Assign M365 Directory Roles',
   description: 'Assign one or more Microsoft Entra directory roles to a user at the tenant scope.',
   category: 'role',

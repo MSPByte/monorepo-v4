@@ -46,6 +46,16 @@ export class M365Connector {
     }) => Promise<{ id: string; userPrincipalName: string }>;
   };
 
+  readonly operations: {
+    execute: (request: {
+      method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+      path: string;
+      query?: URLSearchParams;
+      headers?: Record<string, string>;
+      body?: unknown;
+    }) => Promise<{ data: unknown; status: number }>;
+  };
+
   readonly groups: {
     listAll: (select: string) => Promise<unknown[]>;
     members: (groupId: string) => Promise<Array<{ id?: string }>>;
@@ -252,6 +262,24 @@ export class M365Connector {
         );
         return { id: data.id, userPrincipalName: data.userPrincipalName };
       }
+    };
+
+    this.operations = {
+      execute: async (request) => {
+        // Only reviewed resource-relative paths are accepted. This prevents a
+        // generated capability from redirecting tenant credentials elsewhere or
+        // double-prefixing the API version (e.g. /v1.0/v1.0/users).
+        if (!request.path.startsWith('/') || request.path.startsWith('//')) {
+          throw new Error('Graph operation path must be a resource-relative path starting with /.');
+        }
+        if (/^\/v\d|^\/beta\b/i.test(request.path)) {
+          throw new Error('Graph operation path must not include an API version prefix (/v1.0, /beta); use a resource-relative path instead.');
+        }
+        const url = new URL(`https://graph.microsoft.com/v1.0${request.path}`);
+        for (const [key, value] of request.query ?? []) url.searchParams.append(key, value);
+        const { data, res } = await this.client.request(url.toString(), request);
+        return { data, status: res.status };
+      },
     };
 
     this.groups = {

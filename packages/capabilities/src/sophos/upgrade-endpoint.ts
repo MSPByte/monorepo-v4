@@ -24,6 +24,7 @@ function classifyError(
 export const sophosEndpointUpgrade: Capability<z.infer<typeof inputs>, z.infer<typeof outputs>> = {
   id: 'sophos.endpoint.upgrade',
   vendor: 'sophos-partner',
+  integration: { integrationId: 'sophos-partner', connection: 'activeLink' },
   name: 'Upgrade Sophos Endpoints',
   description: 'Requests the available Sophos device software upgrade for one or more endpoints.',
   category: 'device',

@@ -230,10 +230,17 @@
           ><div class="p-4 md:p-5">
             {#if filteredCapabilities.length === 0}
               <div class="rounded-xl border border-dashed p-10 text-center">
-                <p class="text-sm font-medium">No matching capabilities</p>
-                <p class="mt-1 text-xs text-muted-foreground">
-                  Adjust the search or clear some filters to see more results.
-                </p>
+                {#if catalog.length === 0}
+                  <p class="text-sm font-medium">No connected capabilities yet</p>
+                  <p class="mt-1 text-xs text-muted-foreground">
+                    Connect an integration and establish any required active link to add its actions here.
+                  </p>
+                {:else}
+                  <p class="text-sm font-medium">No matching capabilities</p>
+                  <p class="mt-1 text-xs text-muted-foreground">
+                    Adjust the search or clear some filters to see more results.
+                  </p>
+                {/if}
               </div>
             {:else}
               <div class="grid gap-3 xl:grid-cols-2">

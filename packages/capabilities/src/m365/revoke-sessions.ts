@@ -1,62 +1,20 @@
-import { z } from 'zod';
 import { ActionLabels } from '@mspbyte/shared';
-import type { Capability } from '../types.js';
+import { defineGraphIdentityOperation } from './identity-openapi.js';
 
-const inputs = z.object({
-  identityId: z.uuid(),
-});
-
-const outputs = z.object({
-  externalId: z.string(),
-  name: z.string(),
-});
-
-export const m365IdentityRevokeSessions: Capability<
-  z.infer<typeof inputs>,
-  z.infer<typeof outputs>
-> = {
+export const m365IdentityRevokeSessions = defineGraphIdentityOperation({
   id: 'm365.identity.revoke-sessions',
-  vendor: 'microsoft-365',
   name: 'Revoke M365 Sign-in Sessions',
   description: 'Invalidate all active Microsoft 365 sign-in sessions for a user.',
-  category: 'identity',
-  inputs,
-  outputs,
-  inputMeta: {
-    identityId: {
-      allowedBindings: ['entity', 'priorOutput', 'runtime'],
-      entityType: 'm365_identity',
-      priorOutputCompat: ['m365_identity_internal_id'],
-      typeHint: 'text',
-      label: 'Identity',
-      description: 'The M365 user whose sessions to revoke.',
-      required: true,
-    },
-  },
-  outputMeta: {
-    externalId: { label: 'Graph user id', outputType: 'm365_identity_external_id' },
-    name: { label: 'Display name' },
-  },
+  action: { kind: 'revokeSessions' },
   actionLabel: ActionLabels.M365IdentityRevokeSessions,
-  auditAction: 'update',
-  requiredPermission: 'Vendors.Write',
   defaultUnitPrice: 0.02,
-  async handler(ctx, input) {
-    const identity = await ctx.loadM365Identity(input.identityId);
-    if (!identity) {
-      return { outcome: 'fail', errorClass: 'not_found', message: 'M365 identity not found' };
-    }
-    try {
-      const connector = await ctx.getM365Connector(identity.linkId);
-      await connector.users.revokeSignInSessions(identity.externalId);
-      return { outcome: 'success', outputs: { externalId: identity.externalId, name: identity.name ?? identity.externalId } };
-    } catch (err) {
-      return {
-        outcome: 'fail',
-        errorClass: 'vendor_error',
-        message: err instanceof Error ? err.message : String(err),
-        retryable: true,
-      };
-    }
+  operation: {
+    source: 'openapi',
+    operationId: 'user-revokeSignInSessions',
+    method: 'POST',
+    path: '/users/{userId}/revokeSignInSessions',
+    parameters: [{ input: 'userId', name: 'userId', in: 'path', required: true }],
+    successStatusCodes: [200, 204],
+    response: { source: 'body' },
   },
-};
+});

@@ -93,6 +93,43 @@ Because the frontend cannot reach Redis:
 
 This same DB-bridge pattern should be used for any new backend work triggered from tRPC mutations.
 
+### Automation capability catalog and OpenAPI expansion
+
+- A capability's `vendor` is display metadata. Vendor-backed capabilities must
+  also declare `integration: { integrationId, connection }` in
+  `packages/capabilities`; use `configured` for tenant-wide credentials and
+  `activeLink` when an executable vendor link is required.
+- `packages.capabilities` returns only capabilities whose integration is set up
+  for the tenant. Creation/update, manual/scheduled launch, and the package
+  worker all enforce the same availability check. Do not reintroduce a static,
+  unfiltered catalog or rely on hidden UI as an authorization boundary.
+- OpenAPI-derived operations use `OpenApiOperationManifest` and
+  `defineOpenApiCapability` from `packages/capabilities/src/openapi.ts`. The
+  full authoring and review rules are in
+  `packages/capabilities/OPENAPI_CAPABILITIES.md`; read it before adding
+  Swagger-generated capabilities.
+- Keep two layers: a vendor-faithful endpoint capability for API coverage and
+  a curated capability/package for opinionated MSP workflows. Generated code
+  must not implement credentials, arbitrary fetch calls, direct DB access, or
+  made-up dynamic field sources. Those remain trusted platform code.
+- Microsoft Graph is the first supported manifest executor:
+  `buildOpenApiRequest()` maps reviewed path/query/body fields and
+  `M365Connector.operations.execute()` owns the Graph host, auth, and HTTP
+  call. Never bypass it with a generated URL or `fetch`; add equivalent
+  connector support before enabling OpenAPI operations for another vendor.
+- To bulk-start a vendor catalog, run `bun run --cwd packages/capabilities
+  import:openapi -- ...` with an explicit `--operation` allowlist. It emits a
+  reviewable JSON candidate file only; do not treat generated candidates as
+  approved executable capabilities.
+- The initial Microsoft Graph user-operation review queue is at
+  `packages/capabilities/generated/microsoft-graph-v1.0-user-operations.candidates.json`.
+  Promote candidates in coherent batches through the manifest executor; do not
+  register all imported operations at once.
+- OpenAPI candidates follow `generated → approved → live` (or `rejected`).
+  Record smoke-test evidence with `review:openapi`; a lifecycle JSON change
+  alone does not make a candidate executable. Global catalog approval and an
+  MSP's integration availability are separate checks.
+
 ### Policy assignment and findings lifecycle
 
 - `policyAssignments` rows connect a `policy` (or `policySet`) to a scope (site, link, site group, or tenant).
@@ -126,4 +163,5 @@ These apply to every editor, dialog, and data entry surface across the product. 
 - **Error surfacing:** use `$lib/utils/errors` (`toUserMessage()`) for all user-facing error text. Log raw errors to console only.
 - **Svelte 5 runes:** use `$state`, `$derived`, `$effect`; event attributes are `onclick`, `oninput`, etc.
 - **Cross-cutting types and constants** (integration IDs, permission strings, facet enums) belong in `packages/shared`, not copied into individual packages.
+- **OpenAPI capability metadata** belongs in `packages/capabilities/src/openapi.ts` and each reviewed capability definition. Do not make an AI prompt or an external Swagger document the runtime source of truth.
 - **Schema groups in `packages/drizzle`** reflect domain boundaries (`policy`, `ingestor`, `canonical`, `vendors`, etc.). Add new tables to the correct group; do not put everything in `public`.

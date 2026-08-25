@@ -40,6 +40,10 @@
 - Treat migrations as append-only. Generate them from schema changes; do not
   edit migration snapshots by hand. Never run `db:push` against shared data
   unless the task explicitly calls for it.
+- For automation capabilities, use the integration requirement and OpenAPI
+  manifest conventions in `packages/capabilities/OPENAPI_CAPABILITIES.md`.
+  The package UI is not the authorization boundary: catalog visibility and run
+  eligibility must be enforced through tRPC and the package worker.
 - Do not import a server implementation into client code. In particular,
   `AppRouter` imports in the frontend must remain type-only.
 

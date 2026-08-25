@@ -59,6 +59,7 @@ const outputs = z.object({
 export const m365IdentityCreate: Capability<z.infer<typeof inputs>, z.infer<typeof outputs>> = {
   id: 'm365.identity.create',
   vendor: 'microsoft-365',
+  integration: { integrationId: 'microsoft-365', connection: 'activeLink' },
   name: 'Create M365 Identity',
   description:
     'Create a new Microsoft 365 user in a tenant. Returns the Graph userId for downstream steps to reference.',

@@ -1317,7 +1317,7 @@
               <span class="block truncate text-sm font-medium text-foreground">
                 Add capability
               </span>
-              <span class="block text-[11px] text-muted-foreground">Browse catalog</span>
+              <span class="block text-[11px] text-muted-foreground">Connected integrations</span>
             </span>
             <span
               class="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[10px] font-mono text-muted-foreground"

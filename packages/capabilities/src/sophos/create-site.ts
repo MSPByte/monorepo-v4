@@ -98,6 +98,7 @@ export const sophosCreateSite: Capability<
 > = {
   id: 'sophos.site.create',
   vendor: 'sophos-partner',
+  integration: { integrationId: 'sophos-partner', connection: 'configured' },
   name: 'Create Sophos Partner Site',
   description:
     'Creates a new Sophos tenant via the Partner API and links it to an MSPByte site. ' +

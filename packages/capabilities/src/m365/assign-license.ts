@@ -23,6 +23,7 @@ export const m365LicenseAssign: Capability<
 > = {
   id: 'm365.license.assign',
   vendor: 'microsoft-365',
+  integration: { integrationId: 'microsoft-365', connection: 'activeLink' },
   name: 'Assign M365 Licenses',
   description:
     'Assign (and optionally remove) M365 subscribed SKU licenses on a user. Picks live from the tenant\'s available SKUs.',

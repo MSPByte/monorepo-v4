@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { and, asc, eq, gte, inArray } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull } from "drizzle-orm";
 import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
 import {
   customerLogs,
@@ -18,6 +18,7 @@ import type { PackageJobData } from "@mspbyte/pipeline";
 import {
   getCapability,
   getGenerator,
+  isCapabilityAvailable,
   RETRYABLE_ERROR_CLASSES,
   type AnyCapability,
   type Binding,
@@ -103,6 +104,47 @@ type PackageSnapshot = {
   // at dispatch time. Sub-package steps look up their execution target here.
   children?: Record<string, EmbeddedPackageSnapshot>;
 };
+
+function snapshotCapabilityIds(snapshot: PackageSnapshot, ids = new Set<string>()): Set<string> {
+  const collect = (steps: StepDefinition[] | undefined) => {
+    for (const step of steps ?? []) {
+      if (step.kind === 'subpackage') {
+        const child = snapshot.children?.[step.packageId];
+        if (child) snapshotCapabilityIds(child, ids);
+      } else {
+        ids.add(step.capabilityId);
+      }
+    }
+  };
+  collect(snapshot.steps);
+  collect(snapshot.outcomeSteps?.onSuccess);
+  collect(snapshot.outcomeSteps?.onFailure);
+  return ids;
+}
+
+async function unavailableSnapshotCapabilities(db: any, snapshot: PackageSnapshot): Promise<string[]> {
+  const [configured, activeLinks] = await Promise.all([
+    db.select({ id: integrations.id }).from(integrations).where(isNull(integrations.deletedAt)),
+    db
+      .select({ integrationId: integrationLinks.integrationId })
+      .from(integrationLinks)
+      .innerJoin(integrations, and(
+        eq(integrationLinks.integrationId, integrations.id),
+        isNull(integrations.deletedAt),
+      ))
+      .where(eq(integrationLinks.status, 'active')),
+  ]);
+  const inventory = {
+    configuredIntegrationIds: new Set<string>((configured as Array<{ id: string }>).map((row) => row.id)),
+    activeLinkIntegrationIds: new Set<string>(
+      (activeLinks as Array<{ integrationId: string }>).map((row) => row.integrationId),
+    ),
+  };
+  return [...snapshotCapabilityIds(snapshot)].flatMap((id) => {
+    const capability = getCapability(id);
+    return capability && !isCapabilityAvailable(capability, inventory) ? [capability.name] : [];
+  });
+}
 
 export function createPackageWorker(
   redis: RedisConnection,
@@ -213,6 +255,25 @@ async function runPackageRun(args: {
   const packageRunId = run.id as string;
   const snapshot = run.packageSnapshot as PackageSnapshot;
   const runtimeInputs = (run.runtimeInputs ?? {}) as Record<string, unknown>;
+
+  // Scheduled runs may wait days after their snapshot was created. Re-check
+  // connection availability in the worker so a disconnected vendor never gets
+  // an execution attempt merely because it was available at authoring time.
+  const unavailable = await unavailableSnapshotCapabilities(db, snapshot);
+  if (unavailable.length > 0) {
+    const message = `${[...new Set(unavailable)].join(', ')} requires an integration that is not set up or has no active link.`;
+    logger.warn('Package run blocked by unavailable capability integration', {
+      orgId,
+      packageRunId,
+      unavailableCapabilities: unavailable,
+      message,
+    });
+    await db
+      .update(packageRuns)
+      .set({ status: 'failed', finishedAt: new Date().toISOString() })
+      .where(eq(packageRuns.id, packageRunId));
+    return { finalStatus: 'halted', stepOutputs: new Map() };
+  }
 
   await db
     .update(packageRuns)
@@ -1393,12 +1454,14 @@ async function getConnector(
     .select({
       tenantId: integrationLinks.externalId,
       config: integrations.config,
+      status: integrationLinks.status,
     })
     .from(integrationLinks)
     .innerJoin(integrations, eq(integrationLinks.integrationId, integrations.id))
-    .where(eq(integrationLinks.id, linkId))
+    .where(and(eq(integrationLinks.id, linkId), eq(integrationLinks.integrationId, 'microsoft-365')))
     .limit(1);
   if (!row?.tenantId) throw new Error(`M365 link ${linkId} missing tenant id`);
+  if (row.status !== 'active') throw new Error(`M365 link ${linkId} is not active`);
   const connector = buildM365Connector(row.config, row.tenantId, encryptionKey);
   cache.set(linkId, connector);
   return connector;
@@ -1449,12 +1512,13 @@ async function getSophosConnector(
   const cached = cache.get(linkId);
   if (cached) return cached;
   const [row] = await db
-    .select({ config: integrations.config })
+    .select({ config: integrations.config, status: integrationLinks.status })
     .from(integrationLinks)
     .innerJoin(integrations, eq(integrationLinks.integrationId, integrations.id))
-    .where(eq(integrationLinks.id, linkId))
+    .where(and(eq(integrationLinks.id, linkId), eq(integrationLinks.integrationId, 'sophos-partner')))
     .limit(1);
   if (!row) throw new Error(`Sophos link ${linkId} not found`);
+  if (row.status !== 'active') throw new Error(`Sophos link ${linkId} is not active`);
   const config = row.config as Record<string, unknown>;
   const clientId = config.clientId as string | undefined;
   const encryptedSecret = config.clientSecret as string | undefined;

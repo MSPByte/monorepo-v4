@@ -17,6 +17,11 @@ import { Encryption } from '@mspbyte/encryption';
 import { ActionLabels } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 import { loadMatchingGroupIds, packageMatchesScope, readPackageScope } from './package-scope.js';
+import {
+  findUnavailableCapabilities,
+  loadCapabilityAvailabilityInventory,
+  unavailableCapabilitiesMessage,
+} from '../capability-availability.js';
 
 const runtimeInputsSchema = z.record(z.string(), z.unknown()).default({});
 const scheduleRunInputStateSchema = z.object({
@@ -116,6 +121,25 @@ function validateSkippedScheduleSteps(
   }
 }
 
+async function assertPackageCapabilitiesAvailable(db: any, pkg: {
+  steps: unknown;
+  outcomeSteps: unknown;
+}) {
+  const outcomeSteps = (pkg.outcomeSteps ?? {}) as {
+    onSuccess?: Array<{ kind?: string; capabilityId?: string }>;
+    onFailure?: Array<{ kind?: string; capabilityId?: string }>;
+  };
+  const steps = (pkg.steps ?? []) as Array<{ kind?: string; capabilityId?: string }>;
+  const inventory = await loadCapabilityAvailabilityInventory(db);
+  const unavailable = findUnavailableCapabilities(
+    [...steps, ...(outcomeSteps.onSuccess ?? []), ...(outcomeSteps.onFailure ?? [])],
+    inventory,
+  );
+  if (unavailable.length > 0) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: unavailableCapabilitiesMessage(unavailable) });
+  }
+}
+
 export const packageRunsRouter = t.router({
   schedules: authProcedure
     .input(z.object({ packageId: z.uuid().optional(), limit: z.number().int().min(1).max(200).default(100) }).default({ limit: 100 }))
@@ -187,6 +211,7 @@ export const packageRunsRouter = t.router({
       if (pkg.status !== 'active') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Only active packages can be scheduled.' });
       }
+      await assertPackageCapabilitiesAvailable(ctx.db, pkg);
       const target = { siteId: input.siteId ?? undefined, linkId: input.linkId ?? undefined };
       const scope = readPackageScope(pkg);
       if (!target.siteId && !target.linkId && !packageMatchesScope(scope, target, new Set())) {
@@ -565,6 +590,7 @@ export const packageRunsRouter = t.router({
       if (pkg.status !== 'active') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Package is not active' });
       }
+      await assertPackageCapabilitiesAvailable(ctx.db, pkg);
 
       const scope = readPackageScope(pkg);
       if (!input.siteId && !input.linkId && !packageMatchesScope(scope, input, new Set())) {

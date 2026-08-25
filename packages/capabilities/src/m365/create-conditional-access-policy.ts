@@ -157,6 +157,7 @@ export const m365ConditionalAccessPolicyCreate: Capability<
 > = {
   id: 'm365.conditional-access.policy.create',
   vendor: 'microsoft-365',
+  integration: { integrationId: 'microsoft-365', connection: 'activeLink' },
   name: 'Create Conditional Access Policy',
   description:
     'Create a Microsoft Entra Conditional Access policy. Requires Entra ID P1/P2. Returns the policy id.',

@@ -21,6 +21,7 @@ const outputs = z.object({
 export const dattoCreateSite: Capability<z.infer<typeof inputs>, z.infer<typeof outputs>> = {
   id: 'datto.site.create',
   vendor: 'dattormm',
+  integration: { integrationId: 'dattormm', connection: 'configured' },
   name: 'Create Datto RMM Site',
   description:
     'Creates a new site in Datto RMM and links it to an MSPByte site. ' +

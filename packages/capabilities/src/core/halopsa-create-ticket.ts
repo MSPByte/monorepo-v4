@@ -46,6 +46,7 @@ export const coreHaloPSATicketCreate: Capability<
 > = {
   id: 'core.halopsa.ticket.create',
   vendor: 'halopsa',
+  integration: { integrationId: 'halopsa', connection: 'configured' },
   name: 'Create HaloPSA Ticket',
   description:
     'Creates a ticket in the HaloPSA site linked to this package run. ' +

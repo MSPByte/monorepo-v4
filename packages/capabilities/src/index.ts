@@ -1,5 +1,6 @@
 export * from './types.js';
 export * from './field-types.js';
+export * from './openapi.js';
 export * from './registry.js';
 export * from './core/index.js';
 export * from './m365/index.js';

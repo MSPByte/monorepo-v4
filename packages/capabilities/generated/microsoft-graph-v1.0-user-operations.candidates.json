@@ -1,0 +1,3491 @@
+{
+  "source": "https://raw.githubusercontent.com/microsoftgraph/msgraph-metadata/master/openapi/v1.0/openapi.yaml",
+  "candidates": [
+    {
+      "id": "microsoft-365.users-user-list-user",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "List users",
+      "description": "Retrieve a list of user objects.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.user.ListUser",
+        "method": "GET",
+        "path": "/users",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "ConsistencyLevel",
+            "name": "ConsistencyLevel",
+            "in": "header",
+            "required": false
+          },
+          {
+            "input": "$top",
+            "name": "$top",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$search",
+            "name": "$search",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$filter",
+            "name": "$filter",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$count",
+            "name": "$count",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$orderby",
+            "name": "$orderby",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.user.ListUserInputs",
+      "outputSchemaName": "users.user.ListUserOutputs",
+      "inputMeta": {
+        "ConsistencyLevel": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "Consistency Level",
+          "description": "Indicates the requested consistency level. Documentation URL: https://docs.microsoft.com/graph/aad-advanced-queries",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$top": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Top",
+          "description": "Show only the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$search": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Search",
+          "description": "Search items by search phrases",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$filter": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Filter",
+          "description": "Filter items by property values",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$count": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Count",
+          "description": "Include count of items",
+          "required": false,
+          "valueType": "boolean",
+          "typeHint": "boolean"
+        },
+        "$orderby": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Orderby",
+          "description": "Order items by property values",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-user-create-user",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Create User",
+      "description": "Create a new user.\r\nThe request body contains the user to create. At a minimum, you must specify the required properties for the user. You can optionally specify any other writable properties.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.user.CreateUser",
+        "method": "POST",
+        "path": "/users",
+        "apiVersion": "v1.0",
+        "parameters": [],
+        "body": {
+          "input": "body",
+          "contentType": "application/json"
+        },
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.user.CreateUserInputs",
+      "outputSchemaName": "users.user.CreateUserOutputs",
+      "inputMeta": {},
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-user-get-user",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Get a user",
+      "description": "Retrieve the properties and relationships of user object. This operation returns by default only a subset of the more commonly used properties for each user. These default properties are noted in the Properties section. To get properties that are not returned by default, do a GET operation for the user and specify the properties in a $select OData query option. Because the user resource supports extensions, you can also use the GET operation to get custom properties and extension data in a user instance. Customers through Microsoft Entra ID for customers can also use this API operation to retrieve their details.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.user.GetUser",
+        "method": "GET",
+        "path": "/users/{user-id}",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.user.GetUserInputs",
+      "outputSchemaName": "users.user.GetUserOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-user-update-user",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Update user",
+      "description": "Update the properties of a user object. To use this API to update an agentUser, specify an @odata.type property with a value of #microsoft.graph.agentUser in the request body.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.user.UpdateUser",
+        "method": "PATCH",
+        "path": "/users/{user-id}",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "body": {
+          "input": "body",
+          "contentType": "application/json"
+        },
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.user.UpdateUserInputs",
+      "outputSchemaName": "users.user.UpdateUserOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-user-delete-user",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Delete a user",
+      "description": "Delete a user object.   When deleted, user resources, including their mailbox and license assignments, are moved to a temporary container and if the user is restored within 30 days, these objects are restored to them. The user is also restored to any groups they were a member of. After 30 days and if not restored, the user object is permanently deleted and their assigned resources freed. To manage the deleted user object, see deletedItems.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.user.DeleteUser",
+        "method": "DELETE",
+        "path": "/users/{user-id}",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "If-Match",
+            "name": "If-Match",
+            "in": "header",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          204
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.user.DeleteUserInputs",
+      "outputSchemaName": "users.user.DeleteUserOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "If-Match": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "If Match",
+          "description": "ETag",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-authentication-list-methods",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Get methods from users",
+      "description": "Represents all authentication methods registered to a user.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.authentication.ListMethods",
+        "method": "GET",
+        "path": "/users/{user-id}/authentication/methods",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "$top",
+            "name": "$top",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$skip",
+            "name": "$skip",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$search",
+            "name": "$search",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$filter",
+            "name": "$filter",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$count",
+            "name": "$count",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$orderby",
+            "name": "$orderby",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.authentication.ListMethodsInputs",
+      "outputSchemaName": "users.authentication.ListMethodsOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$top": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Top",
+          "description": "Show only the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$skip": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Skip",
+          "description": "Skip the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$search": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Search",
+          "description": "Search items by search phrases",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$filter": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Filter",
+          "description": "Filter items by property values",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$count": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Count",
+          "description": "Include count of items",
+          "required": false,
+          "valueType": "boolean",
+          "typeHint": "boolean"
+        },
+        "$orderby": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Orderby",
+          "description": "Order items by property values",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-authentication-get-methods",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Get methods from users",
+      "description": "Represents all authentication methods registered to a user.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.authentication.GetMethods",
+        "method": "GET",
+        "path": "/users/{user-id}/authentication/methods/{authenticationMethod-id}",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "authenticationMethod-id",
+            "name": "authenticationMethod-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.authentication.GetMethodsInputs",
+      "outputSchemaName": "users.authentication.GetMethodsOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "authenticationMethod-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "Authentication Method Id",
+          "description": "The unique identifier of authenticationMethod",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-user-authentication-methods-authentication-method-reset-password",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Invoke action resetPassword",
+      "description": "Reset a user's password, represented by a password authentication method object. This can only be done by an administrator with appropriate permissions and can't be performed on a user's own account. To reset a user's password in Azure AD B2C, use the Update user API operation and update the passwordProfile > forceChangePasswordNextSignIn object. This flow writes the new password to Microsoft Entra ID and pushes it to on-premises Active Directory if configured using password writeback. The admin can either provide a new password or have the system generate one. The user is prompted to change their password on their next sign in. This reset is a long-running operation and returns a Location header with a link where the caller can periodically check for the status of the reset operation.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.user.authentication.methods.authenticationMethod.resetPassword",
+        "method": "POST",
+        "path": "/users/{user-id}/authentication/methods/{authenticationMethod-id}/resetPassword",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "authenticationMethod-id",
+            "name": "authenticationMethod-id",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "body": {
+          "input": "body",
+          "contentType": "application/json"
+        },
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.user.authentication.methods.authenticationMethod.resetPasswordInputs",
+      "outputSchemaName": "users.user.authentication.methods.authenticationMethod.resetPasswordOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "authenticationMethod-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "Authentication Method Id",
+          "description": "The unique identifier of authenticationMethod",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-authentication-list-microsoft-authenticator-methods",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "List microsoftAuthenticatorAuthenticationMethods",
+      "description": "Get a list of the microsoftAuthenticatorAuthenticationMethod objects and their properties.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.authentication.ListMicrosoftAuthenticatorMethods",
+        "method": "GET",
+        "path": "/users/{user-id}/authentication/microsoftAuthenticatorMethods",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "$top",
+            "name": "$top",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$skip",
+            "name": "$skip",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$search",
+            "name": "$search",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$filter",
+            "name": "$filter",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$count",
+            "name": "$count",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$orderby",
+            "name": "$orderby",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.authentication.ListMicrosoftAuthenticatorMethodsInputs",
+      "outputSchemaName": "users.authentication.ListMicrosoftAuthenticatorMethodsOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$top": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Top",
+          "description": "Show only the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$skip": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Skip",
+          "description": "Skip the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$search": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Search",
+          "description": "Search items by search phrases",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$filter": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Filter",
+          "description": "Filter items by property values",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$count": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Count",
+          "description": "Include count of items",
+          "required": false,
+          "valueType": "boolean",
+          "typeHint": "boolean"
+        },
+        "$orderby": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Orderby",
+          "description": "Order items by property values",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-authentication-get-microsoft-authenticator-methods",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Get microsoftAuthenticatorAuthenticationMethod",
+      "description": "Read the properties and relationships of a microsoftAuthenticatorAuthenticationMethod object.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.authentication.GetMicrosoftAuthenticatorMethods",
+        "method": "GET",
+        "path": "/users/{user-id}/authentication/microsoftAuthenticatorMethods/{microsoftAuthenticatorAuthenticationMethod-id}",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "microsoftAuthenticatorAuthenticationMethod-id",
+            "name": "microsoftAuthenticatorAuthenticationMethod-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.authentication.GetMicrosoftAuthenticatorMethodsInputs",
+      "outputSchemaName": "users.authentication.GetMicrosoftAuthenticatorMethodsOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "microsoftAuthenticatorAuthenticationMethod-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "Microsoft Authenticator Authentication Method Id",
+          "description": "The unique identifier of microsoftAuthenticatorAuthenticationMethod",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-authentication-delete-microsoft-authenticator-methods",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Delete microsoftAuthenticatorAuthenticationMethod",
+      "description": "Delete a microsoftAuthenticatorAuthenticationMethod object.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.authentication.DeleteMicrosoftAuthenticatorMethods",
+        "method": "DELETE",
+        "path": "/users/{user-id}/authentication/microsoftAuthenticatorMethods/{microsoftAuthenticatorAuthenticationMethod-id}",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "microsoftAuthenticatorAuthenticationMethod-id",
+            "name": "microsoftAuthenticatorAuthenticationMethod-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "If-Match",
+            "name": "If-Match",
+            "in": "header",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          204
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.authentication.DeleteMicrosoftAuthenticatorMethodsInputs",
+      "outputSchemaName": "users.authentication.DeleteMicrosoftAuthenticatorMethodsOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "microsoftAuthenticatorAuthenticationMethod-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "Microsoft Authenticator Authentication Method Id",
+          "description": "The unique identifier of microsoftAuthenticatorAuthenticationMethod",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "If-Match": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "If Match",
+          "description": "ETag",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-authentication-list-password-methods",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Get passwordMethods from users",
+      "description": "Represents the password registered to a user for authentication. For security, the password itself is never returned in the object, but action can be taken to reset a password.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.authentication.ListPasswordMethods",
+        "method": "GET",
+        "path": "/users/{user-id}/authentication/passwordMethods",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "$top",
+            "name": "$top",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$skip",
+            "name": "$skip",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$search",
+            "name": "$search",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$filter",
+            "name": "$filter",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$count",
+            "name": "$count",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$orderby",
+            "name": "$orderby",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.authentication.ListPasswordMethodsInputs",
+      "outputSchemaName": "users.authentication.ListPasswordMethodsOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$top": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Top",
+          "description": "Show only the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$skip": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Skip",
+          "description": "Skip the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$search": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Search",
+          "description": "Search items by search phrases",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$filter": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Filter",
+          "description": "Filter items by property values",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$count": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Count",
+          "description": "Include count of items",
+          "required": false,
+          "valueType": "boolean",
+          "typeHint": "boolean"
+        },
+        "$orderby": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Orderby",
+          "description": "Order items by property values",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-authentication-list-phone-methods",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Get phoneMethods from users",
+      "description": "The phone numbers registered to a user for authentication.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.authentication.ListPhoneMethods",
+        "method": "GET",
+        "path": "/users/{user-id}/authentication/phoneMethods",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "$top",
+            "name": "$top",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$skip",
+            "name": "$skip",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$search",
+            "name": "$search",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$filter",
+            "name": "$filter",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$count",
+            "name": "$count",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$orderby",
+            "name": "$orderby",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.authentication.ListPhoneMethodsInputs",
+      "outputSchemaName": "users.authentication.ListPhoneMethodsOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$top": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Top",
+          "description": "Show only the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$skip": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Skip",
+          "description": "Skip the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$search": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Search",
+          "description": "Search items by search phrases",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$filter": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Filter",
+          "description": "Filter items by property values",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$count": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Count",
+          "description": "Include count of items",
+          "required": false,
+          "valueType": "boolean",
+          "typeHint": "boolean"
+        },
+        "$orderby": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Orderby",
+          "description": "Order items by property values",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-authentication-create-phone-methods",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Create phoneMethod",
+      "description": "Add a new phone authentication method for a user. A user may only have one phone of each type, captured in the phoneType property. This means, for example, adding a mobile phone to a user with a pre-existing mobile phone fails. Additionally, a user must always have a mobile phone before adding an alternateMobile phone. Adding a phone number makes it available for use in both Azure multi-factor authentication (MFA) and self-service password reset (SSPR), if enabled. Additionally, if a user is enabled by policy to use SMS sign-in and a mobile number is added, the system attempts to register the number for use in that system.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.authentication.CreatePhoneMethods",
+        "method": "POST",
+        "path": "/users/{user-id}/authentication/phoneMethods",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "body": {
+          "input": "body",
+          "contentType": "application/json"
+        },
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.authentication.CreatePhoneMethodsInputs",
+      "outputSchemaName": "users.authentication.CreatePhoneMethodsOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-authentication-get-phone-methods",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Get phoneMethods from users",
+      "description": "The phone numbers registered to a user for authentication.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.authentication.GetPhoneMethods",
+        "method": "GET",
+        "path": "/users/{user-id}/authentication/phoneMethods/{phoneAuthenticationMethod-id}",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "phoneAuthenticationMethod-id",
+            "name": "phoneAuthenticationMethod-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.authentication.GetPhoneMethodsInputs",
+      "outputSchemaName": "users.authentication.GetPhoneMethodsOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "phoneAuthenticationMethod-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "Phone Authentication Method Id",
+          "description": "The unique identifier of phoneAuthenticationMethod",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-authentication-update-phone-methods",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Update phoneAuthenticationMethod",
+      "description": "Update a user's phone number associated with a phone authentication method object. You can't change a phone's type. To change a phone's type, add a new number of the desired type and then delete the object with the original type. If a user is enabled by policy to use SMS to sign in and the mobile number is changed, the system will attempt to register the number for use in that system. Self-service operations aren't supported.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.authentication.UpdatePhoneMethods",
+        "method": "PATCH",
+        "path": "/users/{user-id}/authentication/phoneMethods/{phoneAuthenticationMethod-id}",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "phoneAuthenticationMethod-id",
+            "name": "phoneAuthenticationMethod-id",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "body": {
+          "input": "body",
+          "contentType": "application/json"
+        },
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.authentication.UpdatePhoneMethodsInputs",
+      "outputSchemaName": "users.authentication.UpdatePhoneMethodsOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "phoneAuthenticationMethod-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "Phone Authentication Method Id",
+          "description": "The unique identifier of phoneAuthenticationMethod",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-authentication-delete-phone-methods",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Delete navigation property phoneMethods for users",
+      "description": "Generated candidate for DELETE /users/{user-id}/authentication/phoneMethods/{phoneAuthenticationMethod-id}.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.authentication.DeletePhoneMethods",
+        "method": "DELETE",
+        "path": "/users/{user-id}/authentication/phoneMethods/{phoneAuthenticationMethod-id}",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "phoneAuthenticationMethod-id",
+            "name": "phoneAuthenticationMethod-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "If-Match",
+            "name": "If-Match",
+            "in": "header",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          204
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.authentication.DeletePhoneMethodsInputs",
+      "outputSchemaName": "users.authentication.DeletePhoneMethodsOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "phoneAuthenticationMethod-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "Phone Authentication Method Id",
+          "description": "The unique identifier of phoneAuthenticationMethod",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "If-Match": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "If Match",
+          "description": "ETag",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-list-direct-reports",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "List directReports (for agentUser)",
+      "description": "Get an agentUser's direct reports. Returns the users and contacts for whom this agent user is assigned as manager.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.ListDirectReports",
+        "method": "GET",
+        "path": "/users/{user-id}/directReports",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "ConsistencyLevel",
+            "name": "ConsistencyLevel",
+            "in": "header",
+            "required": false
+          },
+          {
+            "input": "$top",
+            "name": "$top",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$skip",
+            "name": "$skip",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$search",
+            "name": "$search",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$filter",
+            "name": "$filter",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$count",
+            "name": "$count",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$orderby",
+            "name": "$orderby",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.ListDirectReportsInputs",
+      "outputSchemaName": "users.ListDirectReportsOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "ConsistencyLevel": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "Consistency Level",
+          "description": "Indicates the requested consistency level. Documentation URL: https://docs.microsoft.com/graph/aad-advanced-queries",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$top": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Top",
+          "description": "Show only the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$skip": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Skip",
+          "description": "Skip the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$search": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Search",
+          "description": "Search items by search phrases",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$filter": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Filter",
+          "description": "Filter items by property values",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$count": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Count",
+          "description": "Include count of items",
+          "required": false,
+          "valueType": "boolean",
+          "typeHint": "boolean"
+        },
+        "$orderby": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Orderby",
+          "description": "Order items by property values",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-list-license-details",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Get licenseDetails from users",
+      "description": "A collection of this user's license details. Read-only.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.ListLicenseDetails",
+        "method": "GET",
+        "path": "/users/{user-id}/licenseDetails",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "$top",
+            "name": "$top",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$skip",
+            "name": "$skip",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$search",
+            "name": "$search",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$filter",
+            "name": "$filter",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$count",
+            "name": "$count",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$orderby",
+            "name": "$orderby",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.ListLicenseDetailsInputs",
+      "outputSchemaName": "users.ListLicenseDetailsOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$top": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Top",
+          "description": "Show only the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$skip": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Skip",
+          "description": "Skip the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$search": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Search",
+          "description": "Search items by search phrases",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$filter": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Filter",
+          "description": "Filter items by property values",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$count": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Count",
+          "description": "Include count of items",
+          "required": false,
+          "valueType": "boolean",
+          "typeHint": "boolean"
+        },
+        "$orderby": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Orderby",
+          "description": "Order items by property values",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-get-manager",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "List manager (for agentUser)",
+      "description": "Returns the user or organizational contact assigned as the agentUser's manager.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.GetManager",
+        "method": "GET",
+        "path": "/users/{user-id}/manager",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "ConsistencyLevel",
+            "name": "ConsistencyLevel",
+            "in": "header",
+            "required": false
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.GetManagerInputs",
+      "outputSchemaName": "users.GetManagerOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "ConsistencyLevel": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "Consistency Level",
+          "description": "Indicates the requested consistency level. Documentation URL: https://docs.microsoft.com/graph/aad-advanced-queries",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-list-member-of",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "List agentUser direct memberships",
+      "description": "Get groups, directory roles, and administrative units that the agentUser is a direct member of. This operation isn't transitive.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.ListMemberOf",
+        "method": "GET",
+        "path": "/users/{user-id}/memberOf",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "ConsistencyLevel",
+            "name": "ConsistencyLevel",
+            "in": "header",
+            "required": false
+          },
+          {
+            "input": "$top",
+            "name": "$top",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$skip",
+            "name": "$skip",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$search",
+            "name": "$search",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$filter",
+            "name": "$filter",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$count",
+            "name": "$count",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$orderby",
+            "name": "$orderby",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.ListMemberOfInputs",
+      "outputSchemaName": "users.ListMemberOfOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "ConsistencyLevel": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "Consistency Level",
+          "description": "Indicates the requested consistency level. Documentation URL: https://docs.microsoft.com/graph/aad-advanced-queries",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$top": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Top",
+          "description": "Show only the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$skip": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Skip",
+          "description": "Skip the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$search": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Search",
+          "description": "Search items by search phrases",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$filter": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Filter",
+          "description": "Filter items by property values",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$count": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Count",
+          "description": "Include count of items",
+          "required": false,
+          "valueType": "boolean",
+          "typeHint": "boolean"
+        },
+        "$orderby": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Orderby",
+          "description": "Order items by property values",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-user-assign-license",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Invoke action assignLicense",
+      "description": "Add or remove licenses for the user to enable or disable their use of Microsoft cloud offerings that the company has licenses to. For example, an organization can have a Microsoft 365 Enterprise E3 subscription with 100 licenses, and this request assigns one of those licenses to a specific user. You can also enable and disable specific plans associated with a subscription. Direct user licensing method is an alternative to group-based licensing.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.user.assignLicense",
+        "method": "POST",
+        "path": "/users/{user-id}/assignLicense",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "body": {
+          "input": "body",
+          "contentType": "application/json"
+        },
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.user.assignLicenseInputs",
+      "outputSchemaName": "users.user.assignLicenseOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-user-revoke-sign-in-sessions",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Invoke action revokeSignInSessions",
+      "description": "Invalidates all the refresh tokens issued to applications for a user (and session cookies in a user's browser), by resetting the signInSessionsValidFromDateTime user property to the current date-time. Typically, this operation is performed (by the user or an administrator) if the user has a lost or stolen device. This operation prevents access to the organization's data through applications on the device by requiring the user to sign in again to all applications that they consented to previously, independent of device.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.user.revokeSignInSessions",
+        "method": "POST",
+        "path": "/users/{user-id}/revokeSignInSessions",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.user.revokeSignInSessionsInputs",
+      "outputSchemaName": "users.user.revokeSignInSessionsOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-list-owned-devices",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Get ownedDevices from users",
+      "description": "Devices the user owns. Read-only. Nullable. Supports $expand and $filter (/$count eq 0, /$count ne 0, /$count eq 1, /$count ne 1).",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.ListOwnedDevices",
+        "method": "GET",
+        "path": "/users/{user-id}/ownedDevices",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "ConsistencyLevel",
+            "name": "ConsistencyLevel",
+            "in": "header",
+            "required": false
+          },
+          {
+            "input": "$top",
+            "name": "$top",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$skip",
+            "name": "$skip",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$search",
+            "name": "$search",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$filter",
+            "name": "$filter",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$count",
+            "name": "$count",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$orderby",
+            "name": "$orderby",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.ListOwnedDevicesInputs",
+      "outputSchemaName": "users.ListOwnedDevicesOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "ConsistencyLevel": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "Consistency Level",
+          "description": "Indicates the requested consistency level. Documentation URL: https://docs.microsoft.com/graph/aad-advanced-queries",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$top": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Top",
+          "description": "Show only the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$skip": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Skip",
+          "description": "Skip the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$search": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Search",
+          "description": "Search items by search phrases",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$filter": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Filter",
+          "description": "Filter items by property values",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$count": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Count",
+          "description": "Include count of items",
+          "required": false,
+          "valueType": "boolean",
+          "typeHint": "boolean"
+        },
+        "$orderby": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Orderby",
+          "description": "Order items by property values",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-list-registered-devices",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "Get registeredDevices from users",
+      "description": "Devices that are registered for the user. Read-only. Nullable. Supports $expand and returns up to 100 objects.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.ListRegisteredDevices",
+        "method": "GET",
+        "path": "/users/{user-id}/registeredDevices",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "ConsistencyLevel",
+            "name": "ConsistencyLevel",
+            "in": "header",
+            "required": false
+          },
+          {
+            "input": "$top",
+            "name": "$top",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$skip",
+            "name": "$skip",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$search",
+            "name": "$search",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$filter",
+            "name": "$filter",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$count",
+            "name": "$count",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$orderby",
+            "name": "$orderby",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.ListRegisteredDevicesInputs",
+      "outputSchemaName": "users.ListRegisteredDevicesOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "ConsistencyLevel": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "Consistency Level",
+          "description": "Indicates the requested consistency level. Documentation URL: https://docs.microsoft.com/graph/aad-advanced-queries",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$top": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Top",
+          "description": "Show only the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$skip": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Skip",
+          "description": "Skip the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$search": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Search",
+          "description": "Search items by search phrases",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$filter": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Filter",
+          "description": "Filter items by property values",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$count": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Count",
+          "description": "Include count of items",
+          "required": false,
+          "valueType": "boolean",
+          "typeHint": "boolean"
+        },
+        "$orderby": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Orderby",
+          "description": "Order items by property values",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    },
+    {
+      "id": "microsoft-365.users-list-transitive-member-of",
+      "integration": {
+        "integrationId": "microsoft-365",
+        "connection": "activeLink"
+      },
+      "vendor": "microsoft-365",
+      "name": "List transitiveMemberOf",
+      "description": "Get groups, directory roles, and administrative units that the agentUser is a member of through either direct or transitive membership.",
+      "category": "admin",
+      "operation": {
+        "source": "openapi",
+        "operationId": "users.ListTransitiveMemberOf",
+        "method": "GET",
+        "path": "/users/{user-id}/transitiveMemberOf",
+        "apiVersion": "v1.0",
+        "parameters": [
+          {
+            "input": "user-id",
+            "name": "user-id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "input": "ConsistencyLevel",
+            "name": "ConsistencyLevel",
+            "in": "header",
+            "required": false
+          },
+          {
+            "input": "$top",
+            "name": "$top",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$skip",
+            "name": "$skip",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$search",
+            "name": "$search",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$filter",
+            "name": "$filter",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$count",
+            "name": "$count",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$orderby",
+            "name": "$orderby",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$select",
+            "name": "$select",
+            "in": "query",
+            "required": false
+          },
+          {
+            "input": "$expand",
+            "name": "$expand",
+            "in": "query",
+            "required": false
+          }
+        ],
+        "successStatusCodes": [
+          200
+        ],
+        "response": {
+          "source": "body"
+        }
+      },
+      "inputSchemaName": "users.ListTransitiveMemberOfInputs",
+      "outputSchemaName": "users.ListTransitiveMemberOfOutputs",
+      "inputMeta": {
+        "user-id": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "User Id",
+          "description": "The unique identifier of user",
+          "required": true,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "ConsistencyLevel": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "Consistency Level",
+          "description": "Indicates the requested consistency level. Documentation URL: https://docs.microsoft.com/graph/aad-advanced-queries",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$top": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Top",
+          "description": "Show only the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$skip": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Skip",
+          "description": "Skip the first n items",
+          "required": false,
+          "valueType": "number",
+          "typeHint": "number"
+        },
+        "$search": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Search",
+          "description": "Search items by search phrases",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$filter": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Filter",
+          "description": "Filter items by property values",
+          "required": false,
+          "valueType": "text",
+          "typeHint": "text"
+        },
+        "$count": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Count",
+          "description": "Include count of items",
+          "required": false,
+          "valueType": "boolean",
+          "typeHint": "boolean"
+        },
+        "$orderby": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Orderby",
+          "description": "Order items by property values",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$select": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Select",
+          "description": "Select properties to be returned",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        },
+        "$expand": {
+          "allowedBindings": [
+            "literal",
+            "runtime"
+          ],
+          "label": "$Expand",
+          "description": "Expand related entities",
+          "required": false,
+          "valueType": "text_list",
+          "typeHint": "stringArray"
+        }
+      },
+      "outputMeta": {},
+      "review": {
+        "required": true,
+        "reasons": [
+          "Review request-body schema and flatten or map its fields.",
+          "Assign a product category, action label, audit action, permission, and output metadata.",
+          "Confirm idempotency, sensitive fields, entity mappings, and dynamic sources."
+        ]
+      },
+      "lifecycle": {
+        "status": "generated",
+        "smokeTests": []
+      }
+    }
+  ]
+}

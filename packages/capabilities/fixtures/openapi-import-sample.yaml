@@ -1,0 +1,34 @@
+openapi: 3.0.3
+servers:
+  - url: https://graph.microsoft.com/v1.0
+paths:
+  /users/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    patch:
+      operationId: user-update
+      summary: Update user
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '204':
+          description: Updated
+  /users/{userId}/revokeSignInSessions:
+    post:
+      operationId: user-revokeSignInSessions
+      summary: Revoke user sessions
+      responses:
+        '200':
+          description: Revoked
+components:
+  parameters:
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: Microsoft Graph user ID
+      schema:
+        type: string

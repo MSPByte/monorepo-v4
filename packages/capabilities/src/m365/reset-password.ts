@@ -27,6 +27,7 @@ export const m365IdentityResetPassword: Capability<
 > = {
   id: 'm365.identity.reset-password',
   vendor: 'microsoft-365',
+  integration: { integrationId: 'microsoft-365', connection: 'activeLink' },
   name: 'Reset M365 Password',
   description: 'Reset the password for a Microsoft 365 identity.',
   category: 'identity',

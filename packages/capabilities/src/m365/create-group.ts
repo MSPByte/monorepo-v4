@@ -22,6 +22,7 @@ const outputs = z.object({
 export const m365GroupCreate: Capability<z.infer<typeof inputs>, z.infer<typeof outputs>> = {
   id: 'm365.group.create',
   vendor: 'microsoft-365',
+  integration: { integrationId: 'microsoft-365', connection: 'activeLink' },
   name: 'Create M365 Group',
   description:
     'Create a Security or Microsoft 365 group in a tenant. Saves the group to the local DB immediately so downstream steps can wire it.',

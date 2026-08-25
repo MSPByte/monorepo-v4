@@ -18,6 +18,7 @@ export const sophosEndpointDelete: Capability<
 > = {
   id: 'sophos.endpoint.delete',
   vendor: 'sophos-partner',
+  integration: { integrationId: 'sophos-partner', connection: 'activeLink' },
   name: 'Delete Sophos Endpoint',
   description: 'Removes a Sophos endpoint from the Sophos console.',
   category: 'device',

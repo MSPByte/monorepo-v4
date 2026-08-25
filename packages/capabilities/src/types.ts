@@ -156,6 +156,23 @@ export interface OutputMetaEntry {
   valueType?: PackageFieldTypeId;
 }
 
+// Declares the connection a capability needs before it can be offered to a
+// package author. This is intentionally independent of `vendor`, which is a
+// presentation label retained for the existing catalog UI.
+//
+// `configured` is for integrations with tenant-wide credentials (Datto, Cove,
+// global HaloPSA operations). `activeLink` is for integrations whose actions
+// require at least one usable tenant/site link (for example Microsoft 365).
+export interface CapabilityIntegrationRequirement {
+  integrationId: string;
+  connection: 'configured' | 'activeLink';
+}
+
+export interface CapabilityAvailabilityInventory {
+  configuredIntegrationIds: ReadonlySet<string>;
+  activeLinkIntegrationIds: ReadonlySet<string>;
+}
+
 // Row shape the worker resolves for Sophos endpoint capabilities.
 export interface SophosEndpointRow {
   id: string;
@@ -287,6 +304,10 @@ export interface Capability<Inputs = unknown, Outputs = unknown> {
   // authoring catalog. Use only for narrow compatibility bridges.
   hidden?: boolean;
   vendor: string;
+  integration?: CapabilityIntegrationRequirement;
+  // Present for endpoint-level capabilities derived from a reviewed OpenAPI
+  // operation. Curated capabilities intentionally omit this.
+  operation?: import('./openapi.js').OpenApiOperationManifest;
   name: string;
   description: string;
   category: 'identity' | 'license' | 'group' | 'role' | 'device' | 'admin' | 'site';
@@ -326,3 +347,14 @@ export interface StepConfig {
 }
 
 export type AnyCapability = Capability<any, any>;
+
+export function isCapabilityAvailable(
+  capability: AnyCapability,
+  inventory: CapabilityAvailabilityInventory,
+): boolean {
+  const requirement = capability.integration;
+  if (!requirement) return true;
+  if (!inventory.configuredIntegrationIds.has(requirement.integrationId)) return false;
+  return requirement.connection !== 'activeLink'
+    || inventory.activeLinkIntegrationIds.has(requirement.integrationId);
+}

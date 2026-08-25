@@ -34,6 +34,7 @@ export const coreHaloPSATicketAddNote: Capability<
 > = {
   id: 'core.halopsa.ticket.add_note',
   vendor: 'halopsa',
+  integration: { integrationId: 'halopsa', connection: 'configured' },
   name: 'Add HaloPSA Ticket Note',
   description:
     'Posts a note (optionally with tracked time) to a HaloPSA ticket. ' +

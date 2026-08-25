@@ -20,6 +20,7 @@ import { sql } from 'drizzle-orm';
 import {
   getCapability,
   getGenerator,
+  isCapabilityAvailable,
   listCapabilities,
   listGenerators,
   FAILURE_CONTEXT_PATHS,
@@ -40,6 +41,11 @@ import {
   packageMatchesScope,
   readPackageScope,
 } from './package-scope.js';
+import {
+  findUnavailableCapabilities,
+  loadCapabilityAvailabilityInventory,
+  unavailableCapabilitiesMessage,
+} from '../capability-availability.js';
 
 // Bindings are validated shallowly here — the worker's zod.parse on
 // capability.inputs is the real gate. The builder UI is trusted to compose
@@ -639,6 +645,14 @@ export const packagesRouter = t.router({
       if (!directLinkScope.ok) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: directLinkScope.message });
       }
+      const availability = await loadCapabilityAvailabilityInventory(ctx.db);
+      const unavailable = findUnavailableCapabilities(
+        [...input.steps, ...input.outcomeSteps.onSuccess, ...input.outcomeSteps.onFailure],
+        availability,
+      );
+      if (unavailable.length > 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: unavailableCapabilitiesMessage(unavailable) });
+      }
 
       // Serializable txn: the cycle + depth check reads package_dependencies
       // and any concurrent save on any package in the touched subgraph will
@@ -751,6 +765,16 @@ export const packagesRouter = t.router({
         );
         if (!directLinkScope.ok) {
           throw new TRPCError({ code: 'BAD_REQUEST', message: directLinkScope.message });
+        }
+      }
+      if (input.steps || input.outcomeSteps) {
+        const availability = await loadCapabilityAvailabilityInventory(ctx.db);
+        const unavailable = findUnavailableCapabilities(
+          [...(input.steps ?? []), ...(input.outcomeSteps?.onSuccess ?? []), ...(input.outcomeSteps?.onFailure ?? [])],
+          availability,
+        );
+        if (unavailable.length > 0) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: unavailableCapabilitiesMessage(unavailable) });
         }
       }
 
@@ -1341,13 +1365,20 @@ export const packagesRouter = t.router({
   // Static registry metadata for the builder UI (Phase 2). Exposed now so the
   // frontend can render "which capability does this run" labels without
   // duplicating the registry.
-  capabilities: authProcedure.query(() => {
-      return listCapabilities().filter((capability) => !capability.hidden).map((capability) => ({
+  capabilities: authProcedure.query(async ({ ctx }) => {
+      if (!ctx.can('Packages.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Read required' });
+      }
+      const availability = await loadCapabilityAvailabilityInventory(ctx.db);
+      return listCapabilities()
+        .filter((capability) => !capability.hidden && isCapabilityAvailable(capability, availability))
+        .map((capability) => ({
         id: capability.id,
         vendor: capability.vendor,
         name: capability.name,
         description: capability.description,
         category: capability.category,
+        integration: capability.integration,
         inputMeta: Object.fromEntries(
           Object.entries(capability.inputMeta).map(([name, meta]) => {
             const fieldType = resolveInputFieldType(meta);

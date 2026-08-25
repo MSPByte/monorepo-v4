@@ -19,6 +19,7 @@ export const m365GroupAddMember: Capability<
 > = {
   id: 'm365.group.add-member',
   vendor: 'microsoft-365',
+  integration: { integrationId: 'microsoft-365', connection: 'activeLink' },
   name: 'Add M365 User to Group',
   description: 'Add a Microsoft 365 user to a security or Microsoft 365 group.',
   category: 'group',

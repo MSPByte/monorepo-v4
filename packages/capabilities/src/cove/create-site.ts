@@ -25,6 +25,7 @@ export const coveCreateSite: Capability<
 > = {
   id: 'cove.site.create',
   vendor: 'cove',
+  integration: { integrationId: 'cove', connection: 'configured' },
   name: 'Create Cove Site',
   description:
     'Creates a new Cove partner account under the MSP\'s root Cove partner and links it to an MSPByte site. ' +

@@ -159,6 +159,36 @@ export class M365GraphClient {
     return res;
   }
 
+  // Controlled primitive for reviewed OpenAPI operations. Callers receive the
+  // same token handling and error normalization as the typed Graph methods;
+  // URL selection stays in M365Connector, not in package capabilities.
+  async request<T>(
+    url: string,
+    request: { method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; headers?: Record<string, string>; body?: unknown },
+  ): Promise<{ data: T | undefined; res: Response }> {
+    const token = await this.getToken();
+    const headers = new Headers(request.headers);
+    headers.set('Authorization', `Bearer ${token}`);
+    if (request.body !== undefined) headers.set('Content-Type', 'application/json');
+    const res = await fetch(url, {
+      method: request.method,
+      headers,
+      body: request.body === undefined ? undefined : JSON.stringify(request.body),
+    });
+    if (res.status === 401) throw Object.assign(new Error('M365 auth rejected'), { failParent: true });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Graph API ${request.method} error ${res.status}: ${url} – ${body}`);
+    }
+    const text = await res.text();
+    if (!text) return { data: undefined, res };
+    try {
+      return { data: JSON.parse(text) as T, res };
+    } catch {
+      return { data: text as T, res };
+    }
+  }
+
   private async fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
     for (let attempt = 0; ; attempt++) {
       const res = await fetch(url, init);

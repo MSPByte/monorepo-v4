@@ -21,6 +21,7 @@ export const sophosEndpointToggleTamper: Capability<
 > = {
   id: 'sophos.endpoint.toggleTamper',
   vendor: 'sophos-partner',
+  integration: { integrationId: 'sophos-partner', connection: 'activeLink' },
   name: 'Toggle Sophos Tamper Protection',
   description:
     'Sets tamper protection on or off for one or more selected Sophos-managed endpoints.',
@@ -133,6 +134,7 @@ function legacySingleToggle(
     id,
     hidden: true,
     vendor: 'sophos-partner',
+    integration: { integrationId: 'sophos-partner', connection: 'activeLink' },
     name: 'Legacy Sophos tamper protection action',
     description: 'Compatibility bridge for a saved package.',
     category: 'device',
@@ -184,6 +186,7 @@ export const legacySophosEndpointsEnableTamper: Capability<
   id: 'sophos.endpoint.enableTamperSelection',
   hidden: true,
   vendor: 'sophos-partner',
+  integration: { integrationId: 'sophos-partner', connection: 'activeLink' },
   name: 'Legacy Sophos tamper protection action',
   description: 'Compatibility bridge for a saved package.',
   category: 'device',
