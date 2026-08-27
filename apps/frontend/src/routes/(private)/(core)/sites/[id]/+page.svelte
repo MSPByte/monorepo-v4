@@ -13,7 +13,6 @@
   import FlagPill from './_components/flag-pill.svelte';
   import HealthMeter from './_components/health-meter.svelte';
   import TribalNote from './_components/tribal-note.svelte';
-  import ContactRow from './_components/contact-row.svelte';
   import Legend from './_components/legend.svelte';
   import SourceGlyph from './_components/source-glyph.svelte';
   import FactEditor from './_components/fact-editor.svelte';
@@ -559,20 +558,6 @@
         {:else}
           <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
             No tribal notes
-          </p>
-        {/if}
-      </SectionPanel>
-
-      <SectionPanel code="@" title="KEY CONTACTS">
-        {#if profile.contacts.length}
-          <dl>
-            {#each profile.contacts as contact, i (`${contact.role}-${i}`)}
-              <ContactRow {contact} />
-            {/each}
-          </dl>
-        {:else}
-          <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-            No contacts on file
           </p>
         {/if}
       </SectionPanel>

@@ -59,15 +59,6 @@ export type ProfileNote = {
   updatedAt: string;
 };
 
-export type ProfileContact = {
-  role: string;
-  name: string;
-  email: string | null;
-  phone: string | null;
-  source: FieldSource;
-  origin: string | null;
-};
-
 export type ProfileIntegration = {
   id: string;
   integrationId: string;
@@ -115,7 +106,6 @@ export type SiteProfileResponse = {
   metrics: ProfileMetric[];
   stack: StackEntry[];
   notes: ProfileNote[];
-  contacts: ProfileContact[];
   integrations: ProfileIntegration[];
   network: {
     assets: NetworkAsset[];

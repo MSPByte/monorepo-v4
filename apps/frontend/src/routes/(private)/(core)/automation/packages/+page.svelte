@@ -60,6 +60,7 @@
   let runDialogPackageId = $state<string | undefined>(undefined);
   let scheduleDialogTarget = $state<PackageRow | null>(null);
   let deleteTarget = $state<PackageRow | null>(null);
+  let deleteHistoryAcknowledged = $state(false);
 
   const invalidate = () => {
     refreshKey++;
@@ -87,15 +88,23 @@
   }
 
   async function deleteConfirmed() {
-    if (!deleteTarget) return;
+    if (!deleteTarget || !deleteHistoryAcknowledged) return;
     try {
-      await trpc.packages.delete.mutate({ id: deleteTarget.id });
+      await trpc.packages.delete.mutate({
+        id: deleteTarget.id,
+        deleteRunHistory: true,
+      });
       toast.success('Package deleted');
       deleteTarget = null;
       invalidate();
     } catch (err) {
       toast.error(toUserMessage(err, 'Failed to delete'));
     }
+  }
+
+  function openDeleteDialog(target: PackageRow) {
+    deleteTarget = target;
+    deleteHistoryAcknowledged = false;
   }
 
   const columns: DataTableColumn<PackageRow>[] = [
@@ -195,7 +204,7 @@
         onclick: (rows) => {
           const r = rows[0];
           if (!r) return;
-          deleteTarget = r;
+          openDeleteDialog(r);
         },
       });
     }
@@ -364,7 +373,7 @@
           {/if}
           <DropdownMenu.Item
             class="gap-2 text-destructive focus:text-destructive"
-            onclick={() => (deleteTarget = row)}
+            onclick={() => openDeleteDialog(row)}
           >
             <Trash2 class="size-3.5" /> Delete
           </DropdownMenu.Item>
@@ -427,24 +436,32 @@
 <AlertDialog.Root
   open={deleteTarget !== null}
   onOpenChange={(o) => {
-    if (!o) deleteTarget = null;
+    if (!o) {
+      deleteTarget = null;
+      deleteHistoryAcknowledged = false;
+    }
   }}
 >
   <AlertDialog.Content>
     <AlertDialog.Header>
       <AlertDialog.Title>Delete “{deleteTarget?.name ?? ''}”?</AlertDialog.Title>
       <AlertDialog.Description>
-        This can't be undone. Runs that reference this package will block the delete — archive it
-        instead if you need to keep history.
+        This permanently removes the package and its run history. Packages with scheduled or active
+        runs, or packages used by another package, cannot be deleted.
       </AlertDialog.Description>
     </AlertDialog.Header>
+    <label class="flex items-start gap-2 text-sm">
+      <input class="mt-0.5" type="checkbox" bind:checked={deleteHistoryAcknowledged} />
+      <span>I understand that this permanently deletes the package and its run history.</span>
+    </label>
     <AlertDialog.Footer>
       <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
       <AlertDialog.Action
         class="bg-destructive text-destructive-foreground hover:bg-destructive/80"
+        disabled={!deleteHistoryAcknowledged}
         onclick={deleteConfirmed}
       >
-        Delete
+        Delete package
       </AlertDialog.Action>
     </AlertDialog.Footer>
   </AlertDialog.Content>

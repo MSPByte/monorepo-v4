@@ -4,6 +4,7 @@ import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import {
   reports,
   userReportPrefs,
+  sites,
   integrationLinks,
   m365Identities,
   m365IdentityGroups,
@@ -12,11 +13,20 @@ import {
   m365Licenses,
   m365Policies,
   m365Devices,
+  m365OAuthGrants,
+  m365DomainConfig,
+  m365TeamsConfig,
+  m365ExchangeConfigs,
+  m365RiskyUsers,
+  m365MailboxForwarding,
+  m365InboxRules,
   sophosEndpoints,
   sophosFirewallsWithSite,
   sophosFirewallLicenses,
+  sophosLicenses,
   dattoEndpoints,
   coveEndpoints,
+  haloPsaRecurringItems,
   assets
 } from '@mspbyte/drizzle';
 import {
@@ -31,6 +41,7 @@ import { t, authProcedure } from '../trpc.js';
 import type { Context } from '../context.js';
 import { loadGroupTargets } from './group-targets.js';
 import { queryTableData, tableDataInputSchema, type TableDataInput } from './table-data.js';
+import { applyJoins, JoinCache, joinFieldsMeta } from './reports-joins.js';
 
 // -- permissions ------------------------------------------------------------
 
@@ -60,12 +71,24 @@ function requireReportsDelete(ctx: Context) {
 const SOURCE_TABLES: Record<string, unknown> = {
   assets,
   m365Identities,
+  m365Groups,
+  m365Licenses,
   m365Policies,
   m365Devices,
+  m365OAuthGrants,
+  m365DomainConfig,
+  m365TeamsConfig,
+  m365ExchangeConfigs,
+  m365RiskyUsers,
+  m365MailboxForwarding,
+  m365InboxRules,
   sophosEndpoints,
   sophosFirewalls: sophosFirewallsWithSite,
+  sophosLicenses,
+  sophosFirewallLicenses,
   dattoEndpoints,
-  coveEndpoints
+  coveEndpoints,
+  haloPsaRecurringItems
 };
 
 function getSourceEntry(name: string): { shape: PolicyTableShape; table: unknown } | null {
@@ -115,8 +138,15 @@ const reportDefinitionSchema = z.object({
 
 type ReportDefinition = z.infer<typeof reportDefinitionSchema>;
 
-/** Fields with trackable:false are display-only and cannot be sorted at the DB level. */
+function isJoinKey(shape: PolicyTableShape, column: string): boolean {
+  return (shape.joins ?? []).some((j) => j.key === column);
+}
+
+/** Display-only columns cannot be sorted at the DB level. This covers both
+ * native fields marked trackable:false and every joined field, since joins
+ * are hydrated post-query and have no SQL column to sort on. */
 function isDisplayOnly(shape: PolicyTableShape, column: string): boolean {
+  if (isJoinKey(shape, column)) return true;
   return shape.shape[column]?.trackable === false;
 }
 
@@ -164,7 +194,8 @@ function sqlUuidIn(column: string, values: readonly string[]): SQL {
 
 function validateDefinition(shape: PolicyTableShape, def: ReportDefinition): void {
   const fields: SchemaFields = shape.shape;
-  const known = new Set(Object.keys(fields));
+  const joinKeys = new Set((shape.joins ?? []).map((j) => j.key));
+  const known = new Set([...Object.keys(fields), ...joinKeys]);
 
   for (const col of def.columns) {
     if (!known.has(col)) {
@@ -335,72 +366,61 @@ async function decorateFirewallRows(
   });
 }
 
-async function decorateReportRows(
+/**
+ * Legacy in-place decorators for source-specific behavior the declarative
+ * joins system doesn't cover: sophos firewall license summary (needs a
+ * jsonb_array_length SQL check), and the M365 identity assignedLicenses /
+ * assignedRoleTemplateIds column rewrite from IDs to friendly names.
+ * Declarative joins in `shape.joins` are applied afterwards by `applyJoins`.
+ */
+async function runLegacyDecorators(
   ctx: Context,
   sourceName: string,
-  rows: Record<string, unknown>[]
+  rows: Record<string, unknown>[],
+  cache: JoinCache
 ): Promise<Record<string, unknown>[]> {
+  if (rows.length === 0) return rows;
   if (sourceName === 'sophosFirewalls') return decorateFirewallRows(ctx, rows);
-  if (sourceName !== 'm365Identities' || rows.length === 0) return rows;
+  if (sourceName !== 'm365Identities') return rows;
 
-  const identities = rows.filter(
-    (row): row is Record<string, unknown> & { id: string } => typeof row.id === 'string'
-  );
-  const identityIds = identities.map((row) => row.id);
-  if (!identityIds.length) return rows;
-
-  const identityLinkIds = [
-    ...new Set(
-      identities
-        .map((identity) => identity.linkId)
-        .filter((id): id is string => typeof id === 'string')
-    )
-  ];
-  const [licenses, roles, memberships, links] = await Promise.all([
-    ctx.db
-      .select({ externalId: m365Licenses.externalId, friendlyName: m365Licenses.friendlyName })
-      .from(m365Licenses),
-    ctx.db.select({ templateId: m365Roles.templateId, name: m365Roles.name }).from(m365Roles),
-    ctx.db
-      .select({ identityId: m365IdentityGroups.identityId, name: m365Groups.name })
-      .from(m365IdentityGroups)
-      .innerJoin(m365Groups, eq(m365IdentityGroups.groupId, m365Groups.id))
-      .where(inArray(m365IdentityGroups.identityId, identityIds)),
-    identityLinkIds.length
-      ? ctx.db
-          .select({
-            id: integrationLinks.id,
-            name: integrationLinks.name,
-            externalId: integrationLinks.externalId
-          })
-          .from(integrationLinks)
-          .where(inArray(integrationLinks.id, identityLinkIds))
-      : Promise.resolve([])
+  const [licenseNames, roleNames] = await Promise.all([
+    cache.load('legacy:m365LicenseNames', async () => {
+      const rows = await ctx.db
+        .select({ externalId: m365Licenses.externalId, friendlyName: m365Licenses.friendlyName })
+        .from(m365Licenses);
+      return new Map(rows.map((r) => [r.externalId, r.friendlyName]));
+    }),
+    cache.load('legacy:m365RoleNames', async () => {
+      const rows = await ctx.db
+        .select({ templateId: m365Roles.templateId, name: m365Roles.name })
+        .from(m365Roles);
+      return new Map(rows.map((r) => [r.templateId, r.name]));
+    })
   ]);
-  const licenseNames = new Map(licenses.map((row) => [row.externalId, row.friendlyName]));
-  const roleNames = new Map(roles.map((row) => [row.templateId, row.name]));
-  const tenantNames = new Map(
-    links.map((link) => [link.id, link.name ?? link.externalId ?? link.id])
-  );
-  const groupNames = new Map<string, string[]>();
-  for (const membership of memberships) {
-    groupNames.set(membership.identityId, [
-      ...(groupNames.get(membership.identityId) ?? []),
-      membership.name
-    ]);
-  }
 
-  return identities.map((row) => ({
-    ...row,
-    assignedLicenses: Array.isArray(row.assignedLicenses)
-      ? row.assignedLicenses.map((id) => licenseNames.get(String(id)) ?? String(id))
-      : row.assignedLicenses,
-    assignedRoleTemplateIds: Array.isArray(row.assignedRoleTemplateIds)
-      ? row.assignedRoleTemplateIds.map((id) => roleNames.get(String(id)) ?? String(id))
-      : row.assignedRoleTemplateIds,
-    groupNames: groupNames.get(row.id) ?? [],
-    tenantName: typeof row.linkId === 'string' ? (tenantNames.get(row.linkId) ?? row.linkId) : null
-  }));
+  for (const row of rows) {
+    if (Array.isArray(row.assignedLicenses)) {
+      row.assignedLicenses = row.assignedLicenses.map(
+        (id) => licenseNames.get(String(id)) ?? String(id)
+      );
+    }
+    if (Array.isArray(row.assignedRoleTemplateIds)) {
+      row.assignedRoleTemplateIds = row.assignedRoleTemplateIds.map(
+        (id) => roleNames.get(String(id)) ?? String(id)
+      );
+    }
+  }
+  return rows;
+}
+
+async function decorateReportRows(
+  ctx: Context,
+  shape: PolicyTableShape,
+  rows: Record<string, unknown>[],
+  cache: JoinCache
+): Promise<Record<string, unknown>[]> {
+  const withLegacy = await runLegacyDecorators(ctx, shape.table, rows, cache);
+  return applyJoins(ctx, shape, withLegacy, cache);
 }
 
 // -- scope resolution -------------------------------------------------------
@@ -655,6 +675,102 @@ const savePrefsInput = z.object({
   favoriteReportIds: z.array(z.string().uuid()).optional()
 });
 
+/** Hard cap on rows a single bulk export returns. Exports larger than this
+ * are silently truncated and the response is flagged `truncated: true` so the
+ * client can warn the user. Executive reports don't need more than this. */
+const MAX_EXPORT_ROWS = 100_000;
+const BULK_PAGE_SIZE = 1000;
+
+type PreparedRun =
+  | { empty: true }
+  | {
+      empty: false;
+      entry: NonNullable<ReturnType<typeof getSourceEntry>>;
+      merged: TableDataInput;
+      defaultSort: { column: string; direction: 'asc' | 'desc' } | undefined;
+      combinedWhere: SQL | undefined;
+    };
+
+/**
+ * Shared setup for `run` / `runBulk`: resolves the definition (from saved
+ * report id or inline), validates it, resolves scope, and builds the WHERE
+ * clause. Returns everything a paged query needs.
+ */
+async function prepareReportRun(
+  ctx: Context,
+  input: z.infer<typeof runReportInput>
+): Promise<PreparedRun> {
+  let sourceName: string;
+  let definition: ReportDefinition;
+  if (input.reportId) {
+    const [row] = await ctx.db
+      .select()
+      .from(reports)
+      .where(eq(reports.id, input.reportId))
+      .limit(1);
+    if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found' });
+    sourceName = row.source;
+    definition = reportDefinitionSchema.parse(row.definition);
+  } else {
+    if (!input.source || !input.definition) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'Either reportId or (source + definition) is required'
+      });
+    }
+    sourceName = input.source;
+    definition = input.definition;
+  }
+
+  const entry = getSourceEntry(sourceName);
+  if (!entry) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: `Unknown or unsupported source "${sourceName}"`
+    });
+  }
+  validateDefinition(entry.shape, definition);
+
+  const prefs = await loadPrefs(ctx);
+  const scope = await resolveScope(
+    ctx,
+    prefs ? { scopeKind: prefs.scopeKind, scopeIds: prefs.scopeIds ?? [] } : null,
+    input.adhocScope
+  );
+  if (scope.kind === 'empty') return { empty: true };
+
+  const scopeWhere = await buildScopeWhere(ctx, entry.shape, scope);
+  const requirementWhere = buildLicenseWhere(definition.filters);
+
+  const merged: TableDataInput = {
+    ...input.table,
+    filters: [
+      ...(input.table.filters ?? []),
+      ...definition.filters
+        .filter(
+          (filter) =>
+            !isRequirementFilter(filter) &&
+            !isLicenseSetFilter(filter) &&
+            !isFirewallHasLicensesFilter(filter)
+        )
+        .map((filter) => ({
+          ...filter,
+          operator: filter.operator as NonNullable<TableDataInput['filters']>[number]['operator'],
+          value: filter.value as string | number | boolean | undefined
+        }))
+    ]
+  };
+  const defaultSort = definition.sort
+    ? { column: definition.sort.column, direction: definition.sort.direction }
+    : undefined;
+  const combinedWhere =
+    scopeWhere && requirementWhere
+      ? and(scopeWhere, requirementWhere)
+      : (scopeWhere ?? requirementWhere);
+
+  return { empty: false, entry, merged, defaultSort, combinedWhere };
+}
+
 export const reportsRouter = t.router({
   // Lists sources Reports can query (those with siteScope defined + an actual
   // drizzle table backing them).
@@ -666,6 +782,7 @@ export const reportsRouter = t.router({
       providerId: s.providerId ?? null,
       route: s.route?.path ?? null,
       shape: s.shape,
+      joinFields: joinFieldsMeta(s),
       licenseRequirements: s.table === 'm365Identities' ? M365_LICENSE_REQUIREMENTS : []
     }));
   }),
@@ -673,6 +790,22 @@ export const reportsRouter = t.router({
   list: authProcedure.query(async ({ ctx }) => {
     requireReportsRead(ctx);
     return ctx.db.select().from(reports).orderBy(reports.name);
+  }),
+
+  // The report scope picker only needs stable site identities.  Do not reuse
+  // `sites.list` here: that endpoint is governed by Sites.Read and selects
+  // from the metrics view, neither of which should prevent a Reports.Read
+  // user from choosing an allowed report scope.
+  listScopeSites: authProcedure.query(async ({ ctx }) => {
+    requireReportsRead(ctx);
+    const scope = ctx.scopeFor('Reports.Read');
+    if (scope !== 'all' && scope.length === 0) return [];
+
+    return ctx.db
+      .select({ id: sites.id, name: sites.name })
+      .from(sites)
+      .where(scope === 'all' ? undefined : inArray(sites.id, [...scope]))
+      .orderBy(sites.name);
   }),
 
   listFilterValues: authProcedure
@@ -764,47 +897,8 @@ export const reportsRouter = t.router({
 
   run: authProcedure.input(runReportInput).mutation(async ({ ctx, input }) => {
     requireReportsRead(ctx);
-
-    // Resolve definition: either from a saved report or an inline definition.
-    let sourceName: string;
-    let definition: ReportDefinition;
-    if (input.reportId) {
-      const [row] = await ctx.db
-        .select()
-        .from(reports)
-        .where(eq(reports.id, input.reportId))
-        .limit(1);
-      if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found' });
-      sourceName = row.source;
-      definition = reportDefinitionSchema.parse(row.definition);
-    } else {
-      if (!input.source || !input.definition) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Either reportId or (source + definition) is required'
-        });
-      }
-      sourceName = input.source;
-      definition = input.definition;
-    }
-
-    const entry = getSourceEntry(sourceName);
-    if (!entry) {
-      throw new TRPCError({
-        code: 'BAD_REQUEST',
-        message: `Unknown or unsupported source "${sourceName}"`
-      });
-    }
-    validateDefinition(entry.shape, definition);
-
-    const prefs = await loadPrefs(ctx);
-    const scope = await resolveScope(
-      ctx,
-      prefs ? { scopeKind: prefs.scopeKind, scopeIds: prefs.scopeIds ?? [] } : null,
-      input.adhocScope
-    );
-
-    if (scope.kind === 'empty') {
+    const prepared = await prepareReportRun(ctx, input);
+    if (prepared.empty) {
       return {
         rows: [],
         total: 0,
@@ -813,33 +907,7 @@ export const reportsRouter = t.router({
         pageCount: 0
       };
     }
-
-    const scopeWhere = await buildScopeWhere(ctx, entry.shape, scope);
-    const requirementWhere = buildLicenseWhere(definition.filters);
-
-    // Merge the definition's saved filters into the runtime table input so both
-    // the persisted filters and any ad-hoc filters the UI sends apply.
-    const merged = {
-      ...input.table,
-      filters: [
-        ...(input.table.filters ?? []),
-        ...definition.filters
-          .filter(
-            (filter) =>
-              !isRequirementFilter(filter) &&
-              !isLicenseSetFilter(filter) &&
-              !isFirewallHasLicensesFilter(filter)
-          )
-          .map((filter) => ({
-            ...filter,
-            operator: filter.operator as NonNullable<TableDataInput['filters']>[number]['operator'],
-            value: filter.value as string | number | boolean | undefined
-          }))
-      ]
-    };
-    const defaultSort = definition.sort
-      ? { column: definition.sort.column, direction: definition.sort.direction }
-      : undefined;
+    const { entry, merged, defaultSort, combinedWhere } = prepared;
 
     const result = await queryTableData<Record<string, unknown>>(
       ctx.db,
@@ -848,11 +916,63 @@ export const reportsRouter = t.router({
       undefined,
       defaultSort,
       undefined,
-      scopeWhere && requirementWhere
-        ? and(scopeWhere, requirementWhere)
-        : (scopeWhere ?? requirementWhere)
+      combinedWhere
     );
-    return { ...result, rows: await decorateReportRows(ctx, sourceName, result.rows) };
+    return {
+      ...result,
+      rows: await decorateReportRows(ctx, entry.shape, result.rows, new JoinCache())
+    };
+  }),
+
+  /**
+   * Server-side bulk export. Runs the same query as `run` but loops pages
+   * server-side with a shared JoinCache so reference tables (m365Licenses,
+   * m365Roles, integration_links) are loaded once per export instead of per
+   * page. Enforces `MAX_EXPORT_ROWS`; the client pairs this with CSV
+   * formatting so the export path is a single round trip.
+   */
+  runBulk: authProcedure.input(runReportInput).mutation(async ({ ctx, input }) => {
+    requireReportsRead(ctx);
+    const prepared = await prepareReportRun(ctx, input);
+    if (prepared.empty) {
+      return { rows: [], total: 0, truncated: false };
+    }
+    const { entry, merged, defaultSort, combinedWhere } = prepared;
+
+    const cache = new JoinCache();
+    const collected: Record<string, unknown>[] = [];
+    let total = 0;
+    let truncated = false;
+    let page = 1;
+
+    while (true) {
+      const pageInput = { ...merged, page, pageSize: BULK_PAGE_SIZE };
+      const result = await queryTableData<Record<string, unknown>>(
+        ctx.db,
+        entry.table,
+        pageInput,
+        undefined,
+        defaultSort,
+        undefined,
+        combinedWhere
+      );
+      total = result.total;
+      if (result.rows.length === 0) break;
+
+      const remaining = MAX_EXPORT_ROWS - collected.length;
+      const slice = result.rows.slice(0, remaining);
+      const decorated = await decorateReportRows(ctx, entry.shape, slice, cache);
+      collected.push(...decorated);
+
+      if (collected.length >= MAX_EXPORT_ROWS) {
+        truncated = result.total > MAX_EXPORT_ROWS;
+        break;
+      }
+      if (page >= result.pageCount) break;
+      page += 1;
+    }
+
+    return { rows: collected, total, truncated };
   }),
 
   getMyPrefs: authProcedure.query(async ({ ctx }) => {

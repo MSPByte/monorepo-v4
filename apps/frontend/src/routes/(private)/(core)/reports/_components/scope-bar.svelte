@@ -22,8 +22,8 @@
   }));
 
   const sitesQuery = createQuery(() => ({
-    queryKey: ['sites.list'],
-    queryFn: () => trpc.sites.list.query(),
+    queryKey: ['reports.listScopeSites'],
+    queryFn: () => trpc.reports.listScopeSites.query(),
     staleTime: 5 * 60_000,
   }));
 

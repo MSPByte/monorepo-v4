@@ -93,22 +93,6 @@ export const M365IdentitiesShape: SchemaFields = {
       valueColumn: 'templateId',
       labelColumn: 'name'
     }
-  },
-  groupNames: {
-    label: 'Groups',
-    type: 'string',
-    modality: 'array',
-    trackable: false,
-    ingestPath: 'groupNames',
-    required: false
-  },
-  tenantName: {
-    label: 'Tenant Name',
-    type: 'string',
-    modality: 'single',
-    trackable: false,
-    ingestPath: 'tenantName',
-    required: false
   }
 };
 

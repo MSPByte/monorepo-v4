@@ -25,6 +25,7 @@
     description: string | null;
     openFindingCount: number;
     assetCount: number;
+    completenessScore: number;
     sources: string[];
     sourceList: string;
   };
@@ -37,6 +38,14 @@
 
   const columns: DataTableColumn<SiteRow>[] = [
     textColumn<SiteRow>('name', 'Site'),
+    {
+      key: 'completenessScore',
+      title: 'Completeness',
+      sortable: true,
+      cell: completenessCell,
+      width: '130px',
+      filter: { label: 'Completeness', operators: ['eq', 'lt', 'gt', 'lte', 'gte'], type: 'number' },
+    },
     numberColumn<SiteRow>('openFindingCount', 'Open Findings'),
     numberColumn<SiteRow>('assetCount', 'Assets'),
     {
@@ -74,6 +83,10 @@
       <SourceBadge {source} />
     {/each}
   </span>
+{/snippet}
+
+{#snippet completenessCell({ value }: { value: number })}
+  <span class="font-mono text-sm tabular-nums">{value}%</span>
 {/snippet}
 
 {#snippet strip(api: SignalStripApi)}

@@ -22,22 +22,28 @@
     ArrowUp,
     ChevronLeft,
     ChevronRight,
+    Database,
     Download,
+    Filter,
+    Link2,
+    ListChecks,
+    Loader2,
     Play,
     Plus,
     Save,
+    Search,
+    Table2,
     Trash2,
   } from '@lucide/svelte';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
-  import type { FieldDefinition, SchemaFields } from '@mspbyte/shared';
+  import { INTEGRATIONS, type FieldDefinition, type ProviderId, type SchemaFields } from '@mspbyte/shared';
   import { authStore } from '$lib/stores/auth.store.svelte';
   import Button from '$lib/components/ui/button/button.svelte';
   import { Input } from '$lib/components/ui/input/index.js';
   import { Textarea } from '$lib/components/ui/textarea/index.js';
-  import { Label } from '$lib/components/ui/label/index.js';
-  import { Checkbox } from '$lib/components/ui/checkbox/index.js';
   import { Badge } from '$lib/components/ui/badge/index.js';
+  import { ToggleGroup, ToggleGroupItem } from '$lib/components/ui/toggle-group/index.js';
   import SingleSelect from '$lib/components/single-select.svelte';
   import MultiSelect from '$lib/components/multi-select.svelte';
   import { OPERATOR_LABELS } from '$lib/components/data-table';
@@ -52,12 +58,40 @@
   const reportId = $derived(page.url.searchParams.get('id') ?? '');
   const editing = $derived(Boolean(reportId));
 
+  type JoinFieldMeta = {
+    key: string;
+    label: string;
+    type: FieldDefinition['type'];
+    modality: 'single' | 'array';
+    fromTable: string | null;
+    description?: string;
+  };
+
   type SourceMeta = {
     table: string;
     label: string;
     providerId: string | null;
     shape: SchemaFields;
+    joinFields?: JoinFieldMeta[];
     licenseRequirements?: Array<{ value: string; label: string; description: string }>;
+  };
+
+  /**
+   * Unified view of a source's columns: native fields defined on the vendor
+   * table plus joined fields hydrated from related tables. The picker renders
+   * both from the same list so the user doesn't need to know the difference —
+   * a "linked" badge marks joins.
+   */
+  type FieldEntry = {
+    key: string;
+    label: string;
+    type: FieldDefinition['type'];
+    modality: 'single' | 'array';
+    origin: 'native' | 'join';
+    filterable: boolean;
+    fromTable: string | null;
+    description?: string;
+    options?: FieldDefinition['options'];
   };
 
   type FilterRow = {
@@ -86,6 +120,15 @@
     lacks_any_of: 'Contains none of',
   };
 
+  const FIELD_TYPE_LABELS: Record<FieldDefinition['type'], string> = {
+    string: 'Text',
+    enum: 'Choice',
+    boolean: 'Yes / No',
+    number: 'Number',
+    date: 'Date',
+    object: 'Object',
+  };
+
   // -- state -----------------------------------------------------------------
 
   let filterUid = 1;
@@ -99,6 +142,7 @@
   let saving = $state(false);
   let hydrated = $state(false);
   let deleting = $state(false);
+  let columnSearch = $state('');
 
   // Results
   let resultRows = $state<ResultRow[]>([]);
@@ -132,23 +176,98 @@
   // -- derived ---------------------------------------------------------------
 
   const sources = $derived<SourceMeta[]>((sourcesQuery.data as SourceMeta[]) ?? []);
-  const sourceOptions = $derived(sources.map((s) => ({ value: s.table, label: s.label })));
+
+  const sourceOptions = $derived(
+    sources.map((s) => {
+      const providerName = s.providerId
+        ? (INTEGRATIONS[s.providerId as ProviderId]?.name ?? s.providerId)
+        : 'Platform';
+      const nativeCount = Object.keys(s.shape).length;
+      const joinCount = s.joinFields?.length ?? 0;
+      const total = nativeCount + joinCount;
+      return {
+        value: s.table,
+        label: shortLabel(s.label, providerName),
+        subLabel:
+          joinCount > 0
+            ? `${total} fields · ${joinCount} linked`
+            : `${nativeCount} field${nativeCount === 1 ? '' : 's'}`,
+        group: providerName,
+      };
+    })
+  );
+
+  function shortLabel(label: string, providerName: string) {
+    // "Sophos Firewalls" grouped under "Sophos Partner" reads better as "Firewalls".
+    const prefix = providerName.split(' ')[0];
+    if (prefix && label.startsWith(prefix + ' ')) return label.slice(prefix.length + 1);
+    return label;
+  }
+
   const currentSource = $derived<SourceMeta | undefined>(sources.find((s) => s.table === source));
+  const currentProviderName = $derived(
+    currentSource?.providerId
+      ? (INTEGRATIONS[currentSource.providerId as ProviderId]?.name ?? currentSource.providerId)
+      : null
+  );
   const shape = $derived<SchemaFields | undefined>(currentSource?.shape);
-  const shapeEntries = $derived<Array<[string, FieldDefinition]>>(
-    shape ? Object.entries(shape) : []
-  );
-  const filterEntries = $derived(
-    shapeEntries.filter(([, def]) => def.trackable || def.filterable)
-  );
+
+  const fieldEntries = $derived.by<FieldEntry[]>(() => {
+    if (!currentSource) return [];
+    const native: FieldEntry[] = Object.entries(currentSource.shape).map(([key, def]) => ({
+      key,
+      label: def.label,
+      type: def.type,
+      modality: def.modality,
+      origin: 'native',
+      filterable: def.trackable === true || def.filterable === true,
+      fromTable: null,
+      description: def.description,
+      options: def.options,
+    }));
+    const joined: FieldEntry[] = (currentSource.joinFields ?? []).map((j) => ({
+      key: j.key,
+      label: j.label,
+      type: j.type,
+      modality: j.modality,
+      origin: 'join',
+      // v1: joined fields are display-only. Users filter on the underlying
+      // native column (linkId, siteId, assignedLicenses, …).
+      filterable: false,
+      fromTable: j.fromTable,
+      description: j.description,
+    }));
+    return [...native, ...joined];
+  });
+
+  const fieldByKey = $derived.by(() => {
+    const map = new Map<string, FieldEntry>();
+    for (const f of fieldEntries) map.set(f.key, f);
+    return map;
+  });
+
+  const filterEntries = $derived(fieldEntries.filter((f) => f.filterable));
   const licenseOptions = $derived(licenseOptionsQuery.data ?? []);
+
+  const availableEntries = $derived(
+    fieldEntries.filter((f) => !selectedColumns.includes(f.key))
+  );
+  const filteredAvailable = $derived.by(() => {
+    const q = columnSearch.trim().toLowerCase();
+    if (!q) return availableEntries;
+    return availableEntries.filter(
+      (f) => f.key.toLowerCase().includes(q) || f.label.toLowerCase().includes(q)
+    );
+  });
 
   const sortColumnOptions = $derived(
     selectedColumns
-      .filter((k) => shape?.[k]?.trackable !== false)
+      // Sorting joined columns would require SQL-level joins we don't emit;
+      // v1 keeps joins display-only so we skip them here as well.
+      .filter((k) => fieldByKey.get(k)?.origin === 'native' && shape?.[k]?.trackable !== false)
       .map((k) => ({
         value: k,
-        label: shape?.[k]?.label ?? k,
+        label: fieldByKey.get(k)?.label ?? k,
       }))
   );
 
@@ -190,6 +309,7 @@
       selectedColumns = [];
       filters = [];
       sortColumn = '';
+      columnSearch = '';
     }
     priorSource = source;
   });
@@ -336,25 +456,16 @@
     if (!source || selectedColumns.length === 0) return;
     exporting = true;
     try {
-      const definition = reportDefinition();
-      const firstPage = await trpc.reports.run.mutate({
+      const result = await trpc.reports.runBulk.mutate({
         source,
-        definition,
+        definition: reportDefinition(),
         table: { page: 1, pageSize: 1000, filters: [] },
       });
-      const rows = [...(firstPage.rows as ResultRow[])];
-      for (let page = 2; page <= firstPage.pageCount; page++) {
-        const result = await trpc.reports.run.mutate({
-          source,
-          definition,
-          table: { page, pageSize: 1000, filters: [] },
-        });
-        rows.push(...(result.rows as ResultRow[]));
-      }
-      const headers = selectedColumns.map((key) => csvValue(shape?.[key]?.label ?? key));
+      const rows = result.rows as ResultRow[];
+      const headers = selectedColumns.map((key) => csvValue(fieldByKey.get(key)?.label ?? key));
       const lines = rows.map((row) => selectedColumns.map((key) => csvValue(row[key])).join(','));
       // The UTF-8 BOM lets desktop Excel identify Unicode CSVs correctly.
-      const blob = new Blob([`\uFEFF${[headers.join(','), ...lines].join('\r\n')}`], {
+      const blob = new Blob([`﻿${[headers.join(','), ...lines].join('\r\n')}`], {
         type: 'text/csv;charset=utf-8;',
       });
       const url = URL.createObjectURL(blob);
@@ -363,7 +474,13 @@
       link.download = `${(name.trim() || 'report').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}.csv`;
       link.click();
       URL.revokeObjectURL(url);
-      toast.success(`Exported ${rows.length.toLocaleString()} row${rows.length === 1 ? '' : 's'}`);
+      if (result.truncated) {
+        toast.warning(
+          `Export capped at ${rows.length.toLocaleString()} rows of ${result.total.toLocaleString()}. Narrow the report to see the rest.`
+        );
+      } else {
+        toast.success(`Exported ${rows.length.toLocaleString()} row${rows.length === 1 ? '' : 's'}`);
+      }
     } catch (err) {
       showErrorToast(err, 'Failed to export CSV');
     } finally {
@@ -376,10 +493,14 @@
   function addFilter() {
     const first = filterEntries[0];
     if (!first) return;
-    const [col, def] = first;
     filters = [
       ...filters,
-      { id: filterUid++, column: col, operator: operatorsFor(col, def.type)[0], value: '' },
+      {
+        id: filterUid++,
+        column: first.key,
+        operator: operatorsFor(first.key, first.type)[0],
+        value: '',
+      },
     ];
   }
 
@@ -423,6 +544,15 @@
     const next = [...selectedColumns];
     [next[index], next[nextIndex]] = [next[nextIndex]!, next[index]!];
     selectedColumns = next;
+  }
+
+  function selectAllColumns() {
+    selectedColumns = fieldEntries.map((f) => f.key);
+  }
+
+  function clearColumns() {
+    selectedColumns = [];
+    sortColumn = '';
   }
 
   // -- save / delete ---------------------------------------------------------
@@ -477,34 +607,50 @@
   }
 </script>
 
-<div class="flex size-full flex-col overflow-hidden">
+<div class="flex size-full flex-col overflow-hidden bg-muted/[0.02]">
   <!-- Header -->
-  <div class="flex items-center justify-between gap-3 border-b px-6 py-3">
-    <div class="flex items-center gap-3">
+  <div class="flex items-center justify-between gap-3 border-b bg-background px-6 py-3">
+    <div class="flex min-w-0 items-center gap-2">
       <Button
         variant="ghost"
         size="sm"
-        class="gap-2"
+        class="gap-1.5"
         onclick={() => goto(editing ? `/reports/${reportId}` : '/reports')}
       >
         <ArrowLeft class="size-4" />
-        {editing ? 'Back to report' : 'Reports'}
+        <span class="hidden sm:inline">{editing ? 'Back to report' : 'Reports'}</span>
       </Button>
-      <div class="text-muted-foreground text-sm">
-        {editing ? 'Edit report' : 'New report'}
-      </div>
+      <span class="text-muted-foreground/50">/</span>
+      <span class="text-sm font-medium truncate">
+        {editing ? name || 'Untitled report' : 'New report'}
+      </span>
+      {#if editing}
+        <Badge variant="secondary" class="ml-1 h-5 px-1.5 text-[10px] uppercase tracking-wider">
+          Editing
+        </Badge>
+      {/if}
     </div>
     <div class="flex items-center gap-2">
+      <ScopeBar />
       {#if editing && canDelete}
-        <Button variant="ghost" size="sm" class="gap-2" disabled={deleting} onclick={del}>
+        <Button
+          variant="ghost"
+          size="sm"
+          class="gap-1.5 text-destructive hover:text-destructive"
+          disabled={deleting}
+          onclick={del}
+        >
           <Trash2 class="size-4" />
-          Delete
+          <span class="hidden md:inline">Delete</span>
         </Button>
       {/if}
-      <ScopeBar />
       {#if canWrite}
-        <Button size="sm" class="gap-2" disabled={saving} onclick={save}>
-          <Save class="size-4" />
+        <Button size="sm" class="gap-1.5" disabled={saving} onclick={save}>
+          {#if saving}
+            <Loader2 class="size-4 animate-spin" />
+          {:else}
+            <Save class="size-4" />
+          {/if}
           {editing ? 'Save changes' : 'Create report'}
         </Button>
       {/if}
@@ -515,167 +661,282 @@
   <div class="flex min-h-0 flex-1">
     <!-- Left: composition -->
     <aside
-      class="bg-muted/[0.015] flex w-[440px] shrink-0 flex-col gap-5 overflow-y-auto border-r p-5"
+      class="flex w-[460px] shrink-0 flex-col overflow-y-auto border-r bg-background"
     >
-      <div class="space-y-2 border-t pt-5">
-        <Label for="report-name">Name</Label>
-        <Input id="report-name" bind:value={name} placeholder="Licensed M365 users" />
-      </div>
-
-      <div class="space-y-2">
-        <Label for="report-desc">Description</Label>
+      <!-- Identity block -->
+      <div class="space-y-3 border-b px-5 pb-5 pt-5">
+        <input
+          class="w-full bg-transparent text-xl font-semibold tracking-tight outline-none placeholder:text-muted-foreground/50 focus-visible:outline-none"
+          bind:value={name}
+          placeholder="Untitled report"
+          aria-label="Report name"
+        />
         <Textarea
-          id="report-desc"
+          class="min-h-[52px] resize-none border-none bg-muted/30 px-3 py-2 text-sm shadow-none focus-visible:ring-1 focus-visible:ring-ring/40"
           bind:value={description}
-          placeholder="Optional. What this report answers."
+          placeholder="Describe what this report answers so teammates know when to reach for it."
           rows={2}
         />
       </div>
 
-      <div class="space-y-2">
-        <Label>Data source</Label>
+      <!-- Step 1 · Source -->
+      <section class="space-y-3 border-b px-5 py-5">
+        <div class="flex items-center gap-2.5">
+          <div class="flex size-6 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+            1
+          </div>
+          <div class="flex-1">
+            <div class="flex items-center gap-2">
+              <Database class="size-3.5 text-muted-foreground" />
+              <h3 class="text-sm font-semibold">Data source</h3>
+            </div>
+            <p class="text-muted-foreground text-[11px]">
+              The vendor table the report draws rows from.
+            </p>
+          </div>
+        </div>
         <SingleSelect
           options={sourceOptions}
           bind:selected={source}
-          placeholder="Pick a source"
+          placeholder={sourcesQuery.isLoading ? 'Loading sources…' : 'Pick a source'}
           searchPlaceholder="Search sources…"
         />
-      </div>
+        {#if currentSource}
+          <div class="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+            <div class="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <Table2 class="size-3.5" />
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-xs font-medium">{currentSource.label}</div>
+              <div class="text-muted-foreground truncate text-[11px]">
+                {currentProviderName ?? 'Platform'} · {fieldEntries.length} fields available
+                {#if (currentSource.joinFields?.length ?? 0) > 0}
+                  <span class="text-primary/80">({currentSource.joinFields!.length} linked)</span>
+                {/if}
+              </div>
+            </div>
+          </div>
+        {/if}
+      </section>
 
-      <!-- Columns -->
-      <div class="space-y-2 border-t pt-5">
-        <div class="flex items-baseline justify-between">
-          <div>
-            <Label>Columns</Label>
-            <p class="text-muted-foreground mt-0.5 text-xs">
-              The order here is the order in the preview and export.
+      <!-- Step 2 · Columns -->
+      <section class="space-y-3 border-b px-5 py-5">
+        <div class="flex items-center gap-2.5">
+          <div class="flex size-6 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+            2
+          </div>
+          <div class="flex-1">
+            <div class="flex items-center gap-2">
+              <ListChecks class="size-3.5 text-muted-foreground" />
+              <h3 class="text-sm font-semibold">Columns</h3>
+              <span class="text-muted-foreground text-[11px] tabular-nums">
+                {selectedColumns.length}/{fieldEntries.length}
+              </span>
+            </div>
+            <p class="text-muted-foreground text-[11px]">
+              The order set here is used for both preview and export.
             </p>
           </div>
-          <span class="text-muted-foreground text-xs">
-            {selectedColumns.length} of {shapeEntries.length}
-          </span>
         </div>
+
         {#if !shape}
-          <p class="text-muted-foreground text-xs">Pick a source to choose columns.</p>
+          <div class="rounded-md border border-dashed bg-muted/10 px-3 py-4 text-center">
+            <p class="text-muted-foreground text-xs">Pick a data source to choose columns.</p>
+          </div>
         {:else}
-          <div class="space-y-3">
-            {#if selectedColumns.length > 0}
-              <div class="overflow-hidden rounded-lg border bg-background shadow-sm">
-                <div
-                  class="bg-muted/40 border-b px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
-                >
-                  Report column order
-                </div>
-                <ul class="divide-y">
-                  {#each selectedColumns as key, index (key)}
-                    {@const def = shape[key]}
-                    <li class="flex items-center gap-2 px-3 py-2">
-                      <span class="text-muted-foreground w-4 text-center text-xs tabular-nums"
-                        >{index + 1}</span
-                      >
-                      <span class="min-w-0 flex-1 truncate text-sm font-medium"
-                        >{def?.label ?? key}</span
-                      >
-                      <div class="flex shrink-0 items-center gap-0.5">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          class="size-6"
-                          disabled={index === 0}
-                          onclick={() => moveColumn(key, -1)}
-                          aria-label={`Move ${def?.label ?? key} up`}
-                        >
-                          <ArrowUp class="size-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          class="size-6"
-                          disabled={index === selectedColumns.length - 1}
-                          onclick={() => moveColumn(key, 1)}
-                          aria-label={`Move ${def?.label ?? key} down`}
-                        >
-                          <ArrowDown class="size-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          class="size-6"
-                          onclick={() => toggleColumn(key)}
-                          aria-label={`Remove ${def?.label ?? key}`}
-                        >
-                          <Trash2 class="size-3.5" />
-                        </Button>
-                      </div>
-                    </li>
-                  {/each}
-                </ul>
-              </div>
-            {/if}
+          {#if selectedColumns.length > 0}
             <div class="overflow-hidden rounded-lg border">
-              <div
-                class="bg-muted/40 border-b px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
-              >
-                Available columns
+              <div class="flex items-center justify-between bg-muted/30 px-3 py-1.5">
+                <span class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Selected · in report order
+                </span>
+                <button
+                  type="button"
+                  class="text-[10px] font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground"
+                  onclick={clearColumns}
+                >
+                  Clear
+                </button>
               </div>
-              <ul class="max-h-48 divide-y overflow-y-auto">
-                {#each shapeEntries.filter(([key]) => !selectedColumns.includes(key)) as [key, def] (key)}
-                  <li class="flex items-center gap-2 px-3 py-2">
-                    <Checkbox
-                      id={`col-${key}`}
-                      checked={false}
-                      onCheckedChange={() => toggleColumn(key)}
-                    />
-                    <label for={`col-${key}`} class="flex-1 cursor-pointer text-sm">
-                      {def.label}
-                    </label>
+              <ul class="divide-y">
+                {#each selectedColumns as key, index (key)}
+                  {@const entry = fieldByKey.get(key)}
+                  <li class="group flex items-center gap-2 px-2 py-1.5 hover:bg-muted/20">
                     <span
-                      class="text-muted-foreground font-mono text-[10px] uppercase tracking-wider"
+                      class="text-muted-foreground/70 w-5 text-center text-[11px] font-medium tabular-nums"
                     >
-                      {def.type}
+                      {index + 1}
                     </span>
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-1.5">
+                        <span class="truncate text-sm font-medium leading-tight">
+                          {entry?.label ?? key}
+                        </span>
+                        {#if entry?.origin === 'join'}
+                          <span
+                            class="inline-flex items-center gap-0.5 rounded-sm bg-primary/10 px-1 py-[1px] text-[9px] font-semibold uppercase tracking-wider text-primary"
+                            title={entry.fromTable ? `Linked from ${entry.fromTable}` : 'Linked field'}
+                          >
+                            <Link2 class="size-2.5" />
+                            Linked
+                          </span>
+                        {/if}
+                      </div>
+                      {#if entry}
+                        <div class="text-muted-foreground text-[10px] uppercase tracking-wide">
+                          {FIELD_TYPE_LABELS[entry.type]}{entry.modality === 'array' ? ' · list' : ''}
+                        </div>
+                      {/if}
+                    </div>
+                    <div class="flex shrink-0 items-center opacity-60 transition-opacity group-hover:opacity-100">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        class="size-6"
+                        disabled={index === 0}
+                        onclick={() => moveColumn(key, -1)}
+                        aria-label={`Move ${entry?.label ?? key} up`}
+                      >
+                        <ArrowUp class="size-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        class="size-6"
+                        disabled={index === selectedColumns.length - 1}
+                        onclick={() => moveColumn(key, 1)}
+                        aria-label={`Move ${entry?.label ?? key} down`}
+                      >
+                        <ArrowDown class="size-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        class="size-6 text-muted-foreground hover:text-destructive"
+                        onclick={() => toggleColumn(key)}
+                        aria-label={`Remove ${entry?.label ?? key}`}
+                      >
+                        <Trash2 class="size-3.5" />
+                      </Button>
+                    </div>
                   </li>
                 {/each}
               </ul>
             </div>
-          </div>
-        {/if}
-      </div>
+          {/if}
 
-      <!-- Filters -->
-      <div class="space-y-3 border-t pt-5">
-        <div class="flex items-baseline justify-between">
-          <div>
-            <Label>Filters</Label>
-            <p class="text-muted-foreground mt-0.5 text-xs">
-              Each condition narrows the result set.
+          {#if availableEntries.length > 0}
+            <div class="overflow-hidden rounded-lg border">
+              <div class="flex items-center gap-2 border-b bg-muted/30 px-2 py-1">
+                <Search class="size-3.5 shrink-0 text-muted-foreground" />
+                <input
+                  class="h-6 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+                  placeholder="Search available fields…"
+                  bind:value={columnSearch}
+                  aria-label="Search available columns"
+                />
+                <button
+                  type="button"
+                  class="text-[10px] font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground"
+                  onclick={selectAllColumns}
+                >
+                  Add all
+                </button>
+              </div>
+              <ul class="max-h-56 divide-y overflow-y-auto">
+                {#if filteredAvailable.length === 0}
+                  <li class="text-muted-foreground px-3 py-4 text-center text-xs">
+                    No matching fields.
+                  </li>
+                {:else}
+                  {#each filteredAvailable as entry (entry.key)}
+                    <li>
+                      <button
+                        type="button"
+                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/40"
+                        onclick={() => toggleColumn(entry.key)}
+                        title={entry.description ?? ''}
+                      >
+                        {#if entry.origin === 'join'}
+                          <Link2 class="size-3.5 shrink-0 text-primary/70" />
+                        {:else}
+                          <Plus class="size-3.5 shrink-0 text-muted-foreground" />
+                        {/if}
+                        <span class="flex-1 truncate text-sm">{entry.label}</span>
+                        {#if entry.origin === 'join'}
+                          <span
+                            class="rounded-sm bg-primary/10 px-1 py-[1px] text-[9px] font-semibold uppercase tracking-wider text-primary"
+                          >
+                            Linked
+                          </span>
+                        {/if}
+                        <span
+                          class="text-muted-foreground font-mono text-[10px] uppercase tracking-wider"
+                        >
+                          {FIELD_TYPE_LABELS[entry.type]}
+                        </span>
+                      </button>
+                    </li>
+                  {/each}
+                {/if}
+              </ul>
+            </div>
+          {:else if selectedColumns.length > 0}
+            <p class="text-muted-foreground text-center text-[11px]">
+              All fields are in the report.
+            </p>
+          {/if}
+        {/if}
+      </section>
+
+      <!-- Step 3 · Filters -->
+      <section class="space-y-3 border-b px-5 py-5">
+        <div class="flex items-center gap-2.5">
+          <div class="flex size-6 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+            3
+          </div>
+          <div class="flex-1">
+            <div class="flex items-center gap-2">
+              <Filter class="size-3.5 text-muted-foreground" />
+              <h3 class="text-sm font-semibold">Filters</h3>
+              {#if filters.length > 0}
+                <span class="text-muted-foreground text-[11px] tabular-nums">
+                  {filters.length}
+                </span>
+              {/if}
+            </div>
+            <p class="text-muted-foreground text-[11px]">
+              Each row narrows the result set. Every condition must match.
             </p>
           </div>
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
             class="h-7 gap-1 px-2 text-xs"
             disabled={!shape}
             onclick={addFilter}
           >
             <Plus class="size-3" />
-            Add
+            Filter
           </Button>
         </div>
+
         {#if filters.length === 0}
-          <p class="text-muted-foreground text-xs">No filters. All rows returned.</p>
+          <div class="rounded-md border border-dashed bg-muted/10 px-3 py-4 text-center">
+            <p class="text-muted-foreground text-xs">No filters — all rows are returned.</p>
+          </div>
         {:else}
-          <div class="space-y-3">
+          <div class="space-y-2">
             {#each filters as f (f.id)}
               {@const def = shape?.[f.column]}
               {@const ops = def ? operatorsFor(f.column, def.type) : []}
               {@const needsValue = f.operator !== 'is_null' && f.operator !== 'is_not_null'}
-              <div class="bg-background space-y-2 rounded-lg border p-3 shadow-sm">
-                <div class="flex min-w-0 items-center gap-2">
+              <div class="space-y-2 rounded-lg border bg-muted/10 p-2.5">
+                <div class="flex min-w-0 items-center gap-1.5">
                   <SingleSelect
                     class="h-8 min-w-0 flex-1 text-xs"
-                    options={filterEntries.map(([key, field]) => ({
-                      value: key,
+                    options={filterEntries.map((field) => ({
+                      value: field.key,
                       label: field.label,
                     }))}
                     selected={f.column}
@@ -685,13 +946,14 @@
                   <Button
                     variant="ghost"
                     size="icon"
-                    class="size-7 shrink-0"
+                    class="size-7 shrink-0 text-muted-foreground hover:text-destructive"
                     onclick={() => removeFilter(f.id)}
+                    aria-label="Remove filter"
                   >
-                    <Trash2 class="size-3" />
+                    <Trash2 class="size-3.5" />
                   </Button>
                 </div>
-                <div class="grid min-w-0 grid-cols-[9rem_minmax(0,1fr)] gap-2">
+                <div class="grid min-w-0 grid-cols-[9rem_minmax(0,1fr)] gap-1.5">
                   <SingleSelect
                     class="h-8 w-full text-xs"
                     options={ops.map((op) => ({
@@ -713,7 +975,7 @@
                         loading={licenseOptionsQuery.isLoading}
                       />
                     {:else if isRequirementOperator(f.operator)}
-                      <p class="text-muted-foreground flex-1 px-1 text-xs">
+                      <p class="text-muted-foreground flex items-center px-1 text-xs">
                         Legacy coverage filter
                       </p>
                     {:else if def?.type === 'boolean'}
@@ -758,51 +1020,80 @@
             {/each}
           </div>
         {/if}
-      </div>
+      </section>
 
       <!-- Sort -->
-      <div class="space-y-2 border-t pt-5">
-        <Label>Sort by</Label>
+      <section class="space-y-3 px-5 py-5">
+        <div class="flex items-center gap-2.5">
+          <div class="flex size-6 items-center justify-center rounded-full bg-muted text-[11px] font-semibold text-muted-foreground">
+            4
+          </div>
+          <div class="flex-1">
+            <div class="flex items-center gap-2">
+              <ArrowDown class="size-3.5 text-muted-foreground" />
+              <h3 class="text-sm font-semibold">Sort</h3>
+            </div>
+            <p class="text-muted-foreground text-[11px]">
+              Optional. Applied server-side before pagination.
+            </p>
+          </div>
+        </div>
         <div class="flex gap-2">
           <div class="flex-1">
             <SingleSelect
               options={[{ value: '', label: 'None' }, ...sortColumnOptions]}
               bind:selected={sortColumn}
-              placeholder="None"
+              placeholder="No sort"
             />
           </div>
-          <SingleSelect
-            class="h-9 w-28 text-sm"
-            options={[
-              { value: 'asc', label: 'Ascending' },
-              { value: 'desc', label: 'Descending' },
-            ]}
-            bind:selected={sortDirection}
-            disabled={!sortColumn}
-          />
+          <ToggleGroup
+            type="single"
+            value={sortDirection}
+            onValueChange={(v) => v && (sortDirection = v as 'asc' | 'desc')}
+            variant="outline"
+            size="sm"
+            class="shrink-0"
+          >
+            <ToggleGroupItem value="asc" disabled={!sortColumn} aria-label="Ascending" class="text-xs">
+              <ArrowUp class="size-3" />
+              Asc
+            </ToggleGroupItem>
+            <ToggleGroupItem value="desc" disabled={!sortColumn} aria-label="Descending" class="text-xs">
+              <ArrowDown class="size-3" />
+              Desc
+            </ToggleGroupItem>
+          </ToggleGroup>
         </div>
-      </div>
+      </section>
     </aside>
 
     <!-- Right: results -->
     <section class="flex min-w-0 flex-1 flex-col">
-      <div class="flex items-center justify-between border-b px-5 py-2.5">
-        <div class="flex items-baseline gap-3">
-          <h2 class="text-sm font-semibold">Preview</h2>
-          <span class="text-muted-foreground font-mono text-xs">
-            {#if running}running…{:else if !source || selectedColumns.length === 0}—{:else}
-              {resultTotal.toLocaleString()} row{resultTotal === 1 ? '' : 's'}
+      <div class="flex items-center justify-between border-b bg-background px-5 py-2.5">
+        <div class="flex items-center gap-2">
+          <h2 class="text-sm font-semibold">Live preview</h2>
+          <span class="text-muted-foreground text-[11px]">
+            {#if running}
+              <span class="inline-flex items-center gap-1">
+                <Loader2 class="size-3 animate-spin" />
+                Running…
+              </span>
+            {:else if !source || selectedColumns.length === 0}
+              Waiting on definition
+            {:else}
+              <span class="font-mono tabular-nums">{resultTotal.toLocaleString()}</span>
+              row{resultTotal === 1 ? '' : 's'}
             {/if}
           </span>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-1.5">
           {#if currentSource?.providerId}
-            <Badge variant="outline" class="font-mono text-[10px] uppercase">
-              {currentSource.providerId}
+            <Badge variant="outline" class="h-5 font-normal text-[10px] uppercase tracking-wider">
+              {currentProviderName}
             </Badge>
           {/if}
           <Button
-            variant="outline"
+            variant="ghost"
             size="sm"
             class="h-7 gap-1.5 text-xs"
             disabled={!source || selectedColumns.length === 0 || running}
@@ -818,35 +1109,63 @@
             disabled={!source || selectedColumns.length === 0 || exporting}
             onclick={exportCsv}
           >
-            <Download class="size-3" />
-            {exporting ? 'Exporting…' : 'CSV'}
+            {#if exporting}
+              <Loader2 class="size-3 animate-spin" />
+            {:else}
+              <Download class="size-3" />
+            {/if}
+            {exporting ? 'Exporting…' : 'Export CSV'}
           </Button>
         </div>
       </div>
 
-      <div class="flex min-h-0 flex-1 flex-col">
+      <div class="flex min-h-0 flex-1 flex-col bg-background">
         {#if !source}
-          <div class="text-muted-foreground flex flex-1 items-center justify-center text-sm">
-            Pick a data source to start.
+          <div class="flex flex-1 items-center justify-center px-6">
+            <div class="max-w-sm text-center">
+              <div class="mx-auto mb-3 flex size-12 items-center justify-center rounded-xl bg-muted">
+                <Database class="size-5 text-muted-foreground" />
+              </div>
+              <h3 class="text-sm font-semibold">Start with a data source</h3>
+              <p class="text-muted-foreground mt-1 text-xs">
+                Pick a vendor table on the left. The preview here will run automatically as you add
+                columns and filters.
+              </p>
+            </div>
           </div>
         {:else if selectedColumns.length === 0}
-          <div class="text-muted-foreground flex flex-1 items-center justify-center text-sm">
-            Pick at least one column to see rows.
+          <div class="flex flex-1 items-center justify-center px-6">
+            <div class="max-w-sm text-center">
+              <div class="mx-auto mb-3 flex size-12 items-center justify-center rounded-xl bg-muted">
+                <ListChecks class="size-5 text-muted-foreground" />
+              </div>
+              <h3 class="text-sm font-semibold">Add a column to see rows</h3>
+              <p class="text-muted-foreground mt-1 text-xs">
+                Pick at least one field from the {currentSource?.label ?? 'source'} shape. The
+                columns you add appear in the order you pick them.
+              </p>
+            </div>
           </div>
         {:else if runError}
-          <div class="text-destructive flex flex-1 items-center justify-center px-6 text-sm">
-            {runError}
+          <div class="flex flex-1 items-center justify-center px-6">
+            <div class="max-w-md text-center">
+              <div class="mx-auto mb-3 flex size-12 items-center justify-center rounded-xl bg-destructive/10">
+                <Filter class="size-5 text-destructive" />
+              </div>
+              <h3 class="text-sm font-semibold text-destructive">Report failed to run</h3>
+              <p class="text-muted-foreground mt-1 text-xs">{runError}</p>
+            </div>
           </div>
         {:else}
           <div class="min-h-0 flex-1 overflow-auto">
             <table class="w-full text-sm">
-              <thead class="bg-muted/40 sticky top-0 z-10">
+              <thead class="bg-muted/40 sticky top-0 z-10 backdrop-blur">
                 <tr>
                   {#each selectedColumns as key}
                     <th
-                      class="text-muted-foreground border-b px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider"
+                      class="text-muted-foreground border-b px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider"
                     >
-                      {shape?.[key]?.label ?? key}
+                      {fieldByKey.get(key)?.label ?? key}
                     </th>
                   {/each}
                 </tr>
@@ -875,12 +1194,12 @@
             </table>
           </div>
           {#if resultTotal > 0}
-            <div class="flex items-center justify-between border-t px-4 py-2">
-              <span class="text-muted-foreground text-xs">
-                Showing {((resultPage - 1) * 50 + 1).toLocaleString()}–{Math.min(
+            <div class="flex items-center justify-between border-t bg-background px-4 py-2">
+              <span class="text-muted-foreground text-[11px]">
+                Showing <span class="font-mono tabular-nums">{((resultPage - 1) * 50 + 1).toLocaleString()}</span>–<span class="font-mono tabular-nums">{Math.min(
                   resultPage * 50,
                   resultTotal
-                ).toLocaleString()} of {resultTotal.toLocaleString()}
+                ).toLocaleString()}</span> of <span class="font-mono tabular-nums">{resultTotal.toLocaleString()}</span>
               </span>
               <div class="flex items-center gap-1">
                 <Button
@@ -893,7 +1212,7 @@
                 >
                   <ChevronLeft class="size-4" />
                 </Button>
-                <span class="text-muted-foreground min-w-16 text-center text-xs"
+                <span class="text-muted-foreground min-w-16 text-center text-[11px] tabular-nums"
                   >Page {resultPage} / {pageCount}</span
                 >
                 <Button

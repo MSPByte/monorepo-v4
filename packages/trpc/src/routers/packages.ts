@@ -1046,7 +1046,12 @@ export const packagesRouter = t.router({
     }),
 
   delete: authProcedure
-    .input(z.object({ id: z.uuid() }))
+    .input(
+      z.object({
+        id: z.uuid(),
+        deleteRunHistory: z.boolean().default(false),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       if (!ctx.can('Packages.Delete')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Delete required' });
@@ -1058,29 +1063,39 @@ export const packagesRouter = t.router({
         .limit(1);
       if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Package not found' });
 
-      // Runs are FK-restricted onto packages — blocking here gives a clearer
-      // error than a raw pg constraint violation.
-      const [row] = await ctx.db
+      const activeStatuses = ['pending', 'queued', 'running'] as const;
+      const [activeRunRow] = await ctx.db
         .select({ count: sql<number>`count(*)::int` })
         .from(packageRuns)
-        .where(eq(packageRuns.packageId, input.id));
-      const count = row?.count ?? 0;
-      if (count > 0) {
+        .where(
+          and(
+            eq(packageRuns.packageId, input.id),
+            inArray(packageRuns.status, activeStatuses),
+          ),
+        );
+      const activeRunCount = activeRunRow?.count ?? 0;
+      if (activeRunCount > 0) {
         throw new TRPCError({
           code: 'PRECONDITION_FAILED',
-          message: `Cannot delete — this package has ${count} run${count === 1 ? '' : 's'} in history. Archive it instead.`,
+          message: `Cannot delete — this package has ${activeRunCount} active run${activeRunCount === 1 ? '' : 's'}. Wait for it to finish or cancel it first.`,
         });
       }
 
-      const [scheduleRow] = await ctx.db
+      const activeScheduleStatuses = ['scheduled', 'dispatching', 'dispatched'] as const;
+      const [activeScheduleRow] = await ctx.db
         .select({ count: sql<number>`count(*)::int` })
         .from(packageSchedules)
-        .where(eq(packageSchedules.packageId, input.id));
-      const scheduleCount = scheduleRow?.count ?? 0;
-      if (scheduleCount > 0) {
+        .where(
+          and(
+            eq(packageSchedules.packageId, input.id),
+            inArray(packageSchedules.status, activeScheduleStatuses),
+          ),
+        );
+      const activeScheduleCount = activeScheduleRow?.count ?? 0;
+      if (activeScheduleCount > 0) {
         throw new TRPCError({
           code: 'PRECONDITION_FAILED',
-          message: `Cannot delete — this package has ${scheduleCount} scheduled run${scheduleCount === 1 ? '' : 's'} in history. Archive it instead.`,
+          message: `Cannot delete — this package has ${activeScheduleCount} scheduled run${activeScheduleCount === 1 ? '' : 's'}. Cancel it first.`,
         });
       }
 
@@ -1103,7 +1118,33 @@ export const packagesRouter = t.router({
         });
       }
 
-      await ctx.db.delete(packages).where(eq(packages.id, input.id));
+      const [historyRow] = await ctx.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(packageRuns)
+        .where(eq(packageRuns.packageId, input.id));
+      const historyCount = historyRow?.count ?? 0;
+      if (historyCount > 0 && !input.deleteRunHistory) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Confirm deletion of this package’s run history before deleting it.',
+        });
+      }
+
+      await ctx.db.transaction(async (tx) => {
+        // Canceled schedules and terminal runs are historical records. Active
+        // records were rejected above; remove the rest before the package so
+        // its restrictive foreign keys remain intact.
+        await tx
+          .delete(packageSchedules)
+          .where(
+            and(
+              eq(packageSchedules.packageId, input.id),
+              eq(packageSchedules.status, 'canceled'),
+            ),
+          );
+        await tx.delete(packageRuns).where(eq(packageRuns.packageId, input.id));
+        await tx.delete(packages).where(eq(packages.id, input.id));
+      });
 
       await ctx.db.insert(customerLogs).values({
         siteId: null,
@@ -1118,7 +1159,7 @@ export const packagesRouter = t.router({
         result: 'success',
         ipAddress: ctx.ipAddress,
         userAgent: ctx.userAgent,
-        metadata: { hard: true },
+        metadata: { hard: true, deletedRunHistory: historyCount },
       });
 
       return { id: input.id };

@@ -617,14 +617,6 @@ export const sitesRouter = t.router({
         metrics,
         stack,
         notes,
-        contacts: [] as Array<{
-          role: string;
-          name: string;
-          email: string | null;
-          phone: string | null;
-          source: 'generated' | 'user_options' | 'user_free' | 'user_flex';
-          origin: string | null;
-        }>,
         integrations: integrationsResponse,
         network: {
           assets: networkAssets,

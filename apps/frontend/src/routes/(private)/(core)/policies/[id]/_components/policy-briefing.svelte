@@ -1,7 +1,9 @@
 <script lang="ts">
   import { formatRelativeDate, prettyText } from '$lib/utils/format';
+  import PolicyActionsMenu from './policy-actions-menu.svelte';
 
   type Props = {
+    policyId: string;
     name: string;
     description?: string | null;
     category?: string | null;
@@ -17,6 +19,7 @@
     updatedAt?: string | null;
   };
   let {
+    policyId,
     name,
     description,
     category,
@@ -61,6 +64,7 @@
         <p class="mt-0.5 max-w-3xl truncate text-xs text-muted-foreground">{description}</p>
       {/if}
     </div>
+    <PolicyActionsMenu {policyId} policyName={name} />
   </div>
 
   <!-- Categorical pills -->

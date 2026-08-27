@@ -11,6 +11,7 @@
   import Button from '$lib/components/ui/button/button.svelte';
   import { Input } from '$lib/components/ui/input/index.js';
   import { Label } from '$lib/components/ui/label/index.js';
+  import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import * as Sheet from '$lib/components/ui/sheet/index.js';
   import SingleSelect from '$lib/components/single-select.svelte';
   import { showErrorToast } from '$lib/utils/errors';
@@ -59,6 +60,7 @@
   let tiles = $state<Tile[]>([]);
   let saving = $state(false);
   let deleting = $state(false);
+  let deleteDialogOpen = $state(false);
   let openSheet = $state(false);
   let editingKey = $state<string | null>(null);
   let draftTitle = $state('');
@@ -280,6 +282,27 @@
   }
 </script>
 
+<AlertDialog.Root bind:open={deleteDialogOpen}>
+  <AlertDialog.Content>
+    <AlertDialog.Header>
+      <AlertDialog.Title>Delete "{dashboard.data?.name ?? name}"?</AlertDialog.Title>
+      <AlertDialog.Description>
+        Removes the dashboard and all of its team KPI widgets.
+      </AlertDialog.Description>
+    </AlertDialog.Header>
+    <AlertDialog.Footer>
+      <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+      <AlertDialog.Action
+        class="bg-destructive text-destructive-foreground hover:bg-destructive/80"
+        disabled={deleting}
+        onclick={removeDashboard}
+      >
+        {deleting ? 'Deleting…' : 'Delete dashboard'}
+      </AlertDialog.Action>
+    </AlertDialog.Footer>
+  </AlertDialog.Content>
+</AlertDialog.Root>
+
 <Sheet.Root open={openSheet} onOpenChange={(v) => (openSheet = v)}
   ><Sheet.Content style="width:min(96vw,72rem);max-width:min(96vw,72rem)"
     ><Sheet.Header
@@ -436,7 +459,7 @@
       <ScopeBar />{#if !isNew && canDelete}<Button
           variant="ghost"
           disabled={deleting}
-          onclick={removeDashboard}><Trash2 class="size-4" />Delete</Button
+          onclick={() => (deleteDialogOpen = true)}><Trash2 class="size-4" />Delete</Button
         >{/if}<Button disabled={!canWrite || saving} class="gap-2" onclick={save}
         ><Save class="size-4" />Save changes</Button
       >

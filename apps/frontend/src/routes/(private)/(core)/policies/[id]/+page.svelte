@@ -294,6 +294,7 @@
       deletingAssignmentId = null;
     }
   }
+
 </script>
 
 {#if policyQuery.data}
@@ -311,6 +312,7 @@
   {@const openFindingCount = findings.length || policy.openFindingCount}
   <FadeIn class="size-full overflow-auto">
     <PolicyBriefing
+      policyId={policy.id}
       name={policy.name}
       description={policy.description}
       category={policy.category}
