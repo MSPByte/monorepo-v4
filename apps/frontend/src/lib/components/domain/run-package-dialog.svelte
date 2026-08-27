@@ -380,10 +380,24 @@
     'm365_role',
   ]);
 
+  // When tenant-scoped entity fields exist but no explicit integration_link runtime
+  // field is declared and no linkId prop was passed, show a synthetic tenant picker.
+  const needsSyntheticTenantPicker = $derived(
+    !effectiveLinkId &&
+    !runtimeFields.some((f) => f.entityType === 'integration_link') &&
+    runtimeFields.some((f) => f.entityType && TENANT_SCOPED_ENTITY_TYPES.has(f.entityType)),
+  );
+
+  const SYNTHETIC_LINK_KEY = '__syntheticTenantLinkId';
+
   const cascadeLinkId = $derived.by<string | undefined>(() => {
     for (const field of runtimeFields) {
       if (field.entityType !== 'integration_link') continue;
       const raw = values[field.promptKey];
+      if (typeof raw === 'string' && raw.length > 0) return raw;
+    }
+    if (needsSyntheticTenantPicker) {
+      const raw = values[SYNTHETIC_LINK_KEY];
       if (typeof raw === 'string' && raw.length > 0) return raw;
     }
     return effectiveLinkId;
@@ -488,7 +502,7 @@
     }) =>
       trpc.packageRuns.start.mutate({
         packageId: args.packageId,
-        linkId: effectiveLinkId ?? null,
+        linkId: cascadeLinkId ?? effectiveLinkId ?? null,
         siteId: args.siteId ?? null,
         runtimeInputs: args.runtimeInputs,
         startStepIndex: args.startStepIndex,
@@ -585,6 +599,7 @@
     if (!selectedPackage) return false;
     if (scheduleMode && (!scheduledLocalTime || !scheduleTimeZone)) return false;
     if (needsSiteTarget && !effectiveSiteId) return false;
+    if (needsSyntheticTenantPicker && !cascadeLinkId) return false;
     for (const field of runtimeFields) {
       if (isBlockedByTenant(field) && field.required) return false;
       if (!field.required) continue;
@@ -743,6 +758,22 @@
               selected={selectedTargetSiteId}
               placeholder={sitesQuery.isLoading ? 'Loading sites…' : 'Choose a site…'}
               onchange={(v) => (selectedTargetSiteId = v)}
+            />
+          </section>
+        {/if}
+        {#if needsSyntheticTenantPicker}
+          <section class="rounded-lg border border-sky-500/25 bg-sky-500/[0.04] px-3 py-3 space-y-2">
+            <Label class="text-sm font-medium">Microsoft 365 tenant<span class="text-rose-500 ml-0.5">*</span></Label>
+            <p class="text-xs text-muted-foreground">
+              Choose the tenant whose identities this package will act on.
+            </p>
+            <EntityPicker
+              entityType="integration_link"
+              integrationId="microsoft-365"
+              multiple={false}
+              value={typeof values[SYNTHETIC_LINK_KEY] === 'string' ? values[SYNTHETIC_LINK_KEY] as string : null}
+              onValueChange={(v) => { if (typeof v === 'string' || v === null) values[SYNTHETIC_LINK_KEY] = v ?? ''; }}
+              placeholder="Choose a tenant…"
             />
           </section>
         {/if}

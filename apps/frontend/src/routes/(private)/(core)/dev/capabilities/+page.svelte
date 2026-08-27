@@ -258,7 +258,7 @@
       const entityType = isEntity ? r.valueType.slice('entity:'.length) : undefined;
       newInputMeta[r.key] = {
         label: r.label || r.key,
-        ...(r.required ? { required: true } : {}),
+        required: r.required,
         ...(isEntity
           ? { entityType, allowedBindings: ['literal', 'runtime', 'priorOutput'] }
           : { valueType: r.valueType }),

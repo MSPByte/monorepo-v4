@@ -225,6 +225,7 @@ function validateStepsAgainstRegistry(
   steps: ParsedStep[],
   lane: 'main' | 'onSuccess' | 'onFailure' = 'main',
   subpackageMeta: Map<string, SubpackageMeta> = new Map(),
+  catalogCandidateIds: ReadonlySet<string> = new Set(),
 ): string | null {
   for (let pos = 0; pos < steps.length; pos++) {
     const step = steps[pos]!;
@@ -271,7 +272,11 @@ function validateStepsAgainstRegistry(
 
     // ---- Capability step branch -------------------------------------------
     const cap = getCapability(step.capabilityId);
-    if (!cap) return `Unknown capability at step ${pos + 1}: ${step.capabilityId}`;
+    if (!cap) {
+      // Catalog candidates (approved/live) are valid but not in the code registry.
+      if (catalogCandidateIds.has(step.capabilityId)) continue;
+      return `Unknown capability at step ${pos + 1}: ${step.capabilityId}`;
+    }
     for (const [inputName, binding] of Object.entries(step.inputBindings)) {
       const meta = cap.inputMeta[inputName];
       if (!meta) return `Step ${pos + 1}: capability has no input "${inputName}"`;
@@ -656,6 +661,12 @@ export const packagesRouter = t.router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: unavailableCapabilitiesMessage(unavailable) });
       }
 
+      const catalogRows = await ctx.catalogDb
+        .select({ id: capabilityCandidates.id })
+        .from(capabilityCandidates)
+        .where(inArray(capabilityCandidates.lifecycleStatus, ['approved', 'live']));
+      const catalogIds = new Set(catalogRows.map((r) => r.id));
+
       // Serializable txn: the cycle + depth check reads package_dependencies
       // and any concurrent save on any package in the touched subgraph will
       // either serialize behind us or abort with a retryable error.
@@ -665,18 +676,20 @@ export const packagesRouter = t.router({
           input.outcomeSteps.onSuccess,
           input.outcomeSteps.onFailure,
         ]);
-        const err = validateStepsAgainstRegistry(input.steps, 'main', subMeta);
+        const err = validateStepsAgainstRegistry(input.steps, 'main', subMeta, catalogIds);
         if (err) return { error: err };
         const successOutcomeError = validateStepsAgainstRegistry(
           input.outcomeSteps.onSuccess,
           'onSuccess',
           subMeta,
+          catalogIds,
         );
         if (successOutcomeError) return { error: `On success: ${successOutcomeError}` };
         const failureOutcomeError = validateStepsAgainstRegistry(
           input.outcomeSteps.onFailure,
           'onFailure',
           subMeta,
+          catalogIds,
         );
         if (failureOutcomeError) return { error: `On failure: ${failureOutcomeError}` };
         const promptError = validatePromptBindings(allPackageSteps(input), input.prompts);
@@ -769,6 +782,7 @@ export const packagesRouter = t.router({
           throw new TRPCError({ code: 'BAD_REQUEST', message: directLinkScope.message });
         }
       }
+      let updateCatalogIds: ReadonlySet<string> = new Set();
       if (input.steps || input.outcomeSteps) {
         const availability = await loadCapabilityAvailabilityInventory(ctx.db);
         const unavailable = findUnavailableCapabilities(
@@ -778,6 +792,11 @@ export const packagesRouter = t.router({
         if (unavailable.length > 0) {
           throw new TRPCError({ code: 'BAD_REQUEST', message: unavailableCapabilitiesMessage(unavailable) });
         }
+        const updateCatalogRows = await ctx.catalogDb
+          .select({ id: capabilityCandidates.id })
+          .from(capabilityCandidates)
+          .where(inArray(capabilityCandidates.lifecycleStatus, ['approved', 'live']));
+        updateCatalogIds = new Set(updateCatalogRows.map((r) => r.id));
       }
 
       const result = await ctx.db.transaction(async (tx: any) => {
@@ -803,7 +822,7 @@ export const packagesRouter = t.router({
         ]);
 
         if (input.steps) {
-          const err = validateStepsAgainstRegistry(input.steps, 'main', subMeta);
+          const err = validateStepsAgainstRegistry(input.steps, 'main', subMeta, updateCatalogIds);
           if (err) return { error: err };
         }
         if (input.steps || input.prompts || input.outcomeSteps) {
@@ -818,12 +837,14 @@ export const packagesRouter = t.router({
             input.outcomeSteps.onSuccess,
             'onSuccess',
             subMeta,
+            updateCatalogIds,
           );
           if (successOutcomeError) return { error: `On success: ${successOutcomeError}` };
           const failureOutcomeError = validateStepsAgainstRegistry(
             input.outcomeSteps.onFailure,
             'onFailure',
             subMeta,
+            updateCatalogIds,
           );
           if (failureOutcomeError) return { error: `On failure: ${failureOutcomeError}` };
         }
@@ -1454,7 +1475,7 @@ export const packagesRouter = t.router({
             vendor: c.vendor,
             name: c.name,
             description: c.description ?? undefined,
-            category: (c.category ?? 'general') as string,
+            category: (c.category ?? 'general').toLowerCase() as string,
             integration: (c.integration ?? undefined) as { integrationId: string; connection: 'configured' | 'activeLink' } | undefined,
             inputMeta: Object.fromEntries(
               Object.entries(inputMeta).map(([name, meta]) => {
