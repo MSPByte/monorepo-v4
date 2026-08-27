@@ -2,6 +2,7 @@ export * from "./config/actions/index.js";
 export * from "./config/billing/index.js";
 export * from "./config/integrations/index.js";
 export * from "./config/policy-table-shapes.js";
+export * from "./config/write-back-tables.js";
 export * from "./schemas/m365.js";
 export * from "./schemas/sophos.js";
 export * from "./schemas/cove.js";

@@ -19,6 +19,8 @@
     capabilityId: string;
     label?: string;
     optional?: boolean;
+    /** When set, the named input holds a list and the worker runs this step once per item. */
+    iterate?: string;
     inputBindings: Record<string, Binding>;
   };
 
@@ -709,6 +711,21 @@
   function reactionStep(): Step | null {
     if (selected.kind !== 'reaction') return null;
     return draft.outcomeSteps[selected.lane][selected.index] ?? null;
+  }
+
+  /** Returns the first input key on a capability that has an entityType — used to auto-pick iterate target. */
+  function firstEntityInput(cap: { inputMeta: Record<string, unknown> }): string | null {
+    for (const [name, meta] of Object.entries(cap.inputMeta as Record<string, { entityType?: string }>)) {
+      if (meta.entityType) return name;
+    }
+    return null;
+  }
+
+  function toggleIterate(stepIndex: number, step: CapabilityStep, cap: { inputMeta: Record<string, unknown> }) {
+    const next: CapabilityStep = step.iterate
+      ? { ...step, iterate: undefined }
+      : { ...step, iterate: firstEntityInput(cap) ?? undefined };
+    draft.steps = draft.steps.map((s, i) => (i === stepIndex ? next : s));
   }
 
   function setReactionBinding(inputName: string, binding: Binding) {
@@ -1574,8 +1591,24 @@
                 <p class="text-sm text-muted-foreground">{cap.description}</p>
               {/if}
               {#if lane === 'main'}
-                <div class="pt-1 font-mono text-[10px] text-muted-foreground/70">
-                  {cap.id}
+                <div class="flex items-center gap-2 pt-1">
+                  <span class="font-mono text-[10px] text-muted-foreground/70">{cap.id}</span>
+                  {#if step.kind === 'capability' && firstEntityInput(cap as { inputMeta: Record<string, unknown> })}
+                    {@const iterateTarget = firstEntityInput(cap as { inputMeta: Record<string, unknown> })}
+                    {@const iterateMeta = (cap.inputMeta as Record<string, { entityType?: string; label?: string }>)[iterateTarget ?? ''] }
+                    <button
+                      onclick={() => toggleIterate(stepIndex, step as CapabilityStep, cap as { inputMeta: Record<string, unknown> })}
+                      class="rounded-sm border px-1.5 py-0.5 font-mono text-[10px] transition-colors
+                        {(step as CapabilityStep).iterate
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : 'border-input text-muted-foreground hover:border-primary/50 hover:text-foreground'}"
+                      title={(step as CapabilityStep).iterate
+                        ? 'Runs once per selected item — click to disable'
+                        : `Enable to run this step for each selected ${iterateMeta?.entityType?.replace(/_/g, ' ') ?? 'entity'}`}
+                    >
+                      {(step as CapabilityStep).iterate ? `iterate · ${iterateTarget}` : 'run once'}
+                    </button>
+                  {/if}
                 </div>
               {/if}
               <input
@@ -1801,9 +1834,10 @@
                       />
                     {:else if binding?.kind === 'literal'}
                       {#if meta.entityType}
+                        {@const multiSelect = meta.typeHint === 'stringArray' || (step.kind === 'capability' && (step as CapabilityStep).iterate === inputName)}
                         <EntityPicker
                           entityType={meta.entityType as EntityType}
-                          multiple={meta.typeHint === 'stringArray'}
+                          multiple={multiSelect}
                           value={binding.value as string | string[] | null}
                           onValueChange={(v) => setBinding(stepIndex, inputName, { kind: 'literal', value: v })}
                         />
@@ -1848,7 +1882,11 @@
                     {:else if binding?.kind === 'runtime'}
                       <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                         {#if meta.entityType}
-                          A picker for <span class="font-mono">{meta.entityType.replace('_', ' ')}</span> will appear when this runs.
+                          {#if step.kind === 'capability' && (step as CapabilityStep).iterate === inputName}
+                            A <strong>multi-select</strong> picker for <span class="font-mono">{meta.entityType.replace(/_/g, ' ')}</span> will appear — the step runs once per selected item.
+                          {:else}
+                            A picker for <span class="font-mono">{meta.entityType.replace(/_/g, ' ')}</span> will appear when this runs.
+                          {/if}
                         {:else if meta.typeHint === 'password'}
                           A password field will appear. Operators can generate a strong random password or set a specific one.
                         {:else}

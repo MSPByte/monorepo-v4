@@ -251,8 +251,74 @@ export const policySetTemplateItems = pgTable(
   ],
 );
 
+export const capabilityCandidates = pgTable(
+  'capability_candidates',
+  {
+    id: text('id').primaryKey(),
+    lifecycleStatus: text('lifecycle_status', {
+      enum: ['generated', 'approved', 'live', 'rejected'],
+    }).notNull().default('generated'),
+    integration: jsonb('integration').notNull().default({}),
+    vendor: text('vendor').notNull(),
+    name: text('name').notNull(),
+    description: text('description'),
+    category: text('category'),
+    operation: jsonb('operation').notNull().default({}),
+    inputMeta: jsonb('input_meta').notNull().default({}),
+    outputMeta: jsonb('output_meta').notNull().default({}),
+    sourceUrl: text('source_url'),
+    notes: text('notes'),
+    approvedBy: uuid('approved_by').references(() => user.id, { onDelete: 'set null' }),
+    approvedAt: timestamp('approved_at', { withTimezone: true, mode: 'string' }),
+    rejectedBy: uuid('rejected_by').references(() => user.id, { onDelete: 'set null' }),
+    rejectedAt: timestamp('rejected_at', { withTimezone: true, mode: 'string' }),
+    liveAt: timestamp('live_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('capability_candidates_lifecycle_idx').on(t.lifecycleStatus),
+    index('capability_candidates_vendor_idx').on(t.vendor),
+  ],
+);
+
+export const capabilitySmokeTests = pgTable(
+  'capability_smoke_tests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    candidateId: text('candidate_id')
+      .notNull()
+      .references(() => capabilityCandidates.id, { onDelete: 'cascade' }),
+    evidence: text('evidence').notNull(),
+    notes: text('notes'),
+    testedAt: timestamp('tested_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    testedBy: uuid('tested_by').references(() => user.id, { onDelete: 'set null' }),
+  },
+  (t) => [index('capability_smoke_tests_candidate_idx').on(t.candidateId)],
+);
+
+export const capabilityFlags = pgTable(
+  'capability_flags',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    capabilityId: text('capability_id').notNull(),
+    orgId: uuid('org_id').references(() => organization.id, { onDelete: 'cascade' }),
+    enabled: boolean('enabled').notNull().default(true),
+    reason: text('reason'),
+    updatedBy: uuid('updated_by').references(() => user.id, { onDelete: 'set null' }),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('capability_flags_capability_idx').on(t.capabilityId),
+    index('capability_flags_org_idx').on(t.orgId),
+  ],
+);
+
 export type AuthUser = typeof user.$inferSelect;
 export type AuthOrganization = typeof organization.$inferSelect;
 export type AuthMember = typeof member.$inferSelect;
 export type PolicyTemplate = typeof policyTemplates.$inferSelect;
 export type PolicySetTemplate = typeof policySetTemplates.$inferSelect;
+export type CapabilityCandidate = typeof capabilityCandidates.$inferSelect;
+export type CapabilitySmokeTest = typeof capabilitySmokeTests.$inferSelect;
+export type CapabilityFlag = typeof capabilityFlags.$inferSelect;

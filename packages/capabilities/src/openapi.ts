@@ -21,11 +21,13 @@ export interface OpenApiOperationManifest {
   parameters?: ReadonlyArray<{
     input: string;
     name: string;
-    in: 'path' | 'query' | 'header';
+    /** 'body' assembles named fields into the request body object (ideal for PATCH). */
+    in: 'path' | 'query' | 'header' | 'body';
     required?: boolean;
   }>;
   body?: {
-    input: string;
+    /** If set, the named input provides the entire body. If absent, body is assembled from in:'body' parameters. */
+    input?: string;
     contentType: 'application/json' | 'application/x-www-form-urlencoded';
   };
   successStatusCodes: readonly number[];
@@ -60,6 +62,8 @@ export function buildOpenApiRequest(
   const query = new URLSearchParams();
   const headers: Record<string, string> = {};
 
+  const bodyFields: Record<string, unknown> = {};
+
   for (const parameter of operation.parameters ?? []) {
     const value = inputs[parameter.input];
     if (value === undefined || value === null) {
@@ -71,6 +75,11 @@ export function buildOpenApiRequest(
     } else if (parameter.in === 'query') {
       const values = Array.isArray(value) ? value : [value];
       for (const entry of values) query.append(parameter.name, parameterValue(entry, parameter.name));
+    } else if (parameter.in === 'body') {
+      // Skip empty strings for optional body fields — vendors commonly reject "" for
+      // constrained string properties (e.g. Graph enforces minimum length on jobTitle).
+      if (!parameter.required && value === '') continue;
+      bodyFields[parameter.name] = value;
     } else {
       // Authorization is connector-owned. A manifest cannot override it.
       if (parameter.name.toLowerCase() === 'authorization') {
@@ -81,12 +90,22 @@ export function buildOpenApiRequest(
   }
 
   if (/\{[^}]+\}/.test(path)) throw new Error(`OpenAPI path "${operation.path}" has an unresolved parameter.`);
+
+  let body: unknown;
+  if (operation.body) {
+    if (operation.body.input) {
+      body = inputs[operation.body.input];
+    } else if (Object.keys(bodyFields).length > 0) {
+      body = bodyFields;
+    }
+  }
+
   return {
     method: operation.method,
     path,
     query,
     headers,
-    body: operation.body ? inputs[operation.body.input] : undefined,
+    body,
   };
 }
 

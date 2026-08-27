@@ -1,5 +1,5 @@
 import { appRouter, type EffectiveScope } from '@mspbyte/trpc';
-import { createTenantDb, type organization } from '@mspbyte/drizzle-catalog';
+import { createTenantDb, getCatalogDb, type organization } from '@mspbyte/drizzle-catalog';
 import type { db } from '$lib/db';
 import { ENCRYPTION_KEY, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET } from '$env/static/private';
 import {
@@ -48,6 +48,7 @@ export function createServerCaller(locals: {
             clientSecret: MICROSOFT_CLIENT_SECRET,
           }
         : null,
+    catalogDb: getCatalogDb(),
     redis: getRedis(),
   });
 }

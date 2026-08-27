@@ -1,6 +1,6 @@
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { appRouter, type EffectiveScope } from '@mspbyte/trpc';
-import { createTenantDb } from '@mspbyte/drizzle-catalog';
+import { createTenantDb, getCatalogDb } from '@mspbyte/drizzle-catalog';
 import { ENCRYPTION_KEY, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET } from '$env/static/private';
 import { getRedis } from '$lib/server/redis';
 import {
@@ -43,6 +43,7 @@ const handler: RequestHandler = async (event) => {
               clientSecret: MICROSOFT_CLIENT_SECRET,
             }
           : null,
+      catalogDb: getCatalogDb(),
       redis: getRedis(),
     }),
   });

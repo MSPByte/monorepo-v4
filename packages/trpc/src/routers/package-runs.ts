@@ -10,6 +10,7 @@ import {
   sites,
   users,
 } from '@mspbyte/drizzle';
+import { capabilityCandidates } from '@mspbyte/drizzle-catalog';
 import { TRPCError } from '@trpc/server';
 import { generatePassword, getCapability } from '@mspbyte/capabilities';
 import { buildEmbeddedChildren, createPendingPackageRun } from '@mspbyte/pipeline';
@@ -24,6 +25,116 @@ import {
 } from '../capability-availability.js';
 
 const runtimeInputsSchema = z.record(z.string(), z.unknown()).default({});
+
+type CapabilityStep = { kind: 'capability'; capabilityId: string; [k: string]: unknown };
+
+/** Collect every capabilityId referenced by a step array (non-recursive). */
+function collectCapabilityIds(steps: unknown[]): string[] {
+  const ids: string[] = [];
+  for (const s of steps) {
+    if (s && typeof s === 'object' && (s as CapabilityStep).kind === 'capability') {
+      const id = (s as CapabilityStep).capabilityId;
+      if (typeof id === 'string') ids.push(id);
+    }
+  }
+  return ids;
+}
+
+type SnapshotManifest = {
+  id: string;
+  lifecycleStatus: string;
+  integration: unknown;
+  operation: unknown;
+  inputMeta: unknown;
+  outputMeta: unknown;
+};
+
+/**
+ * Walks every step in the snapshot tree (main, outcomeSteps, children) and
+ * embeds the catalog manifest for any catalog-backed capability step. Code-backed
+ * capabilities (present in the in-process registry) are skipped — they never
+ * need a catalog lookup at execution time.
+ */
+async function embedCatalogManifests(
+  catalogDb: any,
+  snapshot: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  type StepList = unknown[] | null | undefined;
+  type ChildMap = Record<string, { steps?: StepList; outcomeSteps?: { onSuccess?: StepList; onFailure?: StepList }; [k: string]: unknown }>;
+
+  // Collect all capabilityIds across the full tree
+  const allIds = new Set<string>();
+  const mainSteps = (snapshot.steps as StepList) ?? [];
+  const outcomeSuccess = ((snapshot.outcomeSteps as { onSuccess?: StepList })?.onSuccess) ?? [];
+  const outcomeFailure = ((snapshot.outcomeSteps as { onFailure?: StepList })?.onFailure) ?? [];
+
+  for (const id of collectCapabilityIds(mainSteps)) allIds.add(id);
+  for (const id of collectCapabilityIds(outcomeSuccess)) allIds.add(id);
+  for (const id of collectCapabilityIds(outcomeFailure)) allIds.add(id);
+
+  for (const child of Object.values((snapshot.children as ChildMap) ?? {})) {
+    for (const id of collectCapabilityIds(child.steps ?? [])) allIds.add(id);
+    for (const id of collectCapabilityIds(child.outcomeSteps?.onSuccess ?? [])) allIds.add(id);
+    for (const id of collectCapabilityIds(child.outcomeSteps?.onFailure ?? [])) allIds.add(id);
+  }
+
+  // Filter to catalog-only (skip code-backed capabilities already in registry)
+  const catalogIds = [...allIds].filter((id) => !getCapability(id));
+  if (catalogIds.length === 0) return snapshot;
+
+  // Batch fetch manifests
+  const rows = await catalogDb
+    .select({
+      id: capabilityCandidates.id,
+      lifecycleStatus: capabilityCandidates.lifecycleStatus,
+      integration: capabilityCandidates.integration,
+      operation: capabilityCandidates.operation,
+      inputMeta: capabilityCandidates.inputMeta,
+      outputMeta: capabilityCandidates.outputMeta,
+    })
+    .from(capabilityCandidates)
+    .where(inArray(capabilityCandidates.id, catalogIds));
+
+  const manifests = new Map<string, SnapshotManifest>(
+    (rows as SnapshotManifest[]).map((r) => [r.id, r]),
+  );
+
+  if (manifests.size === 0) return snapshot;
+
+  // Embed _manifest into each matching step (non-mutating)
+  const embedSteps = (steps: StepList): unknown[] =>
+    (steps ?? []).map((s) => {
+      if (!s || typeof s !== 'object') return s;
+      const step = s as CapabilityStep;
+      if (step.kind !== 'capability') return s;
+      const manifest = manifests.get(step.capabilityId);
+      return manifest ? { ...step, _manifest: manifest } : s;
+    });
+
+  const newChildren: ChildMap = {};
+  for (const [cid, child] of Object.entries((snapshot.children as ChildMap) ?? {})) {
+    newChildren[cid] = {
+      ...child,
+      steps: embedSteps(child.steps),
+      outcomeSteps: {
+        onSuccess: embedSteps(child.outcomeSteps?.onSuccess),
+        onFailure: embedSteps(child.outcomeSteps?.onFailure),
+      },
+    };
+  }
+
+  return {
+    ...snapshot,
+    steps: embedSteps(mainSteps),
+    outcomeSteps: {
+      ...(snapshot.outcomeSteps as object ?? {}),
+      onSuccess: embedSteps(outcomeSuccess),
+      onFailure: embedSteps(outcomeFailure),
+    },
+    children: newChildren,
+  };
+}
+
 const scheduleRunInputStateSchema = z.object({
   // These are UI choices which alter how runtime values are interpreted. They
   // belong in the schedule snapshot alongside the values themselves.
@@ -258,7 +369,7 @@ export const packageRunsRouter = t.router({
         (pkg.steps as unknown[]) ?? [],
         (pkg.outcomeSteps as { onSuccess?: unknown[]; onFailure?: unknown[] } | null) ?? undefined,
       );
-      const packageSnapshot = {
+      const packageSnapshot = await embedCatalogManifests(ctx.catalogDb, {
         id: pkg.id,
         name: pkg.name,
         version: pkg.version,
@@ -271,7 +382,7 @@ export const packageRunsRouter = t.router({
         skippedStepIndexes: input.runInputState.skippedStepIndexes,
         runInputState: input.runInputState,
         scheduledBy: ctx.user.name || ctx.user.email || ctx.user.id,
-      };
+      });
       const [schedule] = await ctx.db
         .insert(packageSchedules)
         .values({
@@ -704,7 +815,7 @@ export const packageRunsRouter = t.router({
         (pkg.steps as unknown[]) ?? [],
         (pkg.outcomeSteps as { onSuccess?: unknown[]; onFailure?: unknown[] } | null) ?? undefined,
       );
-      const packageSnapshot = {
+      const packageSnapshot = await embedCatalogManifests(ctx.catalogDb, {
         id: pkg.id,
         name: pkg.name,
         version: pkg.version,
@@ -714,8 +825,8 @@ export const packageRunsRouter = t.router({
         failureActions: pkg.failureActions ?? [],
         exposedOutputs: pkg.exposedOutputs ?? [],
         children,
-        skippedStepIndexes: input.skippedStepIndexes
-      };
+        skippedStepIndexes: input.skippedStepIndexes,
+      });
 
       // The tRPC caller only creates the pending row — no Redis contact.
       // backend/packages polls pending rows per-org and pushes to BullMQ.

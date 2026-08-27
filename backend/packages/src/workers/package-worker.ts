@@ -1,6 +1,6 @@
 import { Worker } from "bullmq";
 import { and, asc, eq, gte, inArray, isNull } from "drizzle-orm";
-import { getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
+import { capabilityCandidates, getCatalogDb, getTenantServiceDbByOrgId } from "@mspbyte/drizzle-catalog";
 import {
   customerLogs,
   integrationLinks,
@@ -14,6 +14,7 @@ import {
   sites,
   sophosEndpoints,
 } from "@mspbyte/drizzle";
+import type { CatalogCandidate } from "../catalog-executor.js";
 import type { PackageJobData } from "@mspbyte/pipeline";
 import {
   getCapability,
@@ -42,6 +43,7 @@ import { logger } from "../logger.js";
 import { buildM365Connector } from "../m365.js";
 import type { RedisConnection } from "../redis.js";
 import { purgeExpiredSensitiveOutputs } from "./ttl-cleanup.js";
+import { loadCatalogCandidate, executeCatalogCandidate } from "../catalog-executor.js";
 
 export const TTL_CLEANUP_JOB_NAME = "ttl-cleanup";
 
@@ -54,6 +56,11 @@ type CapabilityStep = {
   inputBindings: Record<string, Binding>;
   onFailure?: StepOnFailure;
   retryAttempts?: number;
+  // When set, the named input resolves to an array and the step runs once per item.
+  iterate?: string;
+  // Manifest frozen at dispatch time by embedCatalogManifests; worker uses this
+  // instead of a live catalog lookup so the run is isolated from later edits.
+  _manifest?: FrozenManifest;
 };
 
 type SubpackageStep = {
@@ -103,6 +110,18 @@ type PackageSnapshot = {
   // Keyed by child package id; contains the frozen definition + its own children
   // at dispatch time. Sub-package steps look up their execution target here.
   children?: Record<string, EmbeddedPackageSnapshot>;
+  // Set by the dev-test runTest path; bypasses lifecycle and availability checks.
+  testRun?: boolean;
+};
+
+// Manifest frozen into the step at dispatch time by embedCatalogManifests.
+type FrozenManifest = {
+  id: string;
+  lifecycleStatus: string;
+  integration: unknown;
+  operation: unknown;
+  inputMeta: unknown;
+  outputMeta: unknown;
 };
 
 function snapshotCapabilityIds(snapshot: PackageSnapshot, ids = new Set<string>()): Set<string> {
@@ -122,7 +141,11 @@ function snapshotCapabilityIds(snapshot: PackageSnapshot, ids = new Set<string>(
   return ids;
 }
 
-async function unavailableSnapshotCapabilities(db: any, snapshot: PackageSnapshot): Promise<string[]> {
+async function unavailableSnapshotCapabilities(
+  db: any,
+  catalogDb: any,
+  snapshot: PackageSnapshot,
+): Promise<string[]> {
   const [configured, activeLinks] = await Promise.all([
     db.select({ id: integrations.id }).from(integrations).where(isNull(integrations.deletedAt)),
     db
@@ -140,10 +163,57 @@ async function unavailableSnapshotCapabilities(db: any, snapshot: PackageSnapsho
       (activeLinks as Array<{ integrationId: string }>).map((row) => row.integrationId),
     ),
   };
-  return [...snapshotCapabilityIds(snapshot)].flatMap((id) => {
+
+  const unavailable: string[] = [];
+  const unrecognizedIds: string[] = [];
+
+  for (const id of snapshotCapabilityIds(snapshot)) {
     const capability = getCapability(id);
-    return capability && !isCapabilityAvailable(capability, inventory) ? [capability.name] : [];
-  });
+    if (capability) {
+      if (!isCapabilityAvailable(capability, inventory)) unavailable.push(capability.name);
+    } else {
+      unrecognizedIds.push(id);
+    }
+  }
+
+  if (unrecognizedIds.length > 0) {
+    const rows = await catalogDb
+      .select({
+        id: capabilityCandidates.id,
+        name: capabilityCandidates.name,
+        lifecycleStatus: capabilityCandidates.lifecycleStatus,
+        integration: capabilityCandidates.integration,
+      })
+      .from(capabilityCandidates)
+      .where(inArray(capabilityCandidates.id, unrecognizedIds));
+
+    const found = new Map<string, typeof rows[number]>(
+      (rows as Array<{ id: string; name: string; lifecycleStatus: string; integration: unknown }>)
+        .map((r) => [r.id, r]),
+    );
+
+    for (const id of unrecognizedIds) {
+      const row = found.get(id);
+      if (!row) {
+        unavailable.push(`Unknown capability '${id}'`);
+        continue;
+      }
+      if (row.lifecycleStatus !== 'approved' && row.lifecycleStatus !== 'live') {
+        unavailable.push(`${row.name} (not yet approved for execution — current status: ${row.lifecycleStatus})`);
+        continue;
+      }
+      const integration = row.integration as { integrationId: string; connection: 'configured' | 'activeLink' } | null;
+      if (!integration) continue;
+      const available = integration.connection === 'activeLink'
+        ? inventory.activeLinkIntegrationIds.has(integration.integrationId)
+        : inventory.configuredIntegrationIds.has(integration.integrationId);
+      if (!available) {
+        unavailable.push(`${row.name} (requires ${integration.integrationId} — not configured or no active link)`);
+      }
+    }
+  }
+
+  return unavailable;
 }
 
 export function createPackageWorker(
@@ -151,6 +221,9 @@ export function createPackageWorker(
   orgId: string,
   queueName: string,
 ): Worker {
+  // Catalog DB is shared across all jobs; one connection per worker process.
+  const catalogDb = getCatalogDb(env.CATALOG_DATABASE_URL);
+
   return new Worker<PackageJobData, void, string>(
     queueName,
     async (job) => {
@@ -203,6 +276,7 @@ export function createPackageWorker(
 
       const result = await runPackageRun({
         db,
+        catalogDb,
         orgId,
         run,
         encryptionKey,
@@ -242,6 +316,7 @@ function extractRetryPath(triggerRef: unknown): number[] {
 // leaf-retry paths through `retryPathTail`.
 async function runPackageRun(args: {
   db: any;
+  catalogDb: any;
   orgId: string;
   run: any;
   encryptionKey: string;
@@ -251,7 +326,7 @@ async function runPackageRun(args: {
   finalStatus: 'canceled' | 'halted' | 'partial' | 'completed';
   stepOutputs: Map<number, Record<string, unknown>>;
 }> {
-  const { db, orgId, run, encryptionKey, parentCtxBase, retryPathTail } = args;
+  const { db, catalogDb, orgId, run, encryptionKey, parentCtxBase, retryPathTail } = args;
   const packageRunId = run.id as string;
   const snapshot = run.packageSnapshot as PackageSnapshot;
   const runtimeInputs = (run.runtimeInputs ?? {}) as Record<string, unknown>;
@@ -259,7 +334,8 @@ async function runPackageRun(args: {
   // Scheduled runs may wait days after their snapshot was created. Re-check
   // connection availability in the worker so a disconnected vendor never gets
   // an execution attempt merely because it was available at authoring time.
-  const unavailable = await unavailableSnapshotCapabilities(db, snapshot);
+  // Test runs skip this check — the dev workshop validates the capability directly.
+  const unavailable = snapshot.testRun ? [] : await unavailableSnapshotCapabilities(db, catalogDb, snapshot);
   if (unavailable.length > 0) {
     const message = `${[...new Set(unavailable)].join(', ')} requires an integration that is not set up or has no active link.`;
     logger.warn('Package run blocked by unavailable capability integration', {
@@ -453,6 +529,7 @@ async function runPackageRun(args: {
         if (step.kind === 'subpackage') {
           const childOutcome = await executeSubpackageStep({
             db,
+            catalogDb,
             orgId,
             parentRun: run,
             parentRunId: packageRunId,
@@ -476,14 +553,155 @@ async function runPackageRun(args: {
         }
 
         const capability = getCapability(step.capabilityId);
+
+        // Dynamic catalog executor: if the capability isn't in the code registry,
+        // use the manifest frozen at dispatch time (if present) or fall back to
+        // a live catalog lookup so older runs without a snapshot still work.
         if (!capability) {
-          await recordStepFailure(db, packageRunId, position, step.capabilityId, {
-            errorClass: "capability_missing",
-            message: `Unknown capability ${step.capabilityId}`,
+          const candidate = (step._manifest as CatalogCandidate | undefined)
+            ?? await loadCatalogCandidate(catalogDb, step.capabilityId, { allowUnreviewed: snapshot.testRun });
+          if (!candidate) {
+            await recordStepFailure(db, packageRunId, position, step.capabilityId, {
+              errorClass: "capability_missing",
+              message: `Unknown capability '${step.capabilityId}' — not in registry and not found as an approved catalog candidate.`,
+            });
+            halted = true;
+            anyStepFailed = true;
+            break;
+          }
+
+          const inserted = await db
+            .insert(packageRunSteps)
+            .values({
+              packageRunId,
+              position,
+              capabilityId: step.capabilityId,
+              status: "running",
+              startedAt: new Date().toISOString(),
+            })
+            .returning({ id: packageRunSteps.id });
+          const stepRow = inserted[0]!;
+
+          const resolveResult = resolveBindings(
+            step.inputBindings,
+            runtimeInputs,
+            stepOutputs,
+            { siteId: run.siteId, siteFacts: ctxBase.siteFacts },
+          );
+          if (!resolveResult.ok) {
+            await failStep(db, stepRow.id, {
+              errorClass: "binding_unresolved",
+              message: resolveResult.error,
+              resolvedInputs: {},
+            });
+            anyStepFailed = true;
+            const stepOnFailure: StepOnFailure = step.onFailure ?? "halt";
+            if (stepOnFailure === "halt") { halted = true; break; }
+            continue;
+          }
+
+          const catalogInputMeta = (candidate.inputMeta ?? {}) as Record<string, { sensitive?: boolean }>;
+          const encryptedCatalogInputs = encryptCatalogInputs(resolveResult.value, catalogInputMeta, encryptionKey);
+
+          // Iterate mode: run the capability once per item in the named array input.
+          const iterateKey = step.iterate;
+          const iterateValues = iterateKey && Array.isArray(resolveResult.value[iterateKey])
+            ? (resolveResult.value[iterateKey] as unknown[])
+            : null;
+
+          if (iterateValues && iterateValues.length > 0) {
+            const iterResults: Array<{ item: unknown; outcome: string; outputs?: unknown; error?: string }> = [];
+            let iterFailed = false;
+
+            for (const item of iterateValues) {
+              const singleInputs = { ...resolveResult.value, [iterateKey as string]: item };
+              const iterResult = await executeCatalogCandidate({
+                candidate,
+                inputs: singleInputs,
+                linkId: run.linkId ?? null,
+                getM365Connector: (linkId: string) => ctxBase.getM365Connector(linkId),
+                tenantDb: db,
+              });
+              iterResults.push({
+                item,
+                outcome: iterResult.outcome,
+                outputs: iterResult.outcome === 'success' ? iterResult.outputs : undefined,
+                error: iterResult.outcome === 'fail' ? iterResult.message : undefined,
+              });
+              if (iterResult.outcome === 'fail') {
+                iterFailed = true;
+                const onFail: StepOnFailure = step.onFailure ?? 'halt';
+                if (onFail === 'halt') break;
+              }
+            }
+
+            const aggregatedOutputs = { iterations: iterResults.length, results: iterResults };
+            if (iterFailed) {
+              await db.update(packageRunSteps).set({
+                status: "fail",
+                resolvedInputs: encryptedCatalogInputs,
+                outputs: aggregatedOutputs as Record<string, unknown>,
+                errorClass: "iterate_partial_failure",
+                errorMessage: `${iterResults.filter((r) => r.outcome === 'fail').length}/${iterResults.length} iteration(s) failed.`,
+                finishedAt: new Date().toISOString(),
+              }).where(eq(packageRunSteps.id, stepRow.id));
+              anyStepFailed = true;
+              const stepOnFailure: StepOnFailure = step.onFailure ?? "halt";
+              if (stepOnFailure === "halt") { halted = true; break; }
+            } else {
+              await db.update(packageRunSteps).set({
+                status: "success",
+                resolvedInputs: encryptedCatalogInputs,
+                outputs: aggregatedOutputs as Record<string, unknown>,
+                billable: true,
+                unitPrice: "0.0000",
+                finishedAt: new Date().toISOString(),
+              }).where(eq(packageRunSteps.id, stepRow.id));
+              stepOutputs.set(position, aggregatedOutputs as Record<string, unknown>);
+            }
+            continue;
+          }
+
+          const catalogResult = await executeCatalogCandidate({
+            candidate,
+            inputs: resolveResult.value,
+            linkId: run.linkId ?? null,
+            getM365Connector: (linkId: string) => ctxBase.getM365Connector(linkId),
+            tenantDb: db,
           });
-          halted = true;
-          anyStepFailed = true;
-          break;
+
+          const catalogAuditRow = await writeCatalogAuditLog(db, {
+            run,
+            candidate,
+            position,
+            result: catalogResult,
+          });
+
+          if (catalogResult.outcome === "success") {
+            await db.update(packageRunSteps).set({
+              status: "success",
+              resolvedInputs: encryptedCatalogInputs,
+              outputs: catalogResult.outputs as Record<string, unknown>,
+              billable: true,
+              unitPrice: "0.0000",
+              finishedAt: new Date().toISOString(),
+              auditLogIds: catalogAuditRow ? [catalogAuditRow] : [],
+            }).where(eq(packageRunSteps.id, stepRow.id));
+            stepOutputs.set(position, catalogResult.outputs as Record<string, unknown>);
+          } else if (catalogResult.outcome === 'fail') {
+            await db.update(packageRunSteps).set({
+              status: "fail",
+              resolvedInputs: encryptedCatalogInputs,
+              errorClass: catalogResult.errorClass,
+              errorMessage: catalogResult.message,
+              finishedAt: new Date().toISOString(),
+              auditLogIds: catalogAuditRow ? [catalogAuditRow] : [],
+            }).where(eq(packageRunSteps.id, stepRow.id));
+            anyStepFailed = true;
+            const stepOnFailure: StepOnFailure = step.onFailure ?? "halt";
+            if (stepOnFailure === "halt") { halted = true; break; }
+          }
+          continue;
         }
 
         const stepOnFailure: StepOnFailure = step.onFailure ?? "halt";
@@ -673,6 +891,7 @@ async function runPackageRun(args: {
   if (outcomeLane && outcomeSteps.length > 0) {
     await executeOutcomeLane({
       db,
+      catalogDb,
       run,
       runId: packageRunId,
       lane: outcomeLane,
@@ -782,6 +1001,7 @@ function decryptSubpackageOutputs(
 // row is created every time.
 async function executeSubpackageStep(args: {
   db: any;
+  catalogDb: any;
   orgId: string;
   parentRun: any;
   parentRunId: string;
@@ -795,7 +1015,7 @@ async function executeSubpackageStep(args: {
   retryPathTail: number[];
 }): Promise<'success' | 'fail'> {
   const {
-    db, orgId, parentRun, parentRunId, parentSnapshot, parentRuntimeInputs,
+    db, catalogDb, orgId, parentRun, parentRunId, parentSnapshot, parentRuntimeInputs,
     parentStepOutputs, parentCtxBase, encryptionKey, position, step, retryPathTail,
   } = args;
   const childCapabilityLabel = subpackageCapabilityLabel(step.packageId);
@@ -928,6 +1148,7 @@ async function executeSubpackageStep(args: {
 
   const childResult = await runPackageRun({
     db,
+    catalogDb,
     orgId,
     run: childRun,
     encryptionKey,
@@ -992,6 +1213,7 @@ async function executeFailureActions(args: {
 
 async function executeOutcomeLane(args: {
   db: any;
+  catalogDb: any;
   run: any;
   runId: string;
   lane: 'on_success' | 'on_failure';
@@ -1017,10 +1239,85 @@ async function executeOutcomeLane(args: {
     }
     const capability = getCapability(step.capabilityId);
     if (!capability) {
-      await dbInsertOutcomeFailure(args, position, step.capabilityId, {
-        errorClass: 'capability_missing',
-        message: `Unknown capability ${step.capabilityId}`,
+      const outcomeTestRun = (args.run.packageSnapshot as PackageSnapshot | null)?.testRun;
+      const candidate = ((step as CapabilityStep)._manifest as CatalogCandidate | undefined)
+        ?? await loadCatalogCandidate(args.catalogDb, step.capabilityId, { allowUnreviewed: outcomeTestRun });
+      if (!candidate) {
+        await dbInsertOutcomeFailure(args, position, step.capabilityId, {
+          errorClass: 'capability_missing',
+          message: `Unknown capability '${step.capabilityId}' — not in registry and not found as an approved catalog candidate.`,
+        });
+        continue;
+      }
+
+      const [catalogStepRow] = await args.db
+        .insert(packageRunSteps)
+        .values({
+          packageRunId: args.runId,
+          lane: args.lane,
+          position,
+          capabilityId: step.capabilityId,
+          status: 'running',
+          startedAt: new Date().toISOString(),
+        })
+        .returning({ id: packageRunSteps.id });
+
+      const catalogResolved = resolveBindings(step.inputBindings, args.runtimeInputs, outputs, {
+        siteId: args.run.siteId,
+        siteFacts: args.siteFacts,
+      }, {
+        main: args.mainOutputs,
+        [args.lane === 'on_success' ? 'onSuccess' : 'onFailure']: outputs,
+      }, args.failureContext);
+
+      if (!catalogResolved.ok) {
+        await failStep(args.db, catalogStepRow!.id, {
+          errorClass: 'binding_unresolved',
+          message: catalogResolved.error,
+          resolvedInputs: {},
+        });
+        continue;
+      }
+
+      const catalogResult = await executeCatalogCandidate({
+        candidate,
+        inputs: catalogResolved.value,
+        linkId: args.run.linkId ?? null,
+        getM365Connector: (linkId) => args.ctxBase.getM365Connector(linkId),
+        tenantDb: args.db,
       });
+
+      const catalogAuditRow = await writeCatalogAuditLog(args.db, {
+        run: args.run,
+        candidate,
+        position,
+        result: catalogResult,
+      });
+
+      const catalogInputMeta = (candidate.inputMeta ?? {}) as Record<string, { sensitive?: boolean }>;
+      const encryptedCatalogInputs = encryptCatalogInputs(catalogResolved.value, catalogInputMeta, args.encryptionKey);
+
+      if (catalogResult.outcome === 'success') {
+        await args.db.update(packageRunSteps).set({
+          status: 'success',
+          resolvedInputs: encryptedCatalogInputs,
+          outputs: catalogResult.outputs as Record<string, unknown>,
+          billable: true,
+          unitPrice: '0.0000',
+          finishedAt: new Date().toISOString(),
+          auditLogIds: catalogAuditRow ? [catalogAuditRow] : [],
+        }).where(eq(packageRunSteps.id, catalogStepRow!.id));
+        outputs.set(position, catalogResult.outputs as Record<string, unknown>);
+      } else if (catalogResult.outcome === 'fail') {
+        await args.db.update(packageRunSteps).set({
+          status: 'fail',
+          resolvedInputs: encryptedCatalogInputs,
+          errorClass: catalogResult.errorClass,
+          errorMessage: catalogResult.message,
+          finishedAt: new Date().toISOString(),
+          auditLogIds: catalogAuditRow ? [catalogAuditRow] : [],
+        }).where(eq(packageRunSteps.id, catalogStepRow!.id));
+      }
       continue;
     }
 
@@ -1731,6 +2028,60 @@ async function writeAuditLog(
   }
 }
 
+function encryptCatalogInputs(
+  values: Record<string, unknown>,
+  meta: Record<string, { sensitive?: boolean }>,
+  encryptionKey: string,
+): Record<string, unknown> {
+  const out = { ...values };
+  for (const [key, field] of Object.entries(meta)) {
+    if (!field.sensitive) continue;
+    const value = out[key];
+    if (value === undefined || value === null) continue;
+    out[key] = Encryption.encrypt(JSON.stringify(value), encryptionKey);
+  }
+  return out;
+}
+
+async function writeCatalogAuditLog(
+  db: any,
+  args: {
+    run: any;
+    candidate: CatalogCandidate;
+    position: number;
+    result: { outcome: string; message?: string };
+  },
+): Promise<string | null> {
+  try {
+    const [row] = await db
+      .insert(customerLogs)
+      .values({
+        siteId: args.run.siteId,
+        actorType: 'user',
+        actorId: args.run.triggeredByUserId ?? 'system',
+        actorLabel: args.run.triggeredByUserId ?? 'system',
+        action: `capability.${args.candidate.id}`,
+        actionLabel: args.candidate.name,
+        targetType: `capability.${args.candidate.id}`,
+        targetId: args.run.id,
+        targetLabel: args.candidate.name,
+        result: args.result.outcome === 'success' ? 'success' : 'failure',
+        errorMessage: args.result.outcome === 'fail' ? (args.result.message ?? null) : null,
+        metadata: {
+          packageRunId: args.run.id,
+          packageStepPosition: args.position,
+          candidateId: args.candidate.id,
+          dynamic: true,
+        },
+      })
+      .returning({ id: customerLogs.id });
+    return row?.id ?? null;
+  } catch (error) {
+    logger.warn('Failed to write catalog audit log', { error: serializeError(error) });
+    return null;
+  }
+}
+
 async function failStep(
   db: any,
   stepId: string,
@@ -1808,7 +2159,11 @@ async function seedPriorOutputs(args: {
     }
 
     const capability = getCapability(step.capabilityId);
-    if (!capability) continue;
+    if (!capability) {
+      // Catalog candidate step — outputs stored plain (no per-field sensitivity metadata).
+      args.stepOutputs.set(step.position, encrypted);
+      continue;
+    }
     const decrypted: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(encrypted)) {
       const meta = capability.outputMeta[key];

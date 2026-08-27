@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { getTenantServiceDbByOrgId } from '@mspbyte/drizzle-catalog';
+import { getTenantServiceDbByOrgId, getCatalogDb } from '@mspbyte/drizzle-catalog';
 import {
   integrationLinks,
   roles,
@@ -192,6 +192,7 @@ export async function createContext({ req, redis }: { req: IncomingRequest; redi
             clientSecret: process.env.MICROSOFT_CLIENT_SECRET
           }
         : null,
+    catalogDb: getCatalogDb(),
     redis
   };
 }

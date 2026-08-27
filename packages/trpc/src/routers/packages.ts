@@ -24,6 +24,7 @@ import {
   listCapabilities,
   listGenerators,
   FAILURE_CONTEXT_PATHS,
+  PACKAGE_FIELD_TYPES,
   packageFieldTypeLabel,
   resolveInputFieldType,
   resolveOutputFieldType,
@@ -34,6 +35,7 @@ import {
   resolveSiteFactFieldType,
 } from '@mspbyte/shared';
 import { TRPCError } from '@trpc/server';
+import { capabilityCandidates } from '@mspbyte/drizzle-catalog';
 import { t, authProcedure } from '../trpc.js';
 import {
   assertTenantScopedIntegrationLinks,
@@ -1370,30 +1372,109 @@ export const packagesRouter = t.router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Read required' });
       }
       const availability = await loadCapabilityAvailabilityInventory(ctx.db);
-      return listCapabilities()
+
+      const codeCaps = listCapabilities()
         .filter((capability) => !capability.hidden && isCapabilityAvailable(capability, availability))
         .map((capability) => ({
-        id: capability.id,
-        vendor: capability.vendor,
-        name: capability.name,
-        description: capability.description,
-        category: capability.category,
-        integration: capability.integration,
-        inputMeta: Object.fromEntries(
-          Object.entries(capability.inputMeta).map(([name, meta]) => {
-            const fieldType = resolveInputFieldType(meta);
-            return [name, { ...meta, fieldType, fieldTypeLabel: packageFieldTypeLabel(fieldType) }];
-          }),
-        ),
-        inputGroups: capability.inputGroups,
-        outputMeta: Object.fromEntries(
-          Object.entries(capability.outputMeta).map(([name, meta]) => {
-            const fieldType = resolveOutputFieldType(meta);
-            return [name, { ...meta, fieldType, fieldTypeLabel: packageFieldTypeLabel(fieldType) }];
-          }),
-        ),
-        defaultUnitPrice: capability.defaultUnitPrice,
-      }));
+          id: capability.id,
+          vendor: capability.vendor,
+          name: capability.name,
+          description: capability.description,
+          category: capability.category,
+          integration: capability.integration,
+          inputMeta: Object.fromEntries(
+            Object.entries(capability.inputMeta).map(([name, meta]) => {
+              const fieldType = resolveInputFieldType(meta);
+              return [name, { ...meta, fieldType, fieldTypeLabel: packageFieldTypeLabel(fieldType) }];
+            }),
+          ),
+          inputGroups: capability.inputGroups,
+          outputMeta: Object.fromEntries(
+            Object.entries(capability.outputMeta).map(([name, meta]) => {
+              const fieldType = resolveOutputFieldType(meta);
+              return [name, { ...meta, fieldType, fieldTypeLabel: packageFieldTypeLabel(fieldType) }];
+            }),
+          ),
+          defaultUnitPrice: capability.defaultUnitPrice,
+        }));
+
+      // Include approved/live catalog-only candidates (dynamic executor).
+      // Code-backed capabilities shadow catalog entries with the same ID.
+      const codeIds = new Set(codeCaps.map((c) => c.id));
+      const catalogRows = await ctx.catalogDb
+        .select({
+          id: capabilityCandidates.id,
+          name: capabilityCandidates.name,
+          description: capabilityCandidates.description,
+          vendor: capabilityCandidates.vendor,
+          category: capabilityCandidates.category,
+          integration: capabilityCandidates.integration,
+          inputMeta: capabilityCandidates.inputMeta,
+          outputMeta: capabilityCandidates.outputMeta,
+        })
+        .from(capabilityCandidates)
+        .where(inArray(capabilityCandidates.lifecycleStatus, ['approved', 'live']));
+
+      const catalogCaps = catalogRows
+        .filter((c) => !codeIds.has(c.id))
+        .filter((c) => {
+          const intg = c.integration as { integrationId?: string; connection?: string } | null;
+          if (!intg?.integrationId) return true;
+          if (!availability.configuredIntegrationIds.has(intg.integrationId)) return false;
+          return intg.connection !== 'activeLink' || availability.activeLinkIntegrationIds.has(intg.integrationId);
+        })
+        .map((c) => {
+          const inputMeta = (c.inputMeta ?? {}) as Record<string, Record<string, unknown>>;
+          const outputMeta = (c.outputMeta ?? {}) as Record<string, Record<string, unknown>>;
+
+          // Resolve field type from JSONB meta, falling back to 'text' for unrecognised
+          // values (e.g. 'object' for raw response body). resolveInputFieldType handles entityType.
+          const safeInputFieldType = (meta: Record<string, unknown>): keyof typeof PACKAGE_FIELD_TYPES => {
+            const resolved = resolveInputFieldType(meta as Parameters<typeof resolveInputFieldType>[0]);
+            return (typeof resolved === 'string' && resolved in PACKAGE_FIELD_TYPES)
+              ? (resolved as keyof typeof PACKAGE_FIELD_TYPES)
+              : 'text';
+          };
+          const safeOutputFieldType = (rawType: unknown): keyof typeof PACKAGE_FIELD_TYPES =>
+            (typeof rawType === 'string' && rawType in PACKAGE_FIELD_TYPES)
+              ? (rawType as keyof typeof PACKAGE_FIELD_TYPES)
+              : 'text';
+
+          // Infer allowedBindings from field characteristics when not already stored.
+          // Entity inputs get literal picker + runtime hint; text-like inputs also get siteFact.
+          const inferAllowedBindings = (meta: Record<string, unknown>): string[] => {
+            if (Array.isArray(meta.allowedBindings)) return meta.allowedBindings as string[];
+            if (meta.entityType) return ['literal', 'runtime', 'priorOutput'];
+            if (meta.valueType === 'boolean') return ['literal', 'runtime'];
+            return ['literal', 'runtime', 'siteFact', 'priorOutput'];
+          };
+
+          return {
+            id: c.id,
+            vendor: c.vendor,
+            name: c.name,
+            description: c.description ?? undefined,
+            category: (c.category ?? 'general') as string,
+            integration: (c.integration ?? undefined) as { integrationId: string; connection: 'configured' | 'activeLink' } | undefined,
+            inputMeta: Object.fromEntries(
+              Object.entries(inputMeta).map(([name, meta]) => {
+                const fieldType = safeInputFieldType(meta);
+                const allowedBindings = inferAllowedBindings(meta);
+                return [name, { ...meta, fieldType, fieldTypeLabel: packageFieldTypeLabel(fieldType), allowedBindings }];
+              }),
+            ),
+            inputGroups: undefined as Record<string, unknown> | undefined,
+            outputMeta: Object.fromEntries(
+              Object.entries(outputMeta).map(([name, meta]) => {
+                const fieldType = safeOutputFieldType(meta.valueType);
+                return [name, { ...meta, fieldType, fieldTypeLabel: packageFieldTypeLabel(fieldType) }];
+              }),
+            ),
+            defaultUnitPrice: undefined as string | null | undefined,
+          };
+        });
+
+      return [...codeCaps, ...catalogCaps];
   }),
 
   // Generator registry surfaced to the builder UI so it can render the

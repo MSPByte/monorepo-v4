@@ -85,6 +85,13 @@ const ROUTES: Route[] = [
     group: 'Setup',
     devOnly: true,
   },
+  {
+    label: 'Capabilities',
+    href: '/dev/capabilities',
+    permission: 'Assets.Read',
+    group: 'Setup',
+    devOnly: true,
+  },
 ];
 
 export function canSeeRoute(grants: PermissionGrant[] | null, route: Route): boolean {
