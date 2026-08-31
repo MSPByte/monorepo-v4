@@ -68,15 +68,41 @@ function normalizeIdentity(raw: M365User): RecordValue {
     name: raw.displayName ?? raw.userPrincipalName,
     email: raw.userPrincipalName,
     type: userType,
-    enabled: raw.accountEnabled ?? true,
-    mfaEnforced: false,
-    assignedLicenses: raw.assignedLicenses?.map((license) => license.skuId) ?? [],
-    lastSignInAt: dateString(raw.signInActivity?.lastSignInDateTime),
-    lastNonInteractiveSignInAt: dateString(raw.signInActivity?.lastNonInteractiveSignInDateTime)
+    enabled: raw.accountEnabled ?? true
   };
+
+  // Delta responses can omit properties. Do not turn an omitted property into
+  // an empty value that would overwrite the last full-sync value.
+  if (Object.hasOwn(raw, 'mail')) normalized.primaryEmail = raw.mail ?? null;
+  if (Object.hasOwn(raw, 'jobTitle')) normalized.jobTitle = raw.jobTitle ?? null;
+  if (Object.hasOwn(raw, 'department')) normalized.department = raw.department ?? null;
+  if (Object.hasOwn(raw, 'companyName')) normalized.companyName = raw.companyName ?? null;
+  if (Object.hasOwn(raw, 'employeeId')) normalized.employeeId = raw.employeeId ?? null;
+  if (Object.hasOwn(raw, 'officeLocation')) normalized.officeLocation = raw.officeLocation ?? null;
+  if (Object.hasOwn(raw, 'usageLocation')) normalized.usageLocation = raw.usageLocation ?? null;
+  if (Object.hasOwn(raw, 'businessPhones')) {
+    normalized.businessPhone = raw.businessPhones?.[0] ?? null;
+  }
+  if (Object.hasOwn(raw, 'mobilePhone')) normalized.mobilePhone = raw.mobilePhone ?? null;
+  if (Object.hasOwn(raw, 'createdDateTime')) {
+    normalized.directoryCreatedAt = dateString(raw.createdDateTime);
+  }
+  if (Object.hasOwn(raw, 'onPremisesSyncEnabled')) {
+    normalized.onPremisesSyncEnabled = raw.onPremisesSyncEnabled ?? null;
+  }
+  if (Object.hasOwn(raw, 'assignedLicenses')) {
+    normalized.assignedLicenses = raw.assignedLicenses?.map((license) => license.skuId) ?? [];
+  }
 
   if (Array.isArray(raw._role_template_ids)) {
     normalized.assignedRoleTemplateIds = raw._role_template_ids;
+  }
+
+  if (Object.hasOwn(raw, 'signInActivity')) {
+    normalized.lastSignInAt = dateString(raw.signInActivity?.lastSignInDateTime);
+    normalized.lastNonInteractiveSignInAt = dateString(
+      raw.signInActivity?.lastNonInteractiveSignInDateTime
+    );
   }
 
   return normalized;

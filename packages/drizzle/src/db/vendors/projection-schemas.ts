@@ -8,7 +8,7 @@ import { vendorTableRegistry, type VendorTableName } from "./registry.js";
  *   - id / createdAt / updatedAt: defaulted by Postgres
  *   - linkId / siteId: set from the job's link
  *   - lastSeenAt: set by projectBatch
- *   - sourceHash: computed from the raw payload by projectBatch
+ *   - sourceHash: computed from the normalized projection by projectBatch
  */
 const PROJECTION_OMIT = {
   id: true,

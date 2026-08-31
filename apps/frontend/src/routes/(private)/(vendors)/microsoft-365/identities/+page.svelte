@@ -59,6 +59,43 @@
   const columns: DataTableColumn<IdentityRow>[] = $derived([
     textColumn<IdentityRow>('name', 'Name'),
     textColumn<IdentityRow>('email', 'Email'),
+    textColumn<IdentityRow>('primaryEmail', 'Primary Email', undefined, undefined, {
+      defaultHidden: true,
+    }),
+    textColumn<IdentityRow>('jobTitle', 'Job Title', undefined, undefined, {
+      defaultHidden: true,
+    }),
+    textColumn<IdentityRow>('department', 'Department', undefined, undefined, {
+      defaultHidden: true,
+    }),
+    textColumn<IdentityRow>('companyName', 'Company', undefined, undefined, {
+      defaultHidden: true,
+    }),
+    textColumn<IdentityRow>('employeeId', 'Employee ID', undefined, undefined, {
+      defaultHidden: true,
+    }),
+    textColumn<IdentityRow>('officeLocation', 'Office Location', undefined, undefined, {
+      defaultHidden: true,
+    }),
+    textColumn<IdentityRow>('usageLocation', 'Usage Location', undefined, undefined, {
+      defaultHidden: true,
+    }),
+    textColumn<IdentityRow>('businessPhone', 'Business Phone', undefined, undefined, {
+      defaultHidden: true,
+    }),
+    textColumn<IdentityRow>('mobilePhone', 'Mobile Phone', undefined, undefined, {
+      defaultHidden: true,
+    }),
+    boolBadgeColumn<IdentityRow>('onPremisesSyncEnabled', 'On-Prem Sync', {
+      trueLabel: 'Enabled',
+      falseLabel: 'Cloud-only',
+      falseVariant: 'muted',
+    }, {
+      defaultHidden: true,
+    }),
+    relativeDateColumn<IdentityRow>('directoryCreatedAt', 'Created', {
+      defaultHidden: true,
+    }),
     textColumn<IdentityRow>(
       'type',
       'Type',

@@ -33,6 +33,17 @@ const M365_IDENTITY_BASE_FIELDS = [
   'userType',
   'userPrincipalName',
   'accountEnabled',
+  'mail',
+  'jobTitle',
+  'department',
+  'companyName',
+  'employeeId',
+  'officeLocation',
+  'usageLocation',
+  'businessPhones',
+  'mobilePhone',
+  'createdDateTime',
+  'onPremisesSyncEnabled',
   'assignedLicenses'
 ];
 const M365_IDENTITY_DELTA_FIELDS = [
@@ -40,7 +51,18 @@ const M365_IDENTITY_DELTA_FIELDS = [
   'displayName',
   'userType',
   'userPrincipalName',
-  'accountEnabled'
+  'accountEnabled',
+  'mail',
+  'jobTitle',
+  'department',
+  'companyName',
+  'employeeId',
+  'officeLocation',
+  'usageLocation',
+  'businessPhones',
+  'mobilePhone',
+  'createdDateTime',
+  'onPremisesSyncEnabled'
 ].join(',');
 
 export const m365Adapter: IngestionAdapter = {

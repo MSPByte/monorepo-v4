@@ -34,6 +34,7 @@ type ProjectionFailure = {
 
 const facetTableMap = getFacetTableMap();
 const skipOnUpdate = new Set(['id', 'linkId', 'externalId', 'createdAt']);
+const NORMALIZED_PROJECTION_HASH_VERSION = 2;
 
 export type ProjectBatchParams = {
   orgId: string;
@@ -84,16 +85,15 @@ export async function projectBatch(
 ): Promise<ProjectBatchMetrics> {
   if (records.length === 0) return { ...EMPTY_METRICS, failures: [] };
 
-  const withHashes = records.map((record) => ({
+  const preparedRows = records.map((record) => ({
     externalId: record.externalId,
     op: record.op ?? 'upsert',
-    payload: record.payload ?? {},
-    payloadHash: stablePayloadHash(record.payload ?? {})
+    payload: record.payload ?? {}
   }));
 
   const { result, failures } = isSophosTamperProtectionFacet(params.type)
-    ? await projectRowsIndividually(db, params, withHashes)
-    : await projectRowsBatch(db, params, withHashes);
+    ? await projectRowsIndividually(db, params, preparedRows)
+    : await projectRowsBatch(db, params, preparedRows);
 
   if (failures.length > 0) {
     logger.warn('Projection completed with row failures', {
@@ -111,7 +111,7 @@ export async function projectBatch(
   }
 
   return {
-    recordsIn: withHashes.length,
+    recordsIn: preparedRows.length,
     recordsOut: result.recordsOut,
     createdCt: result.createdCt,
     updatedCt: result.updatedCt,
@@ -124,7 +124,6 @@ type PreparedRow = {
   externalId: string;
   op: string;
   payload: unknown;
-  payloadHash: string;
 };
 
 async function projectRowsBatch(
@@ -140,7 +139,7 @@ async function projectRowsBatch(
   if (upsertRows.length > 0) {
     const projectedRows: Array<{
       externalId: string;
-      payloadHash: string;
+      projectionHash: string;
       projected: Record<string, unknown>;
     }> = [];
 
@@ -159,7 +158,7 @@ async function projectRowsBatch(
         }
         projectedRows.push({
           externalId: projected.externalId,
-          payloadHash: row.payloadHash,
+          projectionHash: normalizedProjectionHash(projected),
           projected
         });
       } catch (error) {
@@ -204,7 +203,7 @@ async function projectRowsIndividually(
         result.createdCt += del.createdCt;
         result.updatedCt += del.updatedCt;
       } else {
-        const up = await projectUpsertSingle(db, params, row.payload, row.payloadHash);
+        const up = await projectUpsertSingle(db, params, row.payload);
         result.recordsOut += up.recordsOut;
         result.createdCt += up.createdCt;
         result.updatedCt += up.updatedCt;
@@ -225,7 +224,7 @@ async function projectRowsIndividually(
 async function projectUpsertsBatch(
   db: Db,
   params: ProjectBatchParams,
-  rows: Array<{ externalId: string; payloadHash: string; projected: Record<string, unknown> }>
+  rows: Array<{ externalId: string; projectionHash: string; projected: Record<string, unknown> }>
 ): Promise<ProjectionResult> {
   if (rows.length === 0) return { recordsOut: 0, createdCt: 0, updatedCt: 0 };
 
@@ -243,7 +242,7 @@ async function projectUpsertsBatch(
 
   for (const row of rows) {
     const existing = existingByExternalId.get(row.externalId);
-    if (existing?.sourceHash === row.payloadHash) {
+    if (params.mode === 'full' && existing?.sourceHash === row.projectionHash) {
       unchangedIds.push(existing.id);
     } else {
       changedRows.push(row);
@@ -257,25 +256,36 @@ async function projectUpsertsBatch(
   }
 
   const writeRows = lastByExternalId(changedRows);
-  const insertRows = writeRows.map((row) => {
-    const insertRow: Record<string, unknown> = {
-      ...row.projected,
-      linkId: params.linkId,
-      siteId: params.siteId,
-      lastSeenAt: now,
-      createdAt: now,
-      updatedAt: now
-    };
-    if (table.sourceHash) insertRow.sourceHash = row.payloadHash;
-    return insertRow;
-  });
+  const rowsByFieldSet = groupRowsByFieldSet(writeRows);
+  let createdCt = 0;
+  let updatedCt = 0;
 
-  const setClause = vendorUpsertSetClause(table);
-  const returned = await (db.insert(table as never).values(insertRows) as any)
-    .onConflictDoUpdate({ target: registry.conflictTarget, set: setClause })
-    .returning({ xmax: sql<string>`xmax::text` });
-  const createdCt = returned.filter((row: { xmax?: string }) => row.xmax === '0').length;
-  const updatedCt = returned.length - createdCt;
+  for (const { fieldNames, rows: fieldRows } of rowsByFieldSet.values()) {
+    const insertRows = fieldRows.map((row) => {
+      const insertRow: Record<string, unknown> = {
+        ...row.projected,
+        linkId: params.linkId,
+        siteId: params.siteId,
+        lastSeenAt: now,
+        createdAt: now,
+        updatedAt: now
+      };
+      // Incremental Graph responses can omit properties. Retain the last
+      // complete normalized hash until a full sync supplies every field.
+      if (table.sourceHash && params.mode === 'full') insertRow.sourceHash = row.projectionHash;
+      return insertRow;
+    });
+
+    const updateFields = new Set([...fieldNames, 'lastSeenAt', 'updatedAt']);
+    if (params.mode === 'full' && table.sourceHash) updateFields.add('sourceHash');
+    const setClause = vendorUpsertSetClause(table, updateFields);
+    const returned = await (db.insert(table as never).values(insertRows) as any)
+      .onConflictDoUpdate({ target: registry.conflictTarget, set: setClause })
+      .returning({ xmax: sql<string>`xmax::text` });
+    const groupCreatedCt = returned.filter((row: { xmax?: string }) => row.xmax === '0').length;
+    createdCt += groupCreatedCt;
+    updatedCt += returned.length - groupCreatedCt;
+  }
 
   return { recordsOut: writeRows.length, createdCt, updatedCt };
 }
@@ -306,8 +316,7 @@ async function projectDeletesBatch(
 async function projectUpsertSingle(
   db: Db,
   params: ProjectBatchParams,
-  payload: unknown,
-  payloadHash: string
+  payload: unknown
 ): Promise<ProjectionResult> {
   if (isSophosTamperProtectionFacet(params.type)) {
     return projectSophosTamperProtection(db, params, payload);
@@ -315,6 +324,7 @@ async function projectUpsertSingle(
   const registry = tableRegistryFor(params.type);
   const now = new Date().toISOString();
   const projected = normalizeVendorRecord(params.provider, params.type, payload);
+  const projectionHash = normalizedProjectionHash(projected);
   const schema = projectionSchemaForFacet(params.type);
   if (schema) {
     const parsed = schema.safeParse(projected);
@@ -328,7 +338,7 @@ async function projectUpsertSingle(
     params.linkId,
     projected.externalId
   );
-  if (existing?.sourceHash === payloadHash) {
+  if (params.mode === 'full' && existing?.sourceHash === projectionHash) {
     await touchVendorRow(db, registry.table, existing.id);
     return { recordsOut: 0, createdCt: 0, updatedCt: 0 };
   }
@@ -342,9 +352,11 @@ async function projectUpsertSingle(
     createdAt: now,
     updatedAt: now
   };
-  if (table.sourceHash) insertRow.sourceHash = payloadHash;
+  if (table.sourceHash && params.mode === 'full') insertRow.sourceHash = projectionHash;
 
-  const setClause = vendorUpsertSetClause(table);
+  const updateFields = new Set([...Object.keys(projected), 'lastSeenAt', 'updatedAt']);
+  if (params.mode === 'full' && table.sourceHash) updateFields.add('sourceHash');
+  const setClause = vendorUpsertSetClause(table, updateFields);
   const returned = await (db.insert(table as never).values(insertRow) as any)
     .onConflictDoUpdate({ target: registry.conflictTarget, set: setClause })
     .returning({ xmax: sql<string>`xmax::text` });
@@ -450,11 +462,33 @@ function projectionSchemaForFacet(type: string) {
   return getProjectionSchema(tableName);
 }
 
-function vendorUpsertSetClause(table: unknown): Record<string, unknown> {
+function normalizedProjectionHash(projected: Record<string, unknown>): string {
+  return stablePayloadHash({ version: NORMALIZED_PROJECTION_HASH_VERSION, data: projected });
+}
+
+function groupRowsByFieldSet<T extends { projected: Record<string, unknown> }>(rows: T[]) {
+  const groups = new Map<string, { fieldNames: string[]; rows: T[] }>();
+  for (const row of rows) {
+    const fieldNames = Object.keys(row.projected).sort();
+    const key = fieldNames.join('\u0000');
+    const group = groups.get(key);
+    if (group) {
+      group.rows.push(row);
+    } else {
+      groups.set(key, { fieldNames, rows: [row] });
+    }
+  }
+  return groups;
+}
+
+function vendorUpsertSetClause(
+  table: unknown,
+  updateFields: ReadonlySet<string>
+): Record<string, unknown> {
   const columns = getColumns(table as never);
   return Object.fromEntries(
     Object.entries(columns)
-      .filter(([key]) => !skipOnUpdate.has(key))
+      .filter(([key]) => !skipOnUpdate.has(key) && updateFields.has(key))
       .map(([key, column]) => [key, sql.raw(`excluded.${Object(column).name}`)])
   );
 }

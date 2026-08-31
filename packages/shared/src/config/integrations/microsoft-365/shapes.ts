@@ -23,6 +23,94 @@ export const M365IdentitiesShape: SchemaFields = {
     ingestPath: 'email',
     required: false
   },
+  primaryEmail: {
+    label: 'Primary Email',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'primaryEmail',
+    required: false
+  },
+  jobTitle: {
+    label: 'Job Title',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'jobTitle',
+    required: false
+  },
+  department: {
+    label: 'Department',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'department',
+    required: false
+  },
+  companyName: {
+    label: 'Company Name',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'companyName',
+    required: false
+  },
+  employeeId: {
+    label: 'Employee ID',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'employeeId',
+    required: false
+  },
+  officeLocation: {
+    label: 'Office Location',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'officeLocation',
+    required: false
+  },
+  usageLocation: {
+    label: 'Usage Location',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'usageLocation',
+    required: false
+  },
+  businessPhone: {
+    label: 'Business Phone',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'businessPhone',
+    required: false
+  },
+  mobilePhone: {
+    label: 'Mobile Phone',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'mobilePhone',
+    required: false
+  },
+  directoryCreatedAt: {
+    label: 'Created Date',
+    type: 'date',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'directoryCreatedAt',
+    required: false
+  },
+  onPremisesSyncEnabled: {
+    label: 'On-Premises Sync Enabled',
+    type: 'boolean',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'onPremisesSyncEnabled',
+    required: false
+  },
   type: {
     label: 'Identity Type',
     type: 'enum',
