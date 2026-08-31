@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import PanelMarks from '$lib/components/ui/panel-marks.svelte';
 
   let {
     code,
@@ -17,11 +18,7 @@
 </script>
 
 <section class={`relative bg-card ${className}`}>
-  <!-- corner registration marks -->
-  <span class="pointer-events-none absolute -left-px -top-px size-1.5 border-l border-t border-foreground/40"></span>
-  <span class="pointer-events-none absolute -right-px -top-px size-1.5 border-r border-t border-foreground/40"></span>
-  <span class="pointer-events-none absolute -bottom-px -left-px size-1.5 border-b border-l border-foreground/40"></span>
-  <span class="pointer-events-none absolute -bottom-px -right-px size-1.5 border-b border-r border-foreground/40"></span>
+  <PanelMarks />
 
   <header class="flex items-baseline justify-between gap-3 border border-border/70 border-b-foreground/30 bg-muted/40 px-4 py-2">
     <div class="flex items-baseline gap-2">
