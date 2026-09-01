@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ActionLabels } from '@mspbyte/shared';
 import type { Capability } from '../types.js';
+import { classifyGraphError } from './classify-error.js';
 
 const inputs = z.object({
   tenantLinkId: z.uuid(),
@@ -299,20 +300,7 @@ export const m365IdentityCreate: Capability<z.infer<typeof inputs>, z.infer<type
           reason: `User ${input.userPrincipalName} already exists in tenant`
         };
       }
-      // Graph returns 403 for tenant-consent or permission problems, 400 for
-      // malformed inputs, 429 for rate limits. Coarse mapping keeps the
-      // classification useful for onFailure rules.
-      let errorClass: 'permission_denied' | 'rate_limited' | 'invalid_input' | 'vendor_error' =
-        'vendor_error';
-      if (message.includes(' 403')) errorClass = 'permission_denied';
-      else if (message.includes(' 429')) errorClass = 'rate_limited';
-      else if (message.includes(' 400')) errorClass = 'invalid_input';
-      return {
-        outcome: 'fail',
-        errorClass,
-        message,
-        retryable: errorClass === 'rate_limited' || errorClass === 'vendor_error'
-      };
+      return classifyGraphError(err);
     }
   }
 };

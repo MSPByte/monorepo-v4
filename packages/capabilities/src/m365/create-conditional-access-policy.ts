@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ActionLabels } from '@mspbyte/shared';
 import type { Capability, CapabilityCtx } from '../types.js';
+import { classifyGraphError } from './classify-error.js';
 
 // Accepts either a single Graph ID (from a priorOutput wire) or an array (from
 // a multi-select entity picker). The handler coerces both to string[].
@@ -641,10 +642,11 @@ export const m365ConditionalAccessPolicyCreate: Capability<
     const excludeUsers = await resolveUserIds(ctx, rawExcludeUsers);
 
     const rawIncludeUsers = toArr(input.includeUserIds);
+    const resolvedIncludeUsers = await resolveUserIds(ctx, rawIncludeUsers);
     const includeUsers = input.includeAllUsers
       ? ['All']
-      : (await resolveUserIds(ctx, rawIncludeUsers)).length > 0
-        ? await resolveUserIds(ctx, rawIncludeUsers)
+      : resolvedIncludeUsers.length > 0
+        ? resolvedIncludeUsers
         : toArr(input.includeGroupIds).length > 0 || toArr(input.includeRoleIds).length > 0
           ? []
           : ['All']; // fall back to All if nothing specified
@@ -783,18 +785,7 @@ export const m365ConditionalAccessPolicyCreate: Capability<
         outputs: { externalId: result.id, internalId, name: result.displayName }
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      let errorClass: 'permission_denied' | 'rate_limited' | 'invalid_input' | 'vendor_error' =
-        'vendor_error';
-      if (message.includes(' 403')) errorClass = 'permission_denied';
-      else if (message.includes(' 429')) errorClass = 'rate_limited';
-      else if (message.includes(' 400')) errorClass = 'invalid_input';
-      return {
-        outcome: 'fail',
-        errorClass,
-        message,
-        retryable: errorClass === 'rate_limited' || errorClass === 'vendor_error'
-      };
+      return classifyGraphError(err);
     }
   }
 };

@@ -1,4 +1,3 @@
-// TODO: Findings Implementation
 import { z } from 'zod';
 import { and, count, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import {

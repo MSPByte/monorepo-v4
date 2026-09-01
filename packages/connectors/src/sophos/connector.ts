@@ -279,41 +279,38 @@ export class SophosConnector {
     }
   }
 
-  private async createPartnerTenant(req: SophosTenantCreateRequest): Promise<SophosTenant> {
+  private async getPartnerContext(): Promise<{ partnerId: string; globalHost: string } | null> {
     const whoami = await this.client.get<{
       id: string;
       idType: string;
       apiHosts?: { global?: string };
     }>('https://api.central.sophos.com/whoami/v1');
 
-    if (whoami.idType !== 'partner' || !whoami.id) {
-      throw new Error('Sophos integration is not configured as a partner account');
-    }
+    if (whoami.idType !== 'partner' || !whoami.id) return null;
+    return {
+      partnerId: whoami.id,
+      globalHost: whoami.apiHosts?.global ?? 'https://api.central.sophos.com'
+    };
+  }
 
-    const globalHost = whoami.apiHosts?.global ?? 'https://api.central.sophos.com';
-    const tenant = await this.client.post<SophosTenant>(
-      `${globalHost}/partner/v1/tenants`,
+  private async createPartnerTenant(req: SophosTenantCreateRequest): Promise<SophosTenant> {
+    const ctx = await this.getPartnerContext();
+    if (!ctx) throw new Error('Sophos integration is not configured as a partner account');
+    return this.client.post<SophosTenant>(
+      `${ctx.globalHost}/partner/v1/tenants`,
       req,
       undefined,
-      { partnerId: whoami.id }
+      { partnerId: ctx.partnerId }
     );
-    return tenant;
   }
 
   private async fetchPartnerTenants(): Promise<SophosTenant[]> {
-    const whoami = await this.client.get<{
-      id: string;
-      idType: string;
-      apiHosts?: { global?: string };
-    }>('https://api.central.sophos.com/whoami/v1');
-
-    if (whoami.idType !== 'partner' || !whoami.id) return [];
-
-    const globalHost = whoami.apiHosts?.global ?? 'https://api.central.sophos.com';
+    const ctx = await this.getPartnerContext();
+    if (!ctx) return [];
     const tenants = await this.client.fetchAllPages<SophosTenant>(
-      `${globalHost}/partner/v1/tenants?pageTotal=true&pageSize=100`,
+      `${ctx.globalHost}/partner/v1/tenants?pageTotal=true&pageSize=100`,
       undefined,
-      { partnerId: whoami.id }
+      { partnerId: ctx.partnerId }
     );
     tenants.sort((a, b) => a.name.localeCompare(b.name));
     return tenants;

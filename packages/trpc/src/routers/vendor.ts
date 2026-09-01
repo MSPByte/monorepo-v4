@@ -1,10 +1,10 @@
-// TODO: Findings Implementation
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { eq, and, count, sql, inArray, desc, or } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { TRPCError } from '@trpc/server';
 import { M365Connector } from '@mspbyte/connectors';
+import { generateM365Password } from '@mspbyte/capabilities';
 import {
   customerLogs,
   findings,
@@ -227,29 +227,6 @@ const AUTH_METHOD_SEGMENTS = new Set([
   'windowsHelloForBusinessMethods',
   'temporaryAccessPassMethods'
 ]);
-
-// Azure AD default policy: 8–256 chars, at least 3 of 4 categories
-// (upper/lower/digit/symbol). We generate 16 chars and guarantee all four.
-function generateM365Password(): string {
-  const lower = 'abcdefghijkmnopqrstuvwxyz';
-  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  const digits = '23456789';
-  const symbols = '!@#$%^&*';
-  const all = lower + upper + digits + symbols;
-  const pick = (charset: string) => charset[randomBytes(1)[0]! % charset.length]!;
-
-  const required = [pick(lower), pick(upper), pick(digits), pick(symbols)];
-  const restLen = 16 - required.length;
-  const buf = randomBytes(restLen);
-  const chars = [...required];
-  for (let i = 0; i < restLen; i++) chars.push(all[buf[i]! % all.length]!);
-
-  for (let i = chars.length - 1; i > 0; i--) {
-    const j = randomBytes(1)[0]! % (i + 1);
-    [chars[i], chars[j]] = [chars[j]!, chars[i]!];
-  }
-  return chars.join('');
-}
 
 function m365IdentityConnector(
   ctx: {
@@ -1020,6 +997,152 @@ async function runM365RolePairAction(
   };
 }
 
+async function toggleSophosEndpointTamperProtection(
+  ctx: Context,
+  ids: string[],
+  enable: boolean
+) {
+  const uniqueIds = [...new Set(ids)];
+  const rows = await ctx.db
+    .select({
+      id: sophosEndpoints.id,
+      linkId: sophosEndpoints.linkId,
+      siteId: sophosEndpoints.siteId,
+      externalId: sophosEndpoints.externalId,
+      hostname: sophosEndpoints.hostname,
+      tamperProtectionEnabled: sophosEndpoints.tamperProtectionEnabled,
+      tenantId: integrationLinks.externalId,
+      tenantName: integrationLinks.name,
+      linkMeta: integrationLinks.meta,
+      integrationConfig: integrations.config
+    })
+    .from(sophosEndpoints)
+    .innerJoin(integrationLinks, eq(sophosEndpoints.linkId, integrationLinks.id))
+    .innerJoin(integrations, eq(integrationLinks.integrationId, integrations.id))
+    .where(
+      and(
+        inArray(sophosEndpoints.id, uniqueIds),
+        eq(integrationLinks.integrationId, 'sophos-partner')
+      )
+    );
+
+  if (rows.length === 0) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'No Sophos endpoints found' });
+  }
+
+  const batchId = randomUUID();
+  const results: SophosEndpointTamperProtectionResult[] = [];
+  const actionLabel = enable
+    ? ActionLabels.SophosEndpointTamperEnable
+    : ActionLabels.SophosEndpointTamperDisable;
+
+  for (const row of rows) {
+    if (row.tamperProtectionEnabled === enable) {
+      results.push({
+        id: row.id,
+        externalId: row.externalId,
+        hostname: row.hostname,
+        linkId: row.linkId,
+        siteId: row.siteId,
+        success: true,
+        skipped: true
+      });
+      continue;
+    }
+
+    const config = SophosConfigSchema.safeParse(row.integrationConfig);
+    const apiHost =
+      row.linkMeta && typeof row.linkMeta === 'object' && !Array.isArray(row.linkMeta)
+        ? (row.linkMeta as Record<string, unknown>).apiHost
+        : undefined;
+
+    let success = false;
+    let error: string | undefined;
+
+    try {
+      if (!config.success || !config.data.clientId || !config.data.clientSecret) {
+        throw new Error('Sophos integration credentials are missing');
+      }
+      if (!row.tenantId) throw new Error('Sophos tenant id is missing');
+      if (typeof apiHost !== 'string' || !apiHost) throw new Error('Sophos API host is missing');
+
+      const encryptionKey = ctx.encryptionKey ?? process.env.ENCRYPTION_KEY;
+      if (!encryptionKey) throw new Error('Encryption key is not configured');
+
+      const clientSecret = Encryption.decrypt(config.data.clientSecret, encryptionKey);
+      if (!clientSecret) throw new Error('Sophos client secret could not be decrypted');
+
+      const connector = new SophosConnector(config.data.clientId, clientSecret);
+      await connector.endpoint.tamperProtection.toggle(apiHost, row.tenantId, row.externalId, enable);
+      success = true;
+    } catch (err) {
+      error = errorMessage(err);
+    }
+
+    results.push({
+      id: row.id,
+      externalId: row.externalId,
+      hostname: row.hostname,
+      linkId: row.linkId,
+      siteId: row.siteId,
+      success,
+      error
+    });
+
+    await ctx.db.insert(customerLogs).values({
+      siteId: row.siteId,
+      actorType: 'user',
+      actorId: ctx.user.id,
+      actorLabel: ctx.user.name || ctx.user.email,
+      action: 'update',
+      actionLabel,
+      targetType: 'sophos_endpoint',
+      targetId: row.id,
+      targetLabel: row.hostname,
+      result: success ? 'success' : 'failure',
+      errorMessage: error,
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+      metadata: {
+        batchId,
+        vendor: 'sophos',
+        field: 'tamperProtectionEnabled',
+        previousValue: !enable,
+        newValue: enable,
+        externalId: row.externalId,
+        linkId: row.linkId,
+        tenantId: row.tenantId,
+        tenantName: row.tenantName,
+        apiHost: typeof apiHost === 'string' ? apiHost : null
+      }
+    });
+  }
+
+  const updatedIds = results
+    .filter((result) => result.success && !result.skipped)
+    .map((result) => result.id);
+  if (updatedIds.length > 0) {
+    await ctx.db
+      .update(sophosEndpoints)
+      .set({ tamperProtectionEnabled: enable, updatedAt: new Date().toISOString() })
+      .where(inArray(sophosEndpoints.id, updatedIds));
+  }
+
+  const updated = updatedIds.length;
+  const skipped = results.filter((result) => result.skipped).length;
+  const failed = results.filter((result) => !result.success).length;
+  return {
+    batchId,
+    requested: uniqueIds.length,
+    found: rows.length,
+    updated,
+    skipped,
+    failed,
+    result: failed === 0 ? 'success' : updated === 0 ? 'failure' : 'partial',
+    results
+  };
+}
+
 export const vendorRouter = t.router({
   tableData: authProcedure
     .input(
@@ -1363,149 +1486,7 @@ export const vendorRouter = t.router({
       if (!ctx.can('Vendors.Write')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
       }
-
-      const uniqueIds = [...new Set(input.ids)];
-      const rows = await ctx.db
-        .select({
-          id: sophosEndpoints.id,
-          linkId: sophosEndpoints.linkId,
-          siteId: sophosEndpoints.siteId,
-          externalId: sophosEndpoints.externalId,
-          hostname: sophosEndpoints.hostname,
-          tamperProtectionEnabled: sophosEndpoints.tamperProtectionEnabled,
-          tenantId: integrationLinks.externalId,
-          tenantName: integrationLinks.name,
-          linkMeta: integrationLinks.meta,
-          integrationConfig: integrations.config
-        })
-        .from(sophosEndpoints)
-        .innerJoin(integrationLinks, eq(sophosEndpoints.linkId, integrationLinks.id))
-        .innerJoin(integrations, eq(integrationLinks.integrationId, integrations.id))
-        .where(
-          and(
-            inArray(sophosEndpoints.id, uniqueIds),
-            eq(integrationLinks.integrationId, 'sophos-partner')
-          )
-        );
-
-      if (rows.length === 0) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'No Sophos endpoints found' });
-      }
-
-      const batchId = randomUUID();
-      const results: SophosEndpointTamperProtectionResult[] = [];
-
-      for (const row of rows) {
-        if (row.tamperProtectionEnabled) {
-          results.push({
-            id: row.id,
-            externalId: row.externalId,
-            hostname: row.hostname,
-            linkId: row.linkId,
-            siteId: row.siteId,
-            success: true,
-            skipped: true
-          });
-          continue;
-        }
-
-        const config = SophosConfigSchema.safeParse(row.integrationConfig);
-        const apiHost =
-          row.linkMeta && typeof row.linkMeta === 'object' && !Array.isArray(row.linkMeta)
-            ? (row.linkMeta as Record<string, unknown>).apiHost
-            : undefined;
-
-        let success = false;
-        let error: string | undefined;
-
-        try {
-          if (!config.success || !config.data.clientId || !config.data.clientSecret) {
-            throw new Error('Sophos integration credentials are missing');
-          }
-          if (!row.tenantId) throw new Error('Sophos tenant id is missing');
-          if (typeof apiHost !== 'string' || !apiHost)
-            throw new Error('Sophos API host is missing');
-
-          const encryptionKey = ctx.encryptionKey ?? process.env.ENCRYPTION_KEY;
-          if (!encryptionKey) throw new Error('Encryption key is not configured');
-
-          const clientSecret = Encryption.decrypt(config.data.clientSecret, encryptionKey);
-          if (!clientSecret) throw new Error('Sophos client secret could not be decrypted');
-
-          const connector = new SophosConnector(config.data.clientId, clientSecret);
-          await connector.endpoint.tamperProtection.toggle(
-            apiHost,
-            row.tenantId,
-            row.externalId,
-            true
-          );
-          success = true;
-        } catch (err) {
-          error = errorMessage(err);
-        }
-
-        results.push({
-          id: row.id,
-          externalId: row.externalId,
-          hostname: row.hostname,
-          linkId: row.linkId,
-          siteId: row.siteId,
-          success,
-          error
-        });
-
-        await ctx.db.insert(customerLogs).values({
-          siteId: row.siteId,
-          actorType: 'user',
-          actorId: ctx.user.id,
-          actorLabel: ctx.user.name || ctx.user.email,
-          action: 'update',
-          actionLabel: ActionLabels.SophosEndpointTamperEnable,
-          targetType: 'sophos_endpoint',
-          targetId: row.id,
-          targetLabel: row.hostname,
-          result: success ? 'success' : 'failure',
-          errorMessage: error,
-          ipAddress: ctx.ipAddress,
-          userAgent: ctx.userAgent,
-          metadata: {
-            batchId,
-            vendor: 'sophos',
-            field: 'tamperProtectionEnabled',
-            previousValue: false,
-            newValue: true,
-            externalId: row.externalId,
-            linkId: row.linkId,
-            tenantId: row.tenantId,
-            tenantName: row.tenantName,
-            apiHost: typeof apiHost === 'string' ? apiHost : null
-          }
-        });
-      }
-
-      const updatedIds = results
-        .filter((result) => result.success && !result.skipped)
-        .map((result) => result.id);
-      if (updatedIds.length > 0) {
-        await ctx.db
-          .update(sophosEndpoints)
-          .set({ tamperProtectionEnabled: true, updatedAt: new Date().toISOString() })
-          .where(inArray(sophosEndpoints.id, updatedIds));
-      }
-
-      const updated = updatedIds.length;
-      const skipped = results.filter((result) => result.skipped).length;
-      const failed = results.filter((result) => !result.success).length;
-      return {
-        batchId,
-        requested: uniqueIds.length,
-        found: rows.length,
-        updated,
-        skipped,
-        failed,
-        result: failed === 0 ? 'success' : updated === 0 ? 'failure' : 'partial',
-        results
-      };
+      return toggleSophosEndpointTamperProtection(ctx, input.ids, true);
     }),
 
   disableSophosEndpointTamperProtection: authProcedure
@@ -1514,149 +1495,7 @@ export const vendorRouter = t.router({
       if (!ctx.can('Vendors.Write')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Write permission required' });
       }
-
-      const uniqueIds = [...new Set(input.ids)];
-      const rows = await ctx.db
-        .select({
-          id: sophosEndpoints.id,
-          linkId: sophosEndpoints.linkId,
-          siteId: sophosEndpoints.siteId,
-          externalId: sophosEndpoints.externalId,
-          hostname: sophosEndpoints.hostname,
-          tamperProtectionEnabled: sophosEndpoints.tamperProtectionEnabled,
-          tenantId: integrationLinks.externalId,
-          tenantName: integrationLinks.name,
-          linkMeta: integrationLinks.meta,
-          integrationConfig: integrations.config
-        })
-        .from(sophosEndpoints)
-        .innerJoin(integrationLinks, eq(sophosEndpoints.linkId, integrationLinks.id))
-        .innerJoin(integrations, eq(integrationLinks.integrationId, integrations.id))
-        .where(
-          and(
-            inArray(sophosEndpoints.id, uniqueIds),
-            eq(integrationLinks.integrationId, 'sophos-partner')
-          )
-        );
-
-      if (rows.length === 0) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'No Sophos endpoints found' });
-      }
-
-      const batchId = randomUUID();
-      const results: SophosEndpointTamperProtectionResult[] = [];
-
-      for (const row of rows) {
-        if (!row.tamperProtectionEnabled) {
-          results.push({
-            id: row.id,
-            externalId: row.externalId,
-            hostname: row.hostname,
-            linkId: row.linkId,
-            siteId: row.siteId,
-            success: true,
-            skipped: true
-          });
-          continue;
-        }
-
-        const config = SophosConfigSchema.safeParse(row.integrationConfig);
-        const apiHost =
-          row.linkMeta && typeof row.linkMeta === 'object' && !Array.isArray(row.linkMeta)
-            ? (row.linkMeta as Record<string, unknown>).apiHost
-            : undefined;
-
-        let success = false;
-        let error: string | undefined;
-
-        try {
-          if (!config.success || !config.data.clientId || !config.data.clientSecret) {
-            throw new Error('Sophos integration credentials are missing');
-          }
-          if (!row.tenantId) throw new Error('Sophos tenant id is missing');
-          if (typeof apiHost !== 'string' || !apiHost)
-            throw new Error('Sophos API host is missing');
-
-          const encryptionKey = ctx.encryptionKey ?? process.env.ENCRYPTION_KEY;
-          if (!encryptionKey) throw new Error('Encryption key is not configured');
-
-          const clientSecret = Encryption.decrypt(config.data.clientSecret, encryptionKey);
-          if (!clientSecret) throw new Error('Sophos client secret could not be decrypted');
-
-          const connector = new SophosConnector(config.data.clientId, clientSecret);
-          await connector.endpoint.tamperProtection.toggle(
-            apiHost,
-            row.tenantId,
-            row.externalId,
-            false
-          );
-          success = true;
-        } catch (err) {
-          error = errorMessage(err);
-        }
-
-        results.push({
-          id: row.id,
-          externalId: row.externalId,
-          hostname: row.hostname,
-          linkId: row.linkId,
-          siteId: row.siteId,
-          success,
-          error
-        });
-
-        await ctx.db.insert(customerLogs).values({
-          siteId: row.siteId,
-          actorType: 'user',
-          actorId: ctx.user.id,
-          actorLabel: ctx.user.name || ctx.user.email,
-          action: 'update',
-          actionLabel: ActionLabels.SophosEndpointTamperDisable,
-          targetType: 'sophos_endpoint',
-          targetId: row.id,
-          targetLabel: row.hostname,
-          result: success ? 'success' : 'failure',
-          errorMessage: error,
-          ipAddress: ctx.ipAddress,
-          userAgent: ctx.userAgent,
-          metadata: {
-            batchId,
-            vendor: 'sophos',
-            field: 'tamperProtectionEnabled',
-            previousValue: true,
-            newValue: false,
-            externalId: row.externalId,
-            linkId: row.linkId,
-            tenantId: row.tenantId,
-            tenantName: row.tenantName,
-            apiHost: typeof apiHost === 'string' ? apiHost : null
-          }
-        });
-      }
-
-      const updatedIds = results
-        .filter((result) => result.success && !result.skipped)
-        .map((result) => result.id);
-      if (updatedIds.length > 0) {
-        await ctx.db
-          .update(sophosEndpoints)
-          .set({ tamperProtectionEnabled: false, updatedAt: new Date().toISOString() })
-          .where(inArray(sophosEndpoints.id, updatedIds));
-      }
-
-      const updated = updatedIds.length;
-      const skipped = results.filter((result) => result.skipped).length;
-      const failed = results.filter((result) => !result.success).length;
-      return {
-        batchId,
-        requested: uniqueIds.length,
-        found: rows.length,
-        updated,
-        skipped,
-        failed,
-        result: failed === 0 ? 'success' : updated === 0 ? 'failure' : 'partial',
-        results
-      };
+      return toggleSophosEndpointTamperProtection(ctx, input.ids, false);
     }),
 
   upgradeSophosEndpointSoftware: authProcedure

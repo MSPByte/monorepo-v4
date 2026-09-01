@@ -11,8 +11,7 @@ export class Microsoft365RoleManagerService {
       const sp = await this.connector.servicePrincipals.findOwn();
       if (!sp) return { assigned: [], failed: Object.keys(requiredRoles) };
       spId = sp.id;
-    } catch (err) {
-      console.error('Failed to find Service Principals:', err);
+    } catch {
       return { assigned: [], failed: Object.keys(requiredRoles) };
     }
 
@@ -26,8 +25,7 @@ export class Microsoft365RoleManagerService {
           roleDefinitionId
         );
         assigned.push(name);
-      } catch (err) {
-        console.log('Failed to assign role:', name, `[${err}]`, `[${spId}]`);
+      } catch {
         failed.push(name);
       }
     }

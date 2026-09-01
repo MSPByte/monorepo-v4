@@ -15,9 +15,9 @@ export class TenantCapabilityService {
     );
 
     return Object.fromEntries(
-      Object.entries(plans).map(([key, plans]) => [
+      Object.entries(plans).map(([key, planList]) => [
         key,
-        plans.some((plan) => activePlans.has(plan)),
+        planList.some((plan) => activePlans.has(plan)),
       ]),
     );
   }

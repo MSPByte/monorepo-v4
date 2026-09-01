@@ -1,5 +1,6 @@
 import { and, count, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
+import type { TenantServiceDb } from '@mspbyte/drizzle-catalog';
 
 export const tableFilterSchema = z.object({
   column: z.string(),
@@ -26,11 +27,12 @@ export type TableDataResult<T> = {
   pageCount: number;
 };
 
-type Db = any;
+type Db = TenantServiceDb;
 
 export async function queryTableData<T extends Record<string, unknown>>(
   db: Db,
-  table: unknown,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  table: any,
   input: TableDataInput,
   fallbackRows?: T[],
   defaultSort?: { column: string; direction: 'asc' | 'desc' },
@@ -39,15 +41,15 @@ export async function queryTableData<T extends Record<string, unknown>>(
 ): Promise<TableDataResult<T>> {
   try {
     return await querySqlTableData(db, table, input, defaultSort, selection, extraWhere);
-  } catch (err) {
-    console.error(err);
+  } catch {
     return queryMemoryTableData(fallbackRows ?? [], input, defaultSort);
   }
 }
 
 async function querySqlTableData<T extends Record<string, unknown>>(
   db: Db,
-  table: unknown,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  table: any,
   input: TableDataInput,
   defaultSort?: { column: string; direction: 'asc' | 'desc' },
   selection?: Record<string, unknown>,
@@ -58,8 +60,9 @@ async function querySqlTableData<T extends Record<string, unknown>>(
   const whereClause =
     inputWhere && extraWhere ? and(inputWhere, extraWhere) : (inputWhere ?? extraWhere);
   const orderClause = buildOrderClause(input, defaultSort);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const baseQuery = selection
-    ? db.select(selection).from(table).where(whereClause)
+    ? db.select(selection as any).from(table).where(whereClause)
     : db.select().from(table).where(whereClause);
   const sortedQuery = orderClause ? baseQuery.orderBy(orderClause) : baseQuery;
 

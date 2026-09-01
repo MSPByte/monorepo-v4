@@ -8,8 +8,9 @@ import {
   QUEUES,
 } from "./queues.js";
 import { getOrCreateQueue } from "./queue-registry.js";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
-type Db = any;
+type Db = PostgresJsDatabase;
 
 // The worker only needs the org + run id — everything else lives on the
 // package_runs row (packageSnapshot, runtimeInputs, linkId, etc.) so we keep
@@ -157,7 +158,7 @@ export async function createPendingPackageRun(
       startStepIndex: params.startStepIndex ?? 0,
       status: "pending",
     })
-    .returning({ id: packageRuns.id });
+    .returning({ id: packageRuns.id }) as [{ id: string }, ...{ id: string }[]];
 
   return { packageRunId: run.id };
 }

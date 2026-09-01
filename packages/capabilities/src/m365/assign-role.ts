@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ActionLabels } from '@mspbyte/shared';
 import type { Capability } from '../types.js';
+import { classifyGraphError } from './classify-error.js';
 
 const inputs = z.object({
   tenantLinkId: z.uuid(),
@@ -84,13 +85,7 @@ export const m365IdentityAssignRole: Capability<z.infer<typeof inputs>, z.infer<
         outputs: { userExternalId, assignedRoleDefinitionIds: input.roleDefinitionIds }
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return {
-        outcome: 'fail',
-        errorClass: message.includes(' 403') ? 'permission_denied' : 'vendor_error',
-        message,
-        retryable: !message.includes(' 400') && !message.includes(' 403')
-      };
+      return classifyGraphError(err);
     }
   }
 };

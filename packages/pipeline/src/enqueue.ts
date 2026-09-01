@@ -12,8 +12,9 @@ import {
 } from "./queues.js";
 import { getOrCreateQueue } from "./queue-registry.js";
 import type { IngestionJobData, SyncMode } from "./ingestion.js";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
-type Db = any;
+type Db = PostgresJsDatabase;
 
 export type EnqueueIngestionJobParams = {
   orgId: string;
@@ -48,7 +49,7 @@ export async function enqueueIngestionJob(
       mode: params.mode,
       startedAt: new Date().toISOString(),
     })
-    .returning({ id: syncRuns.id });
+    .returning({ id: syncRuns.id }) as [{ id: string }, ...{ id: string }[]];
 
   const queueName = orgQueueName(QUEUES.INGEST, params.orgId);
   const queue = getOrCreateQueue<IngestionJobData, { syncRunId: string; jobId: string }>(

@@ -7,11 +7,7 @@ export interface WriteBackKey {
   source: WriteBackSource;
 }
 
-export interface WriteBackMapping {
-  field: string;
-  column: string;
-  source: WriteBackSource;
-}
+export type WriteBackMapping = WriteBackKey;
 
 export interface WriteBackConfig {
   effect: WriteBackEffect;
