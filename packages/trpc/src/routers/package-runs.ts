@@ -1,8 +1,9 @@
 import { z } from 'zod';
-import { and, desc, eq, gte, inArray } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull } from 'drizzle-orm';
 import {
   customerLogs,
   integrationLinks,
+  m365Identities,
   packageRuns,
   packageRunSteps,
   packageSchedules,
@@ -591,6 +592,9 @@ export const packageRunsRouter = t.router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Read required' });
       }
       const filters = [];
+      // Leaf rows belong inside their fan-out batch in history, rather than
+      // making one operator action look like dozens of unrelated runs.
+      filters.push(isNull(packageRuns.fanoutParentId));
       if (input.packageId) filters.push(eq(packageRuns.packageId, input.packageId));
       if (input.siteId) filters.push(eq(packageRuns.siteId, input.siteId));
       if (input.status) filters.push(eq(packageRuns.status, input.status as any));
@@ -643,6 +647,24 @@ export const packageRunsRouter = t.router({
         .from(packageRuns)
         .leftJoin(packagesTable, eq(packageRuns.packageId, packagesTable.id))
         .where(eq(packageRuns.parentRunId, input.parentRunId))
+        .orderBy(desc(packageRuns.createdAt));
+    }),
+
+  listFanoutTargets: authProcedure
+    .input(z.object({ fanoutParentId: z.uuid() }))
+    .query(async ({ ctx, input }) => {
+      if (!ctx.can('Packages.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Read required' });
+      }
+      return ctx.db.select({
+        id: packageRuns.id,
+        status: packageRuns.status,
+        triggerRef: packageRuns.triggerRef,
+        startedAt: packageRuns.startedAt,
+        finishedAt: packageRuns.finishedAt,
+        billingTotal: packageRuns.billingTotal,
+      }).from(packageRuns)
+        .where(eq(packageRuns.fanoutParentId, input.fanoutParentId))
         .orderBy(desc(packageRuns.createdAt));
     }),
 
@@ -866,6 +888,174 @@ export const packageRunsRouter = t.router({
       return result;
     }),
 
+  // A fan-out is one operator-visible run with one ordinary, linear package
+  // run per target. The parent is an aggregate only; it never reaches a
+  // worker. This deliberately keeps capabilities single-target.
+  startFanout: authProcedure
+    .input(z.object({
+      packageId: z.uuid(),
+      targetEntityType: z.literal('m365_identity'),
+      targetIds: z.array(z.uuid()).min(2).max(500),
+      runtimeInputs: runtimeInputsSchema,
+      // Runtime password generators use the existing sentinel. Shared means
+      // materialize once before copying inputs to every leaf; per_entity
+      // materializes separately for each leaf. More generator kinds can use
+      // this same map as they are exposed by the dialog.
+      generatorModes: z.record(z.string(), z.enum(['shared', 'per_entity'])).default({}),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.can('Packages.Run')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Run required' });
+      }
+      const [pkg] = await ctx.db.select().from(packagesTable).where(eq(packagesTable.id, input.packageId)).limit(1);
+      if (!pkg) throw new TRPCError({ code: 'NOT_FOUND', message: 'Package not found' });
+      if (pkg.status !== 'active') throw new TRPCError({ code: 'BAD_REQUEST', message: 'Package is not active' });
+      await assertPackageCapabilitiesAvailable(ctx.db, pkg);
+
+      const ids = [...new Set(input.targetIds)];
+      const targets = await ctx.db
+        .select({ id: m365Identities.id, linkId: m365Identities.linkId, siteId: m365Identities.siteId, name: m365Identities.name, email: m365Identities.email })
+        .from(m365Identities)
+        .where(inArray(m365Identities.id, ids));
+      if (targets.length !== ids.length) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'One or more selected identities are unavailable.' });
+      }
+      const linkIds = new Set(targets.map((target) => target.linkId));
+      if (linkIds.size !== 1) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Select identities from one Microsoft 365 tenant.' });
+      }
+      const linkId = targets[0]!.linkId;
+      const scope = readPackageScope(pkg);
+      const groupIds = await loadMatchingGroupIds(ctx.db, { linkId });
+      if (!packageMatchesScope(scope, { linkId }, groupIds)) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'This package is not permitted for the selected tenant.' });
+      }
+
+      const catalogInputMetaRows = await ctx.catalogDb
+        .select({ id: capabilityCandidates.id, inputMeta: capabilityCandidates.inputMeta, operation: capabilityCandidates.operation })
+        .from(capabilityCandidates)
+        .where(inArray(capabilityCandidates.id, (pkg.steps as Array<{ capabilityId: string }>).map((step) => step.capabilityId)));
+      const catalogManifests = new Map(catalogInputMetaRows.map((row) => [row.id, {
+        inputMeta: row.inputMeta as Record<string, { entityType?: string }>,
+        fanout: (row.operation as { fanout?: { mode?: string; targetInput?: string } } | null)?.fanout,
+      }]));
+      type FanoutBinding = { kind?: string; entityType?: string; contextKey?: string; promptKey?: string; stepPosition?: number; path?: string };
+      const targetKeys = new Set<string>();
+      for (const step of (pkg.steps as Array<{ capabilityId: string; inputBindings?: Record<string, FanoutBinding> }>) ?? []) {
+        const codeCapability = getCapability(step.capabilityId);
+        const catalogManifest = catalogManifests.get(step.capabilityId);
+        const fanout: { mode?: string; targetInput?: string } | undefined = codeCapability?.fanout ?? codeCapability?.operation?.fanout ?? catalogManifest?.fanout;
+        if (fanout?.mode === 'single_run') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: `"${codeCapability?.name ?? step.capabilityId}" is not configured for batch execution.` });
+        }
+        if (fanout?.mode === 'inherited') continue;
+
+        const inputMeta = codeCapability?.inputMeta ?? catalogManifest?.inputMeta ?? {};
+        const entityInputs = Object.entries(inputMeta)
+          .map(([inputName, meta]) => ({ inputName, entityType: meta.entityType, binding: step.inputBindings?.[inputName] }))
+          .filter((candidate): candidate is { inputName: string; entityType: string; binding: FanoutBinding | undefined } => Boolean(candidate.entityType));
+        const targetInput = fanout?.mode === 'per_target' ? fanout.targetInput : undefined;
+        if (fanout?.mode === 'per_target' && !targetInput) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: `"${codeCapability?.name ?? step.capabilityId}" has no primary target input.` });
+        }
+        const target = targetInput
+          ? entityInputs.find((candidate) => candidate.inputName === targetInput)
+          : (() => {
+              const direct = entityInputs.filter((candidate) => candidate.binding?.kind === 'entity' || candidate.binding?.kind === 'runtime');
+              if (direct.length === 0 && entityInputs.some((candidate) => candidate.binding?.kind === 'priorOutput')) return undefined;
+              if (direct.length === 1) return direct[0];
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: `"${codeCapability?.name ?? step.capabilityId}" has an ambiguous target. Set its execution scope in Capabilities.`,
+              });
+            })();
+        // A target fed by an upstream output follows the existing leaf target;
+        // it is not a second collection axis and needs no runtime injection.
+        if (!target || target.binding?.kind === 'priorOutput') continue;
+        if (target.entityType !== input.targetEntityType) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: `"${codeCapability?.name ?? step.capabilityId}" targets a different entity type.` });
+        }
+        if (target.binding?.kind === 'entity' && target.binding.entityType === input.targetEntityType) {
+          targetKeys.add(target.binding.contextKey ?? target.inputName);
+        } else if (target.binding?.kind === 'runtime') {
+          targetKeys.add(target.binding.promptKey ?? target.inputName);
+        } else {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: `"${codeCapability?.name ?? step.capabilityId}" must bind its target at run time or from an earlier step.` });
+        }
+      }
+      if (targetKeys.size === 0) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'This package needs one Microsoft 365 identity primary target to run against a table selection.',
+        });
+      }
+      const steps = (pkg.steps as Array<{ capabilityId: string; inputBindings: Record<string, unknown> }>) ?? [];
+      if (steps.length === 0) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Package has no steps' });
+      const children = await buildEmbeddedChildren(ctx.db, (pkg.steps as unknown[]) ?? [], (pkg.outcomeSteps as any) ?? undefined);
+      const snapshot = await embedCatalogManifests(ctx.catalogDb, {
+        id: pkg.id, name: pkg.name, version: pkg.version, steps: pkg.steps, prompts: pkg.prompts ?? [],
+        outcomeSteps: pkg.outcomeSteps ?? { onSuccess: [], onFailure: [] }, failureActions: pkg.failureActions ?? [],
+        exposedOutputs: pkg.exposedOutputs ?? [], children, skippedStepIndexes: [],
+      });
+      const billingSnapshot = {
+        currency: 'USD',
+        steps: steps.map((step, position) => ({
+          position, capabilityId: step.capabilityId, unitPrice: getCapability(step.capabilityId)?.defaultUnitPrice ?? 0,
+          billable: true, priceSource: 'default',
+        })), capturedAt: new Date().toISOString(),
+      };
+
+      // Resolve shared generators once. Per-entity generator values are
+      // deliberately resolved inside the leaf creation loop below.
+      const sharedInputs = { ...input.runtimeInputs };
+      const perEntityGeneratorInputs = new Set<string>();
+      for (const [key, mode] of Object.entries(input.generatorModes)) {
+        if (mode === 'per_entity' && sharedInputs[key] === GENERATE_PASSWORD_SENTINEL) {
+          perEntityGeneratorInputs.add(key);
+          delete sharedInputs[key];
+        }
+      }
+      const materializedSharedInputs = materializeGeneratedRuntimeInputs(sharedInputs, steps);
+      const encryptedParentInputs = encryptRuntimeInputs(materializedSharedInputs, steps, ctx.encryptionKey ?? '');
+      const now = new Date().toISOString();
+      const sourceLabel = ctx.user.name || ctx.user.email || ctx.user.id;
+
+      const result = await ctx.db.transaction(async (tx) => {
+        const [parent] = await tx.insert(packageRuns).values({
+          packageId: pkg.id, packageVersion: pkg.version, packageSnapshot: snapshot,
+          linkId, siteId: null, triggerType: 'manual', runtimeInputs: encryptedParentInputs,
+          billingSnapshot, status: 'running', startedAt: now, triggeredByUserId: ctx.user.id,
+          triggerSourceLabel: sourceLabel,
+          triggerRef: { kind: 'fanout', targetEntityType: input.targetEntityType, targetCount: targets.length },
+        }).returning({ id: packageRuns.id });
+        for (const target of targets) {
+          const leafInputs: Record<string, unknown> = { ...materializedSharedInputs };
+          for (const targetKey of targetKeys) leafInputs[targetKey] = target.id;
+          for (const key of perEntityGeneratorInputs) {
+            // This leaf receives a distinct materialized value; retries use
+            // the encrypted persisted result instead of generating again.
+            leafInputs[key] = GENERATE_PASSWORD_SENTINEL;
+          }
+          const materializedLeafInputs = materializeGeneratedRuntimeInputs(leafInputs, steps);
+          await createPendingPackageRun(tx as any, {
+            packageId: pkg.id, packageVersion: pkg.version, packageSnapshot: snapshot, linkId: target.linkId,
+            siteId: target.siteId, triggerType: 'manual', triggeredByUserId: ctx.user.id,
+            triggerSourceLabel: sourceLabel, runtimeInputs: encryptRuntimeInputs(materializedLeafInputs, steps, ctx.encryptionKey ?? ''),
+            billingSnapshot, fanoutParentId: parent!.id,
+            triggerRef: { kind: 'fanout-target', target: { entityType: input.targetEntityType, id: target.id, label: target.name || target.email } },
+          });
+        }
+        return { packageRunId: parent!.id };
+      });
+      await ctx.db.insert(customerLogs).values({
+        siteId: null, actorType: 'user', actorId: ctx.user.id, actorLabel: sourceLabel, action: 'create',
+        actionLabel: ActionLabels.PackageRunStart, targetType: 'package_run', targetId: result.packageRunId,
+        targetLabel: pkg.name, result: 'success', ipAddress: ctx.ipAddress, userAgent: ctx.userAgent,
+        metadata: { packageId: pkg.id, packageVersion: pkg.version, fanoutTargetCount: targets.length },
+      });
+      return result;
+    }),
+
   delete: authProcedure.input(z.object({ runId: z.uuid() })).mutation(async ({ ctx, input }) => {
     if (!ctx.can('Packages.Delete')) {
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Packages.Delete required' });
@@ -884,7 +1074,7 @@ export const packageRunsRouter = t.router({
 
     // Only terminal-state runs are safe to remove — an in-flight worker
     // still expects its row to exist to persist step results.
-    const terminalStatuses = new Set(['succeeded', 'failed', 'halted', 'partial', 'canceled']);
+    const terminalStatuses = new Set(['completed', 'failed', 'halted', 'partial', 'canceled']);
     if (!terminalStatuses.has(current.status)) {
       throw new TRPCError({
         code: 'BAD_REQUEST',
@@ -936,10 +1126,26 @@ export const packageRunsRouter = t.router({
     // Worker polls status between steps and bails cleanly. The queued
     // BullMQ job is not removed — the worker sees the canceled status and
     // exits without executing further steps.
+    //
+    // For fan-out parents: also cancel any leaf runs that haven't started
+    // executing yet (pending/queued). Running leaves are left to settle on
+    // their own — they'll call refreshFanoutParent on completion and the
+    // parent status will be recomputed from actual leaf outcomes then.
+    const now = new Date().toISOString();
     await ctx.db
       .update(packageRuns)
-      .set({ status: 'canceled', finishedAt: new Date().toISOString() })
+      .set({ status: 'canceled', finishedAt: now })
       .where(eq(packageRuns.id, input.runId));
+
+    await ctx.db
+      .update(packageRuns)
+      .set({ status: 'canceled', finishedAt: now })
+      .where(
+        and(
+          eq(packageRuns.fanoutParentId, input.runId),
+          inArray(packageRuns.status, ['pending', 'queued']),
+        ),
+      );
 
     await ctx.db.insert(customerLogs).values({
       siteId: current.siteId,

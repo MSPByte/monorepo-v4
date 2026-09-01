@@ -12,6 +12,7 @@
   import { Input } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
   import { Checkbox } from '$lib/components/ui/checkbox';
+  import { Switch } from '$lib/components/ui/switch';
   import SingleSelect from '$lib/components/single-select.svelte';
   import MultiSelect from '$lib/components/multi-select.svelte';
   import EntityPicker from './entity-picker.svelte';
@@ -36,6 +37,8 @@
     packageId?: string;
     linkId?: string | null;
     siteId?: string | null;
+    /** Preselected identities turn this dialog into one fan-out batch. */
+    fanoutIdentityIds?: string[];
     /** Use the normal run-input surface to prepare a future one-time run. */
     scheduleMode?: boolean;
     scheduleId?: string;
@@ -68,6 +71,7 @@
     packageId,
     linkId,
     siteId,
+    fanoutIdentityIds = [],
     scheduleMode = false,
     scheduleId,
     scheduleSnapshot,
@@ -95,7 +99,10 @@
     queryKey: ['packages.metadata.capabilities'],
     queryFn: () => trpc.packages.capabilities.query(),
     enabled: open,
-    staleTime: STALE.REF,
+    // Capability contracts can be edited immediately before an operator
+    // returns here to wire them into a package.
+    staleTime: 0,
+    refetchOnMount: 'always',
   }));
 
   const isDialogLoading = $derived(
@@ -116,6 +123,9 @@
   let selectedPackageId = $state<string>('');
   let values = $state<Record<string, string | boolean | string[]>>({});
   let passwordModes = $state<Record<string, 'preserve' | 'generate' | 'custom'>>({});
+  // true means generate a distinct value for each target. This is intentionally
+  // per input, so packages with several generators stay explicit.
+  let generatorPerEntity = $state<Record<string, boolean>>({});
   let siteModes = $state<Record<string, 'select' | 'create'>>({});
   let postalLookupStatus = $state<Record<string, 'idle' | 'loading' | 'done' | 'error'>>({});
   let postalLookupTimer: ReturnType<typeof setTimeout> | null = null;
@@ -137,6 +147,7 @@
       startStepIndex = 0;
       values = { ...(initialRuntimeInputs ?? {}) } as Record<string, string | boolean | string[]>;
       passwordModes = {};
+      generatorPerEntity = {};
       siteModes = { ...(initialRunInputState?.siteModes ?? {}) };
       postalLookupStatus = {};
       selectedTargetSiteId = initialSchedule?.siteId ?? '';
@@ -217,6 +228,7 @@
   };
 
   type RuntimeField = {
+    capabilityId: string;
     promptKey: string;
     inputName: string;
     required: boolean;
@@ -303,6 +315,7 @@
           const prompt = promptMap.get(binding.promptKey);
           seenKeys.add(binding.promptKey);
           fields.push({
+            capabilityId: step.capabilityId,
             promptKey: binding.promptKey,
             inputName,
             required: prompt?.required ?? binding.required,
@@ -342,6 +355,23 @@
       .flatMap((g) => g.fields)
       .filter((field) => isFieldVisible(field))
   );
+  const fanoutRuntimeFields = $derived.by(() => {
+    if (scheduleMode) return null;
+    return runtimeFields.filter((field) => {
+      const capability = capabilitiesQuery.data?.find((candidate) => candidate.id === field.capabilityId);
+      const step = ((selectedPackage?.steps as Step[] | undefined) ?? []).find((candidate) => candidate.capabilityId === field.capabilityId);
+      return Boolean(step && primaryIdentityInputName(step, capability) === field.inputName && field.entityType === 'm365_identity');
+    });
+  });
+  const fanoutRuntimeField = $derived.by(() => fanoutRuntimeFields?.[0] ?? null);
+
+  function isSecondaryFanoutField(field: RuntimeField): boolean {
+    return Boolean(
+      fanoutRuntimeField &&
+      field.promptKey !== fanoutRuntimeField.promptKey &&
+      fanoutRuntimeFields?.some((candidate) => candidate.promptKey === field.promptKey),
+    );
+  }
 
   // Device operations need a concrete site before their endpoint picker can
   // be useful. Page-level launches already provide one; the automation page
@@ -393,6 +423,7 @@
 
   const cascadeLinkId = $derived.by<string | undefined>(() => {
     for (const field of runtimeFields) {
+      if (isSecondaryFanoutField(field)) continue;
       if (field.entityType !== 'integration_link') continue;
       const raw = values[field.promptKey];
       if (typeof raw === 'string' && raw.length > 0) return raw;
@@ -500,15 +531,25 @@
       siteId?: string;
       startStepIndex: number;
       skippedStepIndexes: number[];
-    }) =>
-      trpc.packageRuns.start.mutate({
-        packageId: args.packageId,
-        linkId: cascadeLinkId ?? effectiveLinkId ?? null,
-        siteId: args.siteId ?? null,
-        runtimeInputs: args.runtimeInputs,
-        startStepIndex: args.startStepIndex,
-        skippedStepIndexes: args.skippedStepIndexes,
-      }),
+      fanoutIdentityIds?: string[];
+    }) => (args.fanoutIdentityIds ?? fanoutIdentityIds).length > 1
+      ? trpc.packageRuns.startFanout.mutate({
+          packageId: args.packageId,
+          targetEntityType: 'm365_identity',
+          targetIds: args.fanoutIdentityIds ?? fanoutIdentityIds,
+          runtimeInputs: args.runtimeInputs,
+          generatorModes: Object.fromEntries(
+            Object.entries(generatorPerEntity).map(([key, perEntity]) => [key, perEntity ? 'per_entity' : 'shared']),
+          ),
+        })
+      : trpc.packageRuns.start.mutate({
+          packageId: args.packageId,
+          linkId: cascadeLinkId ?? effectiveLinkId ?? null,
+          siteId: args.siteId ?? null,
+          runtimeInputs: args.runtimeInputs,
+          startStepIndex: args.startStepIndex,
+          skippedStepIndexes: args.skippedStepIndexes,
+        }),
     onSuccess: (result) => {
       onOpenChange(false);
       toast.success('Package run started', {
@@ -602,6 +643,7 @@
     if (needsSiteTarget && !effectiveSiteId) return false;
     if (needsSyntheticTenantPicker && !cascadeLinkId) return false;
     for (const field of runtimeFields) {
+      if (isSecondaryFanoutField(field)) continue;
       if (isBlockedByTenant(field) && field.required) return false;
       if (!field.required) continue;
       const raw = values[field.promptKey];
@@ -640,6 +682,10 @@
     for (const field of runtimeFields) {
       runtimeInputs[field.promptKey] = coerce(field, values[field.promptKey]);
     }
+    const selectedFromDialog = fanoutRuntimeField && Array.isArray(values[fanoutRuntimeField.promptKey])
+      ? values[fanoutRuntimeField.promptKey] as string[]
+      : [];
+    const selectedFanoutIds = fanoutIdentityIds.length > 1 ? fanoutIdentityIds : selectedFromDialog;
     if (scheduleMode) {
       saveSchedule.mutate({
         packageId: selectedPackage.id,
@@ -656,6 +702,7 @@
         siteId: effectiveSiteId,
         startStepIndex,
         skippedStepIndexes: [...skippedSteps],
+        fanoutIdentityIds: selectedFanoutIds,
       });
     }
   }
@@ -663,8 +710,51 @@
   const packageOptions = $derived(
     (packagesQuery.data ?? [])
       .filter((p) => p.status === 'active')
+      .filter((p) => fanoutIdentityIds.length < 2 || isIdentityFanoutCompatible(p))
       .map((p) => ({ value: p.id, label: p.name })),
   );
+
+  function isIdentityFanoutCompatible(pkg: { steps?: unknown }): boolean {
+    let hasPrimaryTarget = false;
+    for (const step of (pkg.steps as Array<{ capabilityId: string; inputBindings?: Record<string, Binding> }> | undefined) ?? []) {
+      const capability = capabilitiesQuery.data?.find((candidate) => candidate.id === step.capabilityId);
+      const fanout = capability?.fanout as { mode?: string; targetInput?: string } | undefined;
+      if (fanout?.mode === 'single_run') return false;
+      if (fanout?.mode === 'inherited') continue;
+      if (fanout?.mode === 'per_target') {
+        const meta = capability?.inputMeta?.[fanout.targetInput ?? ''] as { entityType?: string } | undefined;
+        const binding = step.inputBindings?.[fanout.targetInput ?? ''];
+        if (binding?.kind === 'priorOutput') continue;
+        if (meta?.entityType !== 'm365_identity' || !binding || !['runtime', 'entity'].includes(binding.kind)) return false;
+        hasPrimaryTarget = true;
+        continue;
+      }
+      const entityInputs = Object.entries(capability?.inputMeta ?? {})
+      .map(([inputName, meta]) => ({ inputName, entityType: (meta as { entityType?: string }).entityType, binding: step.inputBindings?.[inputName] as Binding | undefined }))
+        .filter((input): input is { inputName: string; entityType: string; binding: Binding | undefined } => Boolean(input.entityType));
+      const directTargets = entityInputs.filter((input) => input.binding?.kind === 'runtime' || input.binding?.kind === 'entity');
+      if (directTargets.length === 0 && entityInputs.some((input) => input.binding?.kind === 'priorOutput')) continue;
+      if (directTargets.length !== 1 || directTargets[0]!.entityType !== 'm365_identity') return false;
+      hasPrimaryTarget = true;
+    }
+    return hasPrimaryTarget;
+  }
+
+  function primaryIdentityInputName(
+    step: Step,
+    capability: { fanout?: unknown; inputMeta?: Record<string, unknown> } | undefined,
+  ): string | null {
+    const fanout = capability?.fanout as { mode?: string; targetInput?: string } | undefined;
+    if (fanout?.mode === 'per_target') return fanout.targetInput ?? null;
+    if (fanout) return null;
+    const entityInputs = Object.entries(capability?.inputMeta ?? {})
+      .map(([inputName, meta]) => ({ inputName, entityType: (meta as { entityType?: string }).entityType, binding: step.inputBindings[inputName] as Binding | undefined }))
+      .filter((input): input is { inputName: string; entityType: string; binding: Binding | undefined } => Boolean(input.entityType));
+    const directTargets = entityInputs.filter((input) => input.binding?.kind === 'runtime' || input.binding?.kind === 'entity');
+    return directTargets.length === 1 && directTargets[0]!.entityType === 'm365_identity'
+      ? directTargets[0]!.inputName
+      : null;
+  }
 
   const TIME_ZONE_SHORTCUTS = [
     { value: 'America/New_York', label: 'Eastern — New York (EST/EDT)' },
@@ -790,7 +880,8 @@
             {/if}
             {@const isSkipped = group.lane === 'main' && skippedSteps.has(group.position)}
             {@const canSkip = group.optional && !group.hasWiredOutputs}
-            {@const visibleFields = group.fields.filter((field) => isFieldVisible(field))}
+            {@const visibleFields = group.fields.filter((field) =>
+              isFieldVisible(field) && !isSecondaryFanoutField(field) && !(fanoutIdentityIds.length > 0 && field.entityType === 'm365_identity'))}
             <div class="rounded-lg border overflow-hidden {isSkipped ? 'opacity-50' : ''}">
               <!-- Step header -->
               <div class="flex items-center gap-2.5 px-3 py-2 bg-muted/40 border-b">
@@ -876,14 +967,14 @@
                             <EntityPicker
                               entityType={field.entityType}
                               packageId={selectedPackage.id}
-                              integrationLinkId={field.entityType !== 'integration_link'
+                              integrationLinkId={TENANT_SCOPED_ENTITY_TYPES.has(field.entityType)
                                 ? cascadeLinkId
                                 : undefined}
                               integrationId={field.entityType === 'integration_link'
                                 ? 'microsoft-365'
                                 : undefined}
                               siteId={field.entityType === 'sophos_endpoint' ? effectiveSiteId : undefined}
-                              multiple={field.typeHint === 'stringArray'}
+                              multiple={field.typeHint === 'stringArray' || fanoutRuntimeField?.promptKey === field.promptKey}
                               value={values[field.promptKey] as string | string[] | null | undefined ??
                                 (field.typeHint === 'stringArray' ? [] : null)}
                               onValueChange={(v) => (values[field.promptKey] = v as any)}
@@ -948,6 +1039,23 @@
                                 </span>
                               </div>
                             </label>
+                            {#if fanoutIdentityIds.length > 1 && passwordMode(field) === 'generate'}
+                              <div class="ml-6 flex items-center justify-between gap-4 rounded-md border bg-muted/30 px-3 py-2">
+                                <div class="space-y-0.5">
+                                  <div class="text-xs font-medium">Generate a unique value for each identity</div>
+                                  <div class="text-[11px] text-muted-foreground">
+                                    {generatorPerEntity[field.promptKey]
+                                      ? 'Each target gets its own generated value.'
+                                      : 'One generated value is used for every target.'}
+                                  </div>
+                                </div>
+                                <Switch
+                                  size="sm"
+                                  checked={generatorPerEntity[field.promptKey] ?? false}
+                                  onCheckedChange={(checked) => (generatorPerEntity[field.promptKey] = checked)}
+                                />
+                              </div>
+                            {/if}
                             <label class="flex items-start gap-2 text-sm cursor-pointer">
                               <RadioGroup.Item value="custom" class="mt-0.5" />
                               <div class="flex flex-col gap-0.5">
@@ -1090,6 +1198,10 @@
                         {/if}
                       </div>
                     {/each}
+                  </div>
+                {:else if fanoutIdentityIds.length > 0 && group.fields.some((field) => field.entityType === 'm365_identity')}
+                  <div class="p-3 text-sm text-muted-foreground">
+                    Using {fanoutIdentityIds.length} {fanoutIdentityIds.length === 1 ? 'identity' : 'identities'} selected from the table.
                   </div>
                 {:else}
                   <!-- No runtime inputs needed -->

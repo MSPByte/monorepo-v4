@@ -88,6 +88,7 @@
     initOutputFields(selectedQuery.data);
     initMeta(selectedQuery.data);
     initInputRows(selectedQuery.data);
+    initFanout(selectedQuery.data);
     initTestInputs(selectedQuery.data);
     editingMeta = false;
     activeTestRunId = null;
@@ -193,6 +194,50 @@
 
   let inputRows: InputRow[] = $state([]);
 
+  type FanoutMode = 'per_target' | 'inherited' | 'single_run';
+  let fanoutMode: FanoutMode = $state('single_run');
+  let fanoutTargetInput = $state('');
+
+  function initFanout(candidate: typeof selectedQuery.data) {
+    if (!candidate) return;
+    const fanout = ((candidate.operation ?? {}) as { fanout?: { mode?: FanoutMode; targetInput?: string } }).fanout;
+    fanoutMode = fanout?.mode ?? 'single_run';
+    fanoutTargetInput = fanout?.targetInput ?? '';
+  }
+
+  function buildFanout(): Record<string, string> {
+    return fanoutMode === 'per_target'
+      ? { mode: fanoutMode, targetInput: fanoutTargetInput }
+      : { mode: fanoutMode };
+  }
+
+  const saveFanoutMutation = createMutation(() => ({
+    mutationFn: (candidate: typeof selectedQuery.data & {}) => {
+      if (fanoutMode === 'per_target' && !fanoutTargetInput) {
+        throw new Error('Choose the primary target input.');
+      }
+      const op = { ...(candidate!.operation as Record<string, unknown>), fanout: buildFanout() };
+      return trpc.capabilities.candidates.upsert.mutate({
+        id: candidate!.id,
+        vendor: candidate!.vendor,
+        name: candidate!.name,
+        description: candidate!.description,
+        category: candidate!.category,
+        integration: (candidate!.integration ?? {}) as Record<string, unknown>,
+        operation: op,
+        inputMeta: (candidate!.inputMeta ?? {}) as Record<string, unknown>,
+        outputMeta: (candidate!.outputMeta ?? {}) as Record<string, unknown>,
+        sourceUrl: candidate!.sourceUrl,
+        notes: candidate!.notes,
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['capabilities.candidates.detail', selectedId] });
+      toast.success('Execution scope saved');
+    },
+    onError: (e) => toast.error(toUserMessage(e)),
+  }));
+
   function initInputRows(candidate: typeof selectedQuery.data) {
     if (!candidate) return;
     type Param = { in: string; name: string; input: string; required?: boolean };
@@ -260,7 +305,7 @@
         label: r.label || r.key,
         required: r.required,
         ...(isEntity
-          ? { entityType, allowedBindings: ['literal', 'runtime', 'priorOutput'] }
+          ? { entityType, allowedBindings: ['literal', 'runtime', 'entity', 'priorOutput'] }
           : { valueType: r.valueType }),
         ...(r.description ? { description: r.description } : {}),
       };
@@ -440,6 +485,25 @@
       if (f.description) def.description = f.description;
       if (f.source === 'response' && f.path) def.path = f.path;
       if (f.source === 'input' && f.inputKey) def.inputKey = f.inputKey;
+      // An output echoed from a reviewed entity input is more than a UUID: it
+      // is a typed resource reference. Preserve that contract so a following
+      // capability can wire it into an identity/group/etc. input.
+      if (f.source === 'input' && f.inputKey) {
+        const input = inputRows.find((row) => row.key === f.inputKey);
+        const entityType = input?.valueType.startsWith('entity:')
+          ? input.valueType.slice('entity:'.length)
+          : undefined;
+        const outputTypeByEntity: Record<string, string> = {
+          m365_identity: 'm365_identity_internal_id',
+          m365_group: 'm365_group_internal_id',
+          m365_license: 'm365_license_id',
+          m365_role: 'm365_role_id',
+          sophos_endpoint: 'sophos_endpoint_internal_id',
+        };
+        if (entityType && outputTypeByEntity[entityType]) {
+          def.outputType = outputTypeByEntity[entityType];
+        }
+      }
       if (f.sensitive) def.sensitive = true;
       base[f.key] = def;
     }
@@ -1436,6 +1500,49 @@
                 </dl>
                 <Button size="sm" variant="outline" class="mt-3" onclick={() => { initMeta(c); editingMeta = true; }}>Edit metadata</Button>
               {/if}
+            </SectionPanel>
+
+            <!-- Execution scope / fan-out contract -->
+            <SectionPanel title="Execution scope" code="BATCH">
+              <p class="mb-4 text-xs text-muted-foreground">
+                This is the capability's contract when a package runs from a table selection. A package can have one primary collection target; other steps must inherit it or remain single-run.
+              </p>
+              <div class="grid gap-2 sm:grid-cols-3">
+                {#each [
+                  { value: 'per_target' as FanoutMode, label: 'Primary target', hint: 'Supplies the one batch target.' },
+                  { value: 'inherited' as FanoutMode, label: 'Inherit target', hint: 'Runs once for every selected target.' },
+                  { value: 'single_run' as FanoutMode, label: 'Single run only', hint: 'Blocks table/batch execution.' },
+                ] as option}
+                  <button
+                    type="button"
+                    onclick={() => fanoutMode = option.value}
+                    class="rounded border px-3 py-2.5 text-left text-xs transition-colors {fanoutMode === option.value ? 'border-primary bg-primary/5 text-primary' : 'border-input text-muted-foreground hover:bg-muted/50'}"
+                  >
+                    <p class="font-semibold">{option.label}</p>
+                    <p class="mt-1 leading-relaxed {fanoutMode === option.value ? 'text-primary/70' : 'text-muted-foreground'}">{option.hint}</p>
+                  </button>
+                {/each}
+              </div>
+              {#if fanoutMode === 'per_target'}
+                {@const entityInputs = inputRows.filter((row) => row.key && row.valueType.startsWith('entity:'))}
+                <div class="mt-4 max-w-md">
+                  <Label class="text-xs">Primary target input</Label>
+                  <SingleSelect
+                    class="mt-1"
+                    bind:selected={fanoutTargetInput}
+                    placeholder="Choose an entity input…"
+                    options={entityInputs.map((row) => ({ value: row.key, label: `${row.label || row.key} · ${row.valueType.slice('entity:'.length).replace(/_/g, ' ')}` }))}
+                  />
+                  {#if entityInputs.length === 0}
+                    <p class="mt-1 text-xs text-amber-600">Add and save an entity input before making this capability batch-targetable.</p>
+                  {/if}
+                </div>
+              {/if}
+              <div class="mt-4 flex justify-end">
+                <Button size="sm" disabled={saveFanoutMutation.isPending || (fanoutMode === 'per_target' && !fanoutTargetInput)} onclick={() => saveFanoutMutation.mutate(c)}>
+                  {saveFanoutMutation.isPending ? 'Saving…' : 'Save execution scope'}
+                </Button>
+              </div>
             </SectionPanel>
 
             <!-- Operation summary -->

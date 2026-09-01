@@ -1,12 +1,10 @@
 <script lang="ts">
   import { getContext, onMount } from 'svelte';
-  import { createQuery, useQueryClient } from '@tanstack/svelte-query';
-  import { goto } from '$app/navigation';
+  import { useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
   import { authStore } from '$lib/stores/auth.store.svelte';
   import { scopeStore } from '$lib/stores/scope.store.svelte';
   import type { createTrpcClient } from '$lib/trpc';
-  import { STALE } from '$lib/query';
   import VendorDataTable from '$lib/components/data-table/vendor-data-table.svelte';
   import {
     textColumn,
@@ -28,7 +26,6 @@
   import UsersIcon from '@lucide/svelte/icons/users';
   import KeySquareIcon from '@lucide/svelte/icons/key-square';
   import ShieldIcon from '@lucide/svelte/icons/shield';
-  import WorkflowIcon from '@lucide/svelte/icons/workflow';
 
   const trpc = getContext<ReturnType<typeof createTrpcClient>>('trpc');
   const queryClient = useQueryClient();
@@ -137,21 +134,6 @@
   ]);
 
   const canWrite = $derived(authStore.isAllowed('Vendors.Write'));
-  const canRunPackages = $derived(authStore.isAllowed('Packages.Run'));
-
-  // Phase 1 A/B: same reset-password action exposed via the new Package path.
-  // Discovers the seeded "Reset M365 Password" package by name and disables
-  // itself if it's not present.
-  const packagesQuery = createQuery(() => ({
-    queryKey: ['packages.list'],
-    queryFn: () => trpc.packages.list.query(),
-    staleTime: STALE.PAGE,
-  }));
-  const resetPasswordPackage = $derived(
-    (packagesQuery.data ?? []).find(
-      (p) => p.name === 'Reset M365 Password' && p.status === 'active'
-    )
-  );
 
   // Reset password dialog wiring — the shared dialog handles the mutation.
   let resetDialogOpen = $state(false);
@@ -303,34 +285,6 @@
             },
           },
           {
-            label: 'Reset via Package',
-            icon: WorkflowIcon,
-            variant: 'outline',
-            group: 'Password',
-            preserveSelection: true,
-            disabled: (rows) => rows.length !== 1 || !resetPasswordPackage || !canRunPackages,
-            onclick: async (rows) => {
-              const pkg = resetPasswordPackage;
-              if (!pkg || rows.length !== 1 || !canRunPackages) return;
-              try {
-                const result = await trpc.packageRuns.start.mutate({
-                  packageId: pkg.id,
-                  linkId: String(rows[0]!['linkId']),
-                  siteId: (rows[0]!['siteId'] as string | null) ?? null,
-                  runtimeInputs: { identityId: String(rows[0]!['id']) },
-                });
-                toast.success('Package run started', {
-                  action: {
-                    label: 'View',
-                    onClick: () => goto(`/automation/runs/${result.packageRunId}`),
-                  },
-                });
-              } catch (err) {
-                toast.error(err instanceof Error ? err.message : 'Failed to start run');
-              }
-            },
-          },
-          {
             label: 'Manage Groups',
             icon: UsersIcon,
             variant: 'outline',
@@ -374,6 +328,7 @@
   enableRowSelection={canWrite}
   {rowActions}
   actionMode="dropdown"
+  packageTargetEntityType="m365_identity"
   onrowclick={(row) => openDrawer(row as IdentityRow)}
 />
 

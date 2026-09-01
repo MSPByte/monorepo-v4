@@ -19,8 +19,6 @@
     capabilityId: string;
     label?: string;
     optional?: boolean;
-    /** When set, the named input holds a list and the worker runs this step once per item. */
-    iterate?: string;
     inputBindings: Record<string, Binding>;
   };
 
@@ -179,7 +177,9 @@
   const capabilitiesQuery = createQuery(() => ({
     queryKey: ['packages.metadata.capabilities'],
     queryFn: () => trpc.packages.capabilities.query(),
-    staleTime: STALE.REF,
+    // Keep output/input contracts fresh after edits in Dev Capabilities.
+    staleTime: 0,
+    refetchOnMount: 'always',
   }));
 
   // Available packages that can be referenced as sub-packages. The list mutation
@@ -380,6 +380,118 @@
       });
     }
     return map;
+  });
+
+  type FanoutContract =
+    | { mode: 'per_target'; targetInput: string }
+    | { mode: 'inherited' }
+    | { mode: 'single_run' };
+
+  function fanoutFor(capability: unknown): FanoutContract | undefined {
+    const fanout = (capability as { fanout?: FanoutContract } | undefined)?.fanout;
+    return fanout;
+  }
+
+  function entityTypeLabel(entityType: string): string {
+    return entityType.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+
+  type StepExecutionRole =
+    | { kind: 'target'; entityType: string; inferred: boolean }
+    | { kind: 'context'; inferred: boolean }
+    | { kind: 'single_run' }
+    | { kind: 'unknown' };
+
+  function stepExecutionRole(step: Step, capability: any): StepExecutionRole {
+    if (step.kind !== 'capability') return { kind: 'single_run' };
+    const fanout = fanoutFor(capability);
+    if (fanout?.mode === 'single_run') return { kind: 'single_run' };
+    if (fanout?.mode === 'inherited') return { kind: 'context', inferred: false };
+    const entityInputs = Object.entries(capability?.inputMeta ?? {})
+      .map(([inputName, meta]) => ({
+        inputName,
+        entityType: (meta as { entityType?: string }).entityType,
+        binding: step.inputBindings[inputName] as Binding | undefined,
+      }))
+      .filter((input): input is { inputName: string; entityType: string; binding: Binding | undefined } => Boolean(input.entityType));
+
+    if (fanout?.mode === 'per_target') {
+      const target = entityInputs.find((input) => input.inputName === fanout.targetInput);
+      if (!target) return { kind: 'unknown' };
+      return target.binding?.kind === 'priorOutput'
+        ? { kind: 'context', inferred: false }
+        : { kind: 'target', entityType: target.entityType, inferred: false };
+    }
+
+    // Existing packages were built before execution scope was declared. A
+    // single directly selected entity is unambiguous; a prior-output entity
+    // follows its upstream target and does not introduce a collection axis.
+    const directTargets = entityInputs.filter((input) =>
+      input.binding?.kind === 'runtime' || input.binding?.kind === 'entity');
+    if (directTargets.length === 1) {
+      return { kind: 'target', entityType: directTargets[0]!.entityType, inferred: true };
+    }
+    if (entityInputs.some((input) => input.binding?.kind === 'priorOutput')) {
+      return { kind: 'context', inferred: true };
+    }
+    return { kind: 'unknown' };
+  }
+
+  function targetRoleLabel(step: Step, capability: any): string {
+    const role = stepExecutionRole(step, capability);
+    return role.kind === 'target'
+      ? `${entityTypeLabel(role.entityType)}${role.inferred ? ' · inferred' : ''}`
+      : '';
+  }
+
+  function contextRoleLabel(step: Step, capability: any): string {
+    const role = stepExecutionRole(step, capability);
+    return role.kind === 'context' && role.inferred ? ' · wired' : '';
+  }
+
+  const packageExecutionScope = $derived.by(() => {
+    const targets: string[] = [];
+    for (const step of draft.steps) {
+      if (step.kind !== 'capability') return {
+        batchReady: false,
+        title: 'Single run · sub-package included',
+        reason: 'Sub-packages do not declare a table target, so this package runs once.',
+      };
+      const cap = capIndex.get(step.capabilityId);
+      const role = stepExecutionRole(step, cap);
+      if (role.kind === 'unknown') return {
+        batchReady: false,
+        title: 'Single run · scope missing',
+        reason: `${cap?.name ?? step.capabilityId} has no unambiguous target. Set its execution scope in Capabilities.`,
+      };
+      if (role.kind === 'single_run') return {
+        batchReady: false,
+        title: 'Single run · step constraint',
+        reason: `${cap.name} is designed to run once and prevents table batch execution.`,
+      };
+      if (role.kind === 'target') targets.push(role.entityType);
+    }
+    const entityTypes = [...new Set(targets)];
+    if (entityTypes.length !== 1) {
+      return entityTypes.length === 0
+        ? {
+            batchReady: false,
+            title: 'Single run · no target',
+            reason: 'Add a step that targets a resource before this package can run from a table selection.',
+          }
+        : {
+            batchReady: false,
+            title: 'Single run · conflicting targets',
+            reason: `This package targets ${entityTypes.map(entityTypeLabel).join(' and ')}. Table selection would create independent target collections.`,
+          };
+    }
+    const entityType = entityTypes[0]!;
+    return {
+      batchReady: true,
+      entityType,
+      title: `Batch-ready · ${entityTypeLabel(entityType)}`,
+      reason: `One selected ${entityTypeLabel(entityType).toLowerCase()} set is used by every matching target step. Context steps run once per selected record.`,
+    };
   });
 
 
@@ -712,21 +824,6 @@
   function reactionStep(): Step | null {
     if (selected.kind !== 'reaction') return null;
     return draft.outcomeSteps[selected.lane][selected.index] ?? null;
-  }
-
-  /** Returns the first input key on a capability that has an entityType — used to auto-pick iterate target. */
-  function firstEntityInput(cap: { inputMeta: Record<string, unknown> }): string | null {
-    for (const [name, meta] of Object.entries(cap.inputMeta as Record<string, { entityType?: string }>)) {
-      if (meta.entityType) return name;
-    }
-    return null;
-  }
-
-  function toggleIterate(stepIndex: number, step: CapabilityStep, cap: { inputMeta: Record<string, unknown> }) {
-    const next: CapabilityStep = step.iterate
-      ? { ...step, iterate: undefined }
-      : { ...step, iterate: firstEntityInput(cap) ?? undefined };
-    draft.steps = draft.steps.map((s, i) => (i === stepIndex ? next : s));
   }
 
   function setReactionBinding(inputName: string, binding: Binding) {
@@ -1163,6 +1260,18 @@
         {draft.status}
       </div>
 
+      <button
+        type="button"
+        onclick={() => (selected = { kind: 'details' })}
+        class="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors {packageExecutionScope.batchReady
+          ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-400'
+          : 'border-amber-500/30 bg-amber-500/5 text-amber-700 hover:bg-amber-500/10 dark:text-amber-400'}"
+        title={packageExecutionScope.reason}
+      >
+        <Circle class="size-2 fill-current" />
+        {packageExecutionScope.batchReady ? 'Batch-ready' : 'Single run'}
+      </button>
+
       <div class="ml-auto flex items-center gap-2">
         <Select.Root type="single" bind:value={draft.status}>
           <Select.Trigger class="h-9 w-32 capitalize">{draft.status}</Select.Trigger>
@@ -1224,6 +1333,7 @@
             {#each draft.steps as step, i (i)}
               {@const cap = capIndex.get(step.capabilityId)}
               {@const summary = summarize(step)}
+              {@const executionRole = stepExecutionRole(step, cap)}
               {@const isSelected = selected.kind === 'step' && selected.index === i}
               {@const isLast = i === draft.steps.length - 1}
               <li class="relative">
@@ -1255,6 +1365,19 @@
                       {cap?.category ?? '—'}
                     </div>
                     <div class="flex flex-wrap items-center gap-1.5 pt-1 text-[10px]">
+                      {#if executionRole.kind === 'target'}
+                        <span class="rounded-sm bg-emerald-500/10 px-1.5 py-0.5 font-mono text-emerald-700 dark:text-emerald-400" title={executionRole.inferred ? 'Inferred from this step’s direct entity input' : `Targets ${entityTypeLabel(executionRole.entityType)}`}>
+                          targets {entityTypeLabel(executionRole.entityType)}{executionRole.inferred ? ' · inferred' : ''}
+                        </span>
+                      {:else if executionRole.kind === 'context'}
+                        <span class="rounded-sm bg-sky-500/10 px-1.5 py-0.5 font-mono text-sky-700 dark:text-sky-400" title={executionRole.inferred ? 'Follows the target wired from an earlier step' : 'Runs once for each package target'}>
+                          uses context{executionRole.inferred ? ' · wired' : ''}
+                        </span>
+                      {:else if executionRole.kind === 'single_run'}
+                        <span class="rounded-sm bg-amber-500/10 px-1.5 py-0.5 font-mono text-amber-700 dark:text-amber-400" title="This step runs once and prevents table batching">
+                          runs once
+                        </span>
+                      {/if}
                       {#if summary.wires.length > 0}
                         <span
                           class="inline-flex items-center gap-1 rounded-sm bg-cyan-500/10 px-1.5 py-0.5 font-mono text-cyan-700 dark:text-cyan-400"
@@ -1527,6 +1650,13 @@
     <!-- Inspector -->
     <section class="flex min-h-0 flex-col overflow-y-auto">
       {#if selected.kind === 'details'}
+        <div class="mx-6 mt-6 border-l-4 px-4 py-3 text-sm {packageExecutionScope.batchReady ? 'border-emerald-500 bg-emerald-500/5' : 'border-amber-500 bg-amber-500/5'}">
+          <p class="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Execution mode</p>
+          <p class="mt-1 font-medium {packageExecutionScope.batchReady ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}">
+            {packageExecutionScope.title}
+          </p>
+          <p class="mt-1 text-xs text-muted-foreground">{packageExecutionScope.reason}</p>
+        </div>
         {@const subpackageOutputsByPackageId = new Map(
           [...subpackageDetails.entries()].map(([id, detail]) => [
             id,
@@ -1594,21 +1724,18 @@
               {#if lane === 'main'}
                 <div class="flex items-center gap-2 pt-1">
                   <span class="font-mono text-[10px] text-muted-foreground/70">{cap.id}</span>
-                  {#if step.kind === 'capability' && firstEntityInput(cap as { inputMeta: Record<string, unknown> })}
-                    {@const iterateTarget = firstEntityInput(cap as { inputMeta: Record<string, unknown> })}
-                    {@const iterateMeta = (cap.inputMeta as Record<string, { entityType?: string; label?: string }>)[iterateTarget ?? ''] }
-                    <button
-                      onclick={() => toggleIterate(stepIndex, step as CapabilityStep, cap as { inputMeta: Record<string, unknown> })}
-                      class="rounded-sm border px-1.5 py-0.5 font-mono text-[10px] transition-colors
-                        {(step as CapabilityStep).iterate
-                          ? 'border-primary bg-primary/10 text-primary'
-                          : 'border-input text-muted-foreground hover:border-primary/50 hover:text-foreground'}"
-                      title={(step as CapabilityStep).iterate
-                        ? 'Runs once per selected item — click to disable'
-                        : `Enable to run this step for each selected ${iterateMeta?.entityType?.replace(/_/g, ' ') ?? 'entity'}`}
-                    >
-                      {(step as CapabilityStep).iterate ? `iterate · ${iterateTarget}` : 'run once'}
-                    </button>
+                  {#if stepExecutionRole(step, cap).kind === 'target'}
+                    <span class="rounded-sm border border-primary/30 bg-primary/5 px-1.5 py-0.5 font-mono text-[10px] text-primary" title="This step supplies the package's one batch target">
+                      targets · {targetRoleLabel(step, cap)}
+                    </span>
+                  {:else if stepExecutionRole(step, cap).kind === 'context'}
+                    <span class="rounded-sm border border-sky-500/30 bg-sky-500/5 px-1.5 py-0.5 font-mono text-[10px] text-sky-700 dark:text-sky-400" title="This step runs once for every package target">
+                      uses context{contextRoleLabel(step, cap)}
+                  </span>
+                  {:else if stepExecutionRole(step, cap).kind === 'single_run'}
+                    <span class="rounded-sm border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 font-mono text-[10px] text-amber-700 dark:text-amber-400" title="This step prevents batch execution">
+                      single run only
+                    </span>
                   {/if}
                 </div>
               {/if}
@@ -1835,7 +1962,7 @@
                       />
                     {:else if binding?.kind === 'literal'}
                       {#if meta.entityType}
-                        {@const multiSelect = meta.typeHint === 'stringArray' || (step.kind === 'capability' && (step as CapabilityStep).iterate === inputName)}
+                        {@const multiSelect = meta.typeHint === 'stringArray'}
                         <EntityPicker
                           entityType={meta.entityType as EntityType}
                           multiple={multiSelect}
@@ -1883,11 +2010,7 @@
                     {:else if binding?.kind === 'runtime'}
                       <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                         {#if meta.entityType}
-                          {#if step.kind === 'capability' && (step as CapabilityStep).iterate === inputName}
-                            A <strong>multi-select</strong> picker for <span class="font-mono">{meta.entityType.replace(/_/g, ' ')}</span> will appear — the step runs once per selected item.
-                          {:else}
-                            A picker for <span class="font-mono">{meta.entityType.replace(/_/g, ' ')}</span> will appear when this runs.
-                          {/if}
+                          A picker for <span class="font-mono">{meta.entityType.replace(/_/g, ' ')}</span> will appear when this runs.
                         {:else if meta.typeHint === 'password'}
                           A password field will appear. Operators can generate a strong random password or set a specific one.
                         {:else}

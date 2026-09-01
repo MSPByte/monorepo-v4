@@ -43,6 +43,7 @@ export type ImportedCandidate = {
     body?: { input: string; contentType: string };
     successStatusCodes: number[];
     response: { source: 'body' };
+    fanout?: import('./types.js').CapabilityFanout;
   };
   inputMeta: Record<string, {
     allowedBindings: string[];

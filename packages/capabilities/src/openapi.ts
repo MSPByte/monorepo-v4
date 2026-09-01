@@ -2,6 +2,7 @@ import type { z } from 'zod';
 import type {
   Capability,
   CapabilityIntegrationRequirement,
+  CapabilityFanout,
   InputGroupMeta,
   InputMetaEntry,
   OutputMetaEntry,
@@ -32,6 +33,8 @@ export interface OpenApiOperationManifest {
   };
   successStatusCodes: readonly number[];
   response: { source: 'body' };
+  /** Reviewed execution-scope metadata used by the package builder and runner. */
+  fanout?: CapabilityFanout;
 }
 
 export interface OpenApiRequest {

@@ -1451,6 +1451,7 @@ export const packagesRouter = t.router({
             }),
           ),
           inputGroups: capability.inputGroups,
+          fanout: capability.fanout ?? capability.operation?.fanout,
           outputMeta: Object.fromEntries(
             Object.entries(capability.outputMeta).map(([name, meta]) => {
               const fieldType = resolveOutputFieldType(meta);
@@ -1471,6 +1472,7 @@ export const packagesRouter = t.router({
           vendor: capabilityCandidates.vendor,
           category: capabilityCandidates.category,
           integration: capabilityCandidates.integration,
+          operation: capabilityCandidates.operation,
           inputMeta: capabilityCandidates.inputMeta,
           outputMeta: capabilityCandidates.outputMeta,
         })
@@ -1518,6 +1520,7 @@ export const packagesRouter = t.router({
             description: c.description ?? undefined,
             category: (c.category ?? 'general').toLowerCase() as string,
             integration: (c.integration ?? undefined) as { integrationId: string; connection: 'configured' | 'activeLink' } | undefined,
+            fanout: ((c.operation ?? {}) as { fanout?: unknown }).fanout,
             inputMeta: Object.fromEntries(
               Object.entries(inputMeta).map(([name, meta]) => {
                 const fieldType = safeInputFieldType(meta);

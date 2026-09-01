@@ -64,6 +64,15 @@
         : false;
     },
   }));
+  const fanoutTargets = createQuery(() => ({
+    queryKey: ['packageRuns.listFanoutTargets', runId],
+    queryFn: () => trpc.packageRuns.listFanoutTargets.query({ fanoutParentId: runId }),
+    enabled: (detail.data?.run.triggerRef as { kind?: string } | null)?.kind === 'fanout',
+    refetchInterval: () => {
+      const status = detail.data?.run.status;
+      return ['pending', 'queued', 'running'].includes(status ?? '') ? 2_000 : false;
+    },
+  }));
   const childrenByPosition = $derived.by(() => {
     const map = new Map<number, Array<{ id: string; status: string; packageName: string | null }>>();
     for (const child of children.data ?? []) {
@@ -180,15 +189,15 @@
       <ArrowLeft class="size-3.5" />
       All runs
     </button>
-    {#if detail.data?.run.parentRunId}
+    {#if detail.data?.run.parentRunId || detail.data?.run.fanoutParentId}
       <span class="text-muted-foreground/40">·</span>
       <button
         type="button"
         class="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-        onclick={() => goto(`/automation/runs/${detail.data!.run.parentRunId}`)}
+        onclick={() => goto(`/automation/runs/${detail.data!.run.parentRunId ?? detail.data!.run.fanoutParentId}`)}
       >
         <CornerDownRight class="size-3.5" />
-        Parent run
+        {detail.data?.run.fanoutParentId ? 'Batch run' : 'Parent run'}
       </button>
     {/if}
   </div>
@@ -213,6 +222,7 @@
         }}
         {@const badge = runStatusBadge(run.status)}
         {@const totalDuration = formatDuration(run.startedAt, run.finishedAt)}
+        {@const isFanout = (run.triggerRef as { kind?: string } | null)?.kind === 'fanout'}
 
         <header class="space-y-4">
           <div class="flex flex-wrap items-start justify-between gap-4">
@@ -284,6 +294,40 @@
 
         <Separator />
 
+        {#if isFanout}
+          {@const targets = fanoutTargets.data ?? []}
+          {@const completedTargets = targets.filter((target) => target.status === 'completed').length}
+          {@const failedTargets = targets.filter((target) => ['failed', 'halted', 'partial', 'canceled'].includes(target.status)).length}
+          <section class="space-y-3">
+            <div class="flex items-baseline justify-between gap-3">
+              <div>
+                <h2 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">Target runs</h2>
+                <p class="mt-1 text-sm text-muted-foreground">
+                  {completedTargets} completed{failedTargets ? ` · ${failedTargets} need attention` : ''} · {targets.length} total
+                </p>
+              </div>
+            </div>
+            <div class="divide-y rounded-lg border">
+              {#each targets as target (target.id)}
+                {@const targetInfo = (target.triggerRef as { target?: { label?: string; id?: string } } | null)?.target}
+                {@const targetBadge = runStatusBadge(target.status)}
+                <button
+                  type="button"
+                  class="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-muted/50"
+                  onclick={() => goto(`/automation/runs/${target.id}`)}
+                >
+                  <span class="min-w-0 truncate text-sm font-medium">{targetInfo?.label ?? targetInfo?.id ?? 'Identity'}</span>
+                  <Badge variant="outline" class={targetBadge.class + ' shrink-0 capitalize'}>{targetBadge.label}</Badge>
+                </button>
+              {:else}
+                <div class="px-4 py-3 text-sm text-muted-foreground">Preparing target runs…</div>
+              {/each}
+            </div>
+          </section>
+          <Separator />
+        {/if}
+
+        {#if !isFanout}
         <div>
           <div class="mb-4 flex items-baseline justify-between">
             <h2 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">Steps</h2>
@@ -452,6 +496,7 @@
             {/each}
           </div>
         </div>
+        {/if}
       {/if}
     </div>
   </div>

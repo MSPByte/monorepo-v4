@@ -56,8 +56,6 @@ type CapabilityStep = {
   inputBindings: Record<string, Binding>;
   onFailure?: StepOnFailure;
   retryAttempts?: number;
-  // When set, the named input resolves to an array and the step runs once per item.
-  iterate?: string;
   // Manifest frozen at dispatch time by embedCatalogManifests; worker uses this
   // instead of a live catalog lookup so the run is isolated from later edits.
   _manifest?: FrozenManifest;
@@ -266,6 +264,11 @@ export function createPackageWorker(
           packageRunId,
           status: run.status,
         });
+        // Still refresh the fan-out parent so a leaf that was canceled before
+        // the worker picked it up doesn't leave the parent stuck in 'running'.
+        if (run.fanoutParentId) {
+          await refreshFanoutParent(db, run.fanoutParentId);
+        }
         return;
       }
 
@@ -282,6 +285,9 @@ export function createPackageWorker(
         encryptionKey,
         retryPathTail: retryPath,
       });
+      if (run.fanoutParentId) {
+        await refreshFanoutParent(db, run.fanoutParentId);
+      }
 
       logger.info("Package run completed", {
         orgId,
@@ -301,6 +307,40 @@ export function createPackageWorker(
       error: serializeError(error),
     });
   });
+}
+
+// The aggregate row is an operator-facing batch, not an executable package.
+// Leaf runs remain the source of truth for step history and retries.
+async function refreshFanoutParent(db: any, parentId: string): Promise<void> {
+  const children = await db
+    .select({ status: packageRuns.status, billingTotal: packageRuns.billingTotal })
+    .from(packageRuns)
+    .where(eq(packageRuns.fanoutParentId, parentId));
+  if (children.length === 0) return;
+  const active = children.some((child: { status: string }) =>
+    ['pending', 'queued', 'running'].includes(child.status),
+  );
+  const statuses = children.map((child: { status: string }) => child.status);
+  const successCount = statuses.filter((status: string) => status === 'completed').length;
+  const failureCount = statuses.filter((status: string) =>
+    ['failed', 'halted', 'partial', 'canceled'].includes(status),
+  ).length;
+  const status = active
+    ? 'running'
+    : failureCount === 0
+      ? 'completed'
+      : successCount === 0
+        ? 'failed'
+        : 'partial';
+  const billingTotal = children.reduce(
+    (sum: number, child: { billingTotal: string | number | null }) => sum + Number(child.billingTotal ?? 0),
+    0,
+  );
+  await db.update(packageRuns).set({
+    status,
+    billingTotal: billingTotal.toFixed(4),
+    finishedAt: active ? null : new Date().toISOString(),
+  }).where(eq(packageRuns.id, parentId));
 }
 
 function extractRetryPath(triggerRef: unknown): number[] {
@@ -602,65 +642,6 @@ async function runPackageRun(args: {
 
           const catalogInputMeta = (candidate.inputMeta ?? {}) as Record<string, { sensitive?: boolean }>;
           const encryptedCatalogInputs = encryptCatalogInputs(resolveResult.value, catalogInputMeta, encryptionKey);
-
-          // Iterate mode: run the capability once per item in the named array input.
-          const iterateKey = step.iterate;
-          const iterateValues = iterateKey && Array.isArray(resolveResult.value[iterateKey])
-            ? (resolveResult.value[iterateKey] as unknown[])
-            : null;
-
-          if (iterateValues && iterateValues.length > 0) {
-            const iterResults: Array<{ item: unknown; outcome: string; outputs?: unknown; error?: string }> = [];
-            let iterFailed = false;
-
-            for (const item of iterateValues) {
-              const singleInputs = { ...resolveResult.value, [iterateKey as string]: item };
-              const iterResult = await executeCatalogCandidate({
-                candidate,
-                inputs: singleInputs,
-                linkId: run.linkId ?? null,
-                getM365Connector: (linkId: string) => ctxBase.getM365Connector(linkId),
-                tenantDb: db,
-              });
-              iterResults.push({
-                item,
-                outcome: iterResult.outcome,
-                outputs: iterResult.outcome === 'success' ? iterResult.outputs : undefined,
-                error: iterResult.outcome === 'fail' ? iterResult.message : undefined,
-              });
-              if (iterResult.outcome === 'fail') {
-                iterFailed = true;
-                const onFail: StepOnFailure = step.onFailure ?? 'halt';
-                if (onFail === 'halt') break;
-              }
-            }
-
-            const aggregatedOutputs = { iterations: iterResults.length, results: iterResults };
-            if (iterFailed) {
-              await db.update(packageRunSteps).set({
-                status: "fail",
-                resolvedInputs: encryptedCatalogInputs,
-                outputs: aggregatedOutputs as Record<string, unknown>,
-                errorClass: "iterate_partial_failure",
-                errorMessage: `${iterResults.filter((r) => r.outcome === 'fail').length}/${iterResults.length} iteration(s) failed.`,
-                finishedAt: new Date().toISOString(),
-              }).where(eq(packageRunSteps.id, stepRow.id));
-              anyStepFailed = true;
-              const stepOnFailure: StepOnFailure = step.onFailure ?? "halt";
-              if (stepOnFailure === "halt") { halted = true; break; }
-            } else {
-              await db.update(packageRunSteps).set({
-                status: "success",
-                resolvedInputs: encryptedCatalogInputs,
-                outputs: aggregatedOutputs as Record<string, unknown>,
-                billable: true,
-                unitPrice: "0.0000",
-                finishedAt: new Date().toISOString(),
-              }).where(eq(packageRunSteps.id, stepRow.id));
-              stepOutputs.set(position, aggregatedOutputs as Record<string, unknown>);
-            }
-            continue;
-          }
 
           const catalogResult = await executeCatalogCandidate({
             candidate,

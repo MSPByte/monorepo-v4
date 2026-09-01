@@ -95,6 +95,7 @@ ${parameters ? `    parameters: [\n${parameters}\n    ],` : '    parameters: [],
 ${hasBody ? `    body: { input: 'body', contentType: '${candidate.operation.body!.contentType}' },` : ''}
     successStatusCodes: [${candidate.operation.successStatusCodes.join(', ')}],
     response: { source: 'body' },
+    fanout: ${JSON.stringify(candidate.operation.fanout ?? { mode: 'single_run' })},
   },
   inputs,
   outputs,

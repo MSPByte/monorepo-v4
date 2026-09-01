@@ -168,6 +168,17 @@ export interface CapabilityIntegrationRequirement {
   connection: 'configured' | 'activeLink';
 }
 
+/**
+ * Defines how a capability participates when a package is launched against a
+ * table selection. `per_target` supplies the package's one collection axis;
+ * `inherited` is safe to execute once for each selected target; `single_run`
+ * deliberately prevents table/batch execution.
+ */
+export type CapabilityFanout =
+  | { mode: 'per_target'; targetInput: string }
+  | { mode: 'inherited' }
+  | { mode: 'single_run' };
+
 export interface CapabilityAvailabilityInventory {
   configuredIntegrationIds: ReadonlySet<string>;
   activeLinkIntegrationIds: ReadonlySet<string>;
@@ -318,6 +329,8 @@ export interface Capability<Inputs = unknown, Outputs = unknown> {
   // drives (for example, Entra Conditional Access), rather than a flat API.
   inputGroups?: Record<string, InputGroupMeta>;
   outputMeta: Record<string, OutputMetaEntry>;
+  /** Explicit batch-execution contract. Omit only while authoring legacy code capabilities. */
+  fanout?: CapabilityFanout;
   actionLabel: ActionLabels;
   // Maps to audit.customer_logs.action enum: 'create' | 'update' | 'delete'.
   auditAction: 'create' | 'update' | 'delete';

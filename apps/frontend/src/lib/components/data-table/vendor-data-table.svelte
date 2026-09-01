@@ -11,6 +11,9 @@
   } from './types';
   import DataTable from './data-table.svelte';
   import type { createTrpcClient } from '$lib/trpc';
+  import { authStore } from '$lib/stores/auth.store.svelte';
+  import RunPackageDialog from '$lib/components/domain/run-package-dialog.svelte';
+  import WorkflowIcon from '@lucide/svelte/icons/workflow';
 
   type FilterOperatorMapped =
     | 'eq'
@@ -38,6 +41,8 @@
     rowActions?: RowAction<TData>[];
     actionMode?: 'inline' | 'dropdown';
     actionMenuLabel?: string;
+    /** Opt-in package launcher. The table selection becomes this entity's sole fan-out axis. */
+    packageTargetEntityType?: 'm365_identity';
     onrowclick?: (row: TData) => void;
   }
 
@@ -55,6 +60,7 @@
     rowActions = [],
     actionMode = 'inline',
     actionMenuLabel,
+    packageTargetEntityType,
     onrowclick,
   }: Props = $props();
 
@@ -65,6 +71,31 @@
   const tableScopeKey = $derived(
     `${table}:${normalizedLinkId ?? 'all'}:${normalizedGroupId ?? 'all'}:${scopeColumn || 'none'}`
   );
+  let packageDialogOpen = $state(false);
+  let packageTargetIds = $state<string[]>([]);
+  let packageLinkId = $state<string | undefined>();
+  const canRunPackages = $derived(authStore.isAllowed('Packages.Run'));
+
+  function sharedLinkId(rows: TData[]): string | undefined {
+    const ids = new Set(rows.map((row) => String(row['linkId'] ?? '')).filter(Boolean));
+    return ids.size === 1 ? [...ids][0] : undefined;
+  }
+
+  const resolvedRowActions = $derived<RowAction<TData>[]>([
+    ...rowActions,
+    ...(packageTargetEntityType && canRunPackages
+      ? [{
+          label: 'Run package', icon: WorkflowIcon, variant: 'outline' as const, group: 'Automation',
+          preserveSelection: true,
+          disabled: (rows: TData[]) => rows.length === 0 || !sharedLinkId(rows),
+          onclick: (rows: TData[]) => {
+            packageTargetIds = rows.map((row) => String(row['id'] ?? '')).filter(Boolean);
+            packageLinkId = sharedLinkId(rows);
+            packageDialogOpen = packageTargetIds.length > 0;
+          },
+        } satisfies RowAction<TData>]
+      : []),
+  ]);
 
   const linksQuery = createQuery(() => ({
     queryKey: ['integrationLinks.list', integrationId, 'all'],
@@ -203,10 +234,19 @@
       {defaultSort}
       {views}
       {enableRowSelection}
-      {rowActions}
+      rowActions={resolvedRowActions}
       {actionMode}
       {actionMenuLabel}
       {onrowclick}
     />
   {/key}
 </div>
+
+{#if packageTargetEntityType === 'm365_identity'}
+  <RunPackageDialog
+    bind:open={packageDialogOpen}
+    onOpenChange={(open) => (packageDialogOpen = open)}
+    linkId={normalizedLinkId ?? packageLinkId}
+    fanoutIdentityIds={packageTargetIds}
+  />
+{/if}
