@@ -312,7 +312,7 @@
   {@const openFindingCount = findings.length || policy.openFindingCount}
   <FadeIn class="size-full overflow-auto">
     <PolicyBriefing
-      policyId={policy.id}
+      id={policy.id}
       name={policy.name}
       description={policy.description}
       category={policy.category}

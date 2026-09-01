@@ -3,6 +3,7 @@
   import { createQuery } from '@tanstack/svelte-query';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
+  import { STALE } from '$lib/query';
   import SingleSelect from '$lib/components/single-select.svelte';
   import MultiSelect from '$lib/components/multi-select.svelte';
 
@@ -62,7 +63,7 @@
             integrationId,
             siteId,
           }),
-    staleTime: 30_000,
+    staleTime: STALE.LIST,
   }));
 
   const options = $derived(

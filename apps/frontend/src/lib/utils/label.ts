@@ -21,3 +21,9 @@ export function fieldLabel(key: string, label?: string | null): string {
   if (label && label.trim().length > 0) return label;
   return prettifyKey(key);
 }
+
+const SEVERITY_LABELS: Record<number, string> = { 4: 'CRITICAL', 3: 'HIGH', 2: 'MEDIUM', 1: 'LOW' };
+
+export function severityLabel(severity: number): string {
+  return SEVERITY_LABELS[severity] ?? 'LOW';
+}

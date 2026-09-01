@@ -2,6 +2,7 @@
   import { getContext } from 'svelte';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
   import type { createTrpcClient } from '$lib/trpc';
+  import { STALE } from '$lib/query';
   import MembershipDialog from './membership-dialog.svelte';
   import { summarizePairResult } from './summarize.js';
 
@@ -30,7 +31,7 @@
     queryKey: ['vendor.m365LicenseAvailability', linkId],
     queryFn: () => trpc.vendor.m365LicenseAvailability.query({ linkId }),
     enabled: open && !!linkId,
-    staleTime: 15_000
+    staleTime: STALE.ENTITY
   }));
 
   const singleIdentity = $derived(identityIds.length === 1 ? identityIds[0] : null);

@@ -5,6 +5,7 @@
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
 
+  import { STALE } from '$lib/query';
   import * as Sheet from '$lib/components/ui/sheet';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -106,7 +107,7 @@
   const facetsQuery = createQuery(() => ({
     queryKey: ['billing.facets'],
     queryFn: () => trpc.billing.facets.query(),
-    staleTime: 60_000
+    staleTime: STALE.PAGE
   }));
 
   const allFacets = $derived<FacetConfig[]>(
@@ -338,7 +339,7 @@
     queryKey: ['billing.previewRule', ruleDraft],
     queryFn: () => trpc.billing.previewRule.query(ruleDraft),
     enabled: psaValue.trim().length > 0 && vendorFacet.length > 0 && hasInclude,
-    staleTime: 3_000,
+    staleTime: STALE.SHORT,
   }));
 
   const saveMutation = createMutation(() => ({

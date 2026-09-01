@@ -10,6 +10,7 @@
   import * as Select from '$lib/components/ui/select/index.js';
   import Badge from '$lib/components/ui/badge/badge.svelte';
   import Button from '$lib/components/ui/button/button.svelte';
+  import Input from '$lib/components/ui/input/input.svelte';
   import {
     Settings,
     TriangleAlert,
@@ -305,12 +306,11 @@
                   <label class="text-sm font-medium" for="mspagent-var-name">
                     Site Variable Name
                   </label>
-                  <input
+                  <Input
                     id="mspagent-var-name"
                     name="siteVariableName"
                     type="text"
                     placeholder="MSPSiteCode"
-                    class="w-full px-3 py-2 text-sm rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
                     value={existingConfig?.siteVariableName ?? ''}
                   />
                 </div>

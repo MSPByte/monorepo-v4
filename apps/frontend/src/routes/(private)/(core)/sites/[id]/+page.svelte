@@ -7,7 +7,7 @@
   import type { TRPCClient } from '@trpc/client';
   import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
 
-  import SectionPanel from './_components/section-panel.svelte';
+  import SectionPanel from '$lib/components/panel/section-panel.svelte';
   import FactRow from './_components/fact-row.svelte';
   import MetricRow from './_components/metric-row.svelte';
   import FlagPill from './_components/flag-pill.svelte';

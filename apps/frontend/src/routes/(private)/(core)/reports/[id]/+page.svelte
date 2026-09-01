@@ -7,6 +7,7 @@
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import type { FieldDefinition, SchemaFields } from '@mspbyte/shared';
+  import { STALE } from '$lib/query';
   import { authStore } from '$lib/stores/auth.store.svelte';
   import Button from '$lib/components/ui/button/button.svelte';
   import {
@@ -70,7 +71,7 @@
   const sourcesQuery = createQuery(() => ({
     queryKey: ['reports.listSources'],
     queryFn: () => trpc.reports.listSources.query(),
-    staleTime: 5 * 60_000,
+    staleTime: STALE.REF,
   }));
 
   const report = $derived(reportQuery.data ?? null);

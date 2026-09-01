@@ -53,7 +53,6 @@ export const actions: Actions = {
       JSON.stringify({ orgId: locals.org?.id }),
     );
 
-    console.log(consentUrl.href);
     return redirect(303, consentUrl.href);
   },
 

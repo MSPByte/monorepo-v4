@@ -218,7 +218,7 @@
       label="FAILED / 1H"
       value={activity.data?.kpis.failedLastHour ?? '—'}
       detail="failed runs, last hour"
-      tone={activity.data && activity.data.kpis.failedLastHour > 0 ? 'destructive' : 'neutral'}
+      tone={activity.data && activity.data.kpis.failedLastHour > 0 ? 'danger' : 'neutral'}
     />
   </div>
 

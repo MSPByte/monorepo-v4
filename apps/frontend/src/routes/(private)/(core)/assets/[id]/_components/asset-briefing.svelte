@@ -1,5 +1,6 @@
 <script lang="ts">
   import { formatRelativeDate, prettyText } from '$lib/utils/format';
+  import BriefingHeader from '$lib/components/domain/briefing-header.svelte';
 
   type Props = {
     id: string;
@@ -35,61 +36,33 @@
   }: Props = $props();
 
   const statusLabel = $derived(status ? status.replace('_', '-').toUpperCase() : 'UNKNOWN');
-  const statusAccent = $derived(
-    status === 'inactive' || status === 'disabled' || status === 'error'
-  );
+  const statusAccent = $derived(status === 'inactive' || status === 'disabled' || status === 'error');
   const findingsAccent = $derived(openFindingCount > 0);
+
+  const pillBase = 'inline-flex items-center gap-1.5 rounded-[3px] border px-1.5 py-px tracking-[0.14em]';
+  const pillMuted = `${pillBase} border-foreground/15 bg-foreground/4 text-foreground/90`;
 </script>
 
-<header class="border-b border-foreground/15 bg-card">
-  <!-- Identity row -->
-  <div class="flex flex-wrap items-end justify-between gap-3 px-6 pb-2 pt-4">
-    <div class="flex items-baseline gap-3">
-      <div class="min-w-0">
-        <div
-          class="mb-1 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground"
-        >
-          <span class="font-semibold text-foreground/80">ASSET</span>
-          <span class="text-foreground/40">·</span>
-          <span class="truncate">{prettyText(type)}</span>
-        </div>
-        <h1 class="truncate text-xl font-semibold leading-tight tracking-tight">{hostname}</h1>
-        {#if displayName && displayName !== hostname}
-          <p class="mt-0.5 max-w-3xl truncate text-xs text-muted-foreground">{displayName}</p>
-        {/if}
-      </div>
-    </div>
-  </div>
-
-  <!-- Categorical pills -->
-  <div class="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-6 pb-2 font-mono text-[10.5px]">
+<BriefingHeader
+  entityType="ASSET"
+  title={hostname}
+  subtitle={displayName && displayName !== hostname ? displayName : null}
+  breadcrumb={prettyText(type)}
+>
+  {#snippet pills()}
     <span
-      class={`inline-flex items-center gap-1.5 rounded-[3px] border px-1.5 py-px tracking-[0.14em] ${
-        statusAccent
-          ? 'border-destructive/40 bg-destructive/6 text-destructive'
-          : 'border-foreground/15 bg-foreground/4 text-foreground/90'
-      }`}
+      class="{pillBase} {statusAccent
+        ? 'border-destructive/40 bg-destructive/6 text-destructive'
+        : 'border-foreground/15 bg-foreground/4 text-foreground/90'}"
     >
       STATUS·{statusLabel}
     </span>
-    <span
-      class="inline-flex items-center gap-1.5 rounded-[3px] border border-foreground/15 bg-foreground/4 px-1.5 py-px tracking-[0.14em] text-foreground/90"
-    >
-      TYPE·{type.toUpperCase()}
-    </span>
+    <span class={pillMuted}>TYPE·{type.toUpperCase()}</span>
     {#if os}
-      <span
-        class="inline-flex items-center gap-1.5 rounded-[3px] border border-foreground/15 bg-foreground/4 px-1.5 py-px tracking-[0.14em] text-foreground/90"
-      >
-        OS·{os.toUpperCase()}
-      </span>
+      <span class={pillMuted}>OS·{os.toUpperCase()}</span>
     {/if}
     {#if sourceConfidence}
-      <span
-        class="inline-flex items-center gap-1.5 rounded-[3px] border border-foreground/15 bg-foreground/4 px-1.5 py-px tracking-[0.14em] text-foreground/90"
-      >
-        CONF·{sourceConfidence.toUpperCase()}
-      </span>
+      <span class={pillMuted}>CONF·{sourceConfidence.toUpperCase()}</span>
     {/if}
     {#if siteName}
       <span class="ml-2 truncate text-xs text-muted-foreground">
@@ -100,15 +73,12 @@
         {/if}
       </span>
     {/if}
-  </div>
+  {/snippet}
 
-  <!-- Metric ribbon -->
-  <div
-    class="flex flex-wrap items-center gap-x-5 gap-y-1.5 border-t border-border/70 bg-muted/30 px-6 py-2.5 font-mono text-[12px] text-foreground"
-  >
+  {#snippet ribbon()}
     <span class="flex items-baseline gap-1.5">
       <span class="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">FINDINGS</span>
-      <span class={`font-semibold tabular-nums ${findingsAccent ? 'text-destructive' : ''}`}>
+      <span class="font-semibold tabular-nums {findingsAccent ? 'text-destructive' : ''}">
         {openFindingCount.toLocaleString()}
       </span>
     </span>
@@ -132,5 +102,5 @@
         <span class="font-semibold tabular-nums">{formatRelativeDate(updatedAt)}</span>
       </span>
     {/if}
-  </div>
-</header>
+  {/snippet}
+</BriefingHeader>

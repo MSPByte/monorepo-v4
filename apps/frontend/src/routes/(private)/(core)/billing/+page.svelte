@@ -5,6 +5,7 @@
   import type { TRPCClient } from '@trpc/client';
   import { toast } from 'svelte-sonner';
 
+  import { STALE } from '$lib/query';
   import * as Card from '$lib/components/ui/card';
   import * as Tabs from '$lib/components/ui/tabs';
   import { Button } from '$lib/components/ui/button';
@@ -56,7 +57,7 @@
   const facetsQuery = createQuery(() => ({
     queryKey: ['billing.facets'],
     queryFn: () => trpc.billing.facets.query(),
-    staleTime: 60_000,
+    staleTime: STALE.PAGE,
   }));
 
   const deleteRule = createMutation(() => ({

@@ -4,7 +4,7 @@ import BoolBadgeCell from './cells/bool-badge-cell.svelte';
 import NullableTextCell from './cells/nullable-text-cell.svelte';
 import RelativeDateCell from './cells/relative-date-cell.svelte';
 import DateCell from '$lib/components/data-table/cells/date-cell.svelte';
-import StateBadegeCell from '$lib/components/data-table/cells/state-badege-cell.svelte';
+import StateBadgeCell from '$lib/components/data-table/cells/state-badge-cell.svelte';
 
 export interface BoolBadgeCellProps {
   trueLabel?: string;
@@ -26,7 +26,7 @@ export function stateColumn<T>(
     key,
     title,
     sortable: true,
-    cellComponent: StateBadegeCell,
+    cellComponent: StateBadgeCell,
     cellProps,
     ...overrides,
   };

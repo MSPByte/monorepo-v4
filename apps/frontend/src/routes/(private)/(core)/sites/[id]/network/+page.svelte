@@ -1,5 +1,5 @@
 <script lang="ts">
-  import SectionPanel from '../_components/section-panel.svelte';
+  import SectionPanel from '$lib/components/panel/section-panel.svelte';
   import SourceGlyph from '../_components/source-glyph.svelte';
   import { useSiteContext } from '../_components/site-context';
   import { formatRelativeDate } from '$lib/utils/format';

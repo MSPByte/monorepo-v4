@@ -5,6 +5,7 @@
   import { toast } from 'svelte-sonner';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
+  import { STALE } from '$lib/query';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
   import * as RadioGroup from '$lib/components/ui/radio-group/index.js';
   import Button from '$lib/components/ui/button/button.svelte';
@@ -87,14 +88,14 @@
         linkId: linkId ?? undefined,
       }),
     enabled: open,
-    staleTime: 30_000,
+    staleTime: STALE.LIST,
   }));
 
   const capabilitiesQuery = createQuery(() => ({
     queryKey: ['packages.metadata.capabilities'],
     queryFn: () => trpc.packages.capabilities.query(),
     enabled: open,
-    staleTime: 5 * 60_000,
+    staleTime: STALE.REF,
   }));
 
   const isDialogLoading = $derived(
@@ -105,7 +106,7 @@
     queryKey: ['sites.list'],
     queryFn: () => trpc.sites.list.query(),
     enabled: open,
-    staleTime: 60_000,
+    staleTime: STALE.PAGE,
   }));
 
   const siteOptions = $derived(
@@ -411,7 +412,7 @@
     queryKey: ['vendor.coveChildPartners'],
     queryFn: () => trpc.vendor.coveChildPartners.query(),
     enabled: open && hasCovePartnerField,
-    staleTime: 5 * 60_000,
+    staleTime: STALE.REF,
   }));
 
   const covePartnerOptions = $derived([
@@ -423,7 +424,7 @@
     queryFn: () =>
       trpc.vendor.m365DomainOptions.query({ linkId: cascadeLinkId! }),
     enabled: !!cascadeLinkId,
-    staleTime: 60_000,
+    staleTime: STALE.PAGE,
   }));
 
   const domainOptions = $derived(

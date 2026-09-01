@@ -7,6 +7,7 @@
   import { ArrowLeft, ChevronDown, ChevronUp, Plus, Save, Trash2 } from '@lucide/svelte';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
+  import { STALE } from '$lib/query';
   import { authStore } from '$lib/stores/auth.store.svelte';
   import Button from '$lib/components/ui/button/button.svelte';
   import { Input } from '$lib/components/ui/input/index.js';
@@ -16,7 +17,7 @@
   import SingleSelect from '$lib/components/single-select.svelte';
   import { showErrorToast } from '$lib/utils/errors';
   import ScopeBar from '../../reports/_components/scope-bar.svelte';
-  import KpiTile from './_components/kpi-tile.svelte';
+  import KpiTile from '$lib/components/domain/dashboard-tile.svelte';
   import ThresholdEditor from './_components/threshold-editor.svelte';
 
   type Tone = 'neutral' | 'primary' | 'warning' | 'danger' | 'success';
@@ -83,7 +84,7 @@
   const sources = createQuery(() => ({
     queryKey: ['reports.listSources'],
     queryFn: () => trpc.reports.listSources.query(),
-    staleTime: 300_000,
+    staleTime: STALE.DASHBOARD,
   }));
   const sourceOptions = $derived(
     (sources.data ?? []).map((source) => ({ value: source.table, label: source.label }))
@@ -310,7 +311,7 @@
         >Choose the records and visual signal for this widget.</Sheet.Description
       ></Sheet.Header
     >
-    <div class="space-y-6 overflow-y-auto px-5 pb-5">
+    <div class="space-y-6 overflow-y-auto p-5">
       <div class="grid gap-5 md:grid-cols-2">
         <div class="space-y-2"><Label>Title</Label><Input bind:value={draftTitle} /></div>
         <div class="space-y-2">

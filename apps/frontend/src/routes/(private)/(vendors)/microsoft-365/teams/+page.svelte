@@ -1,6 +1,6 @@
 <script lang="ts">
   import { scopeStore } from '$lib/stores/scope.store.svelte';
-  import VendorDataTable from '$lib/components/data-table/VendorDataTable.svelte';
+  import VendorDataTable from '$lib/components/data-table/vendor-data-table.svelte';
   import { textColumn, boolBadgeColumn, nullableTextColumn } from '$lib/components/data-table/column-defs';
   import type { DataTableColumn } from '$lib/components/data-table/types';
   import TeamsSheet from './_teams-sheet.svelte';

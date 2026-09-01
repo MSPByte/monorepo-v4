@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
+  import { STALE } from '$lib/query';
   import { createQuery } from '@tanstack/svelte-query';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
@@ -33,7 +34,7 @@
   const overview = createQuery(() => ({
     queryKey: ['sites.overview'],
     queryFn: () => trpc.sites.overview.query(),
-    staleTime: 60_000,
+    staleTime: STALE.PAGE,
   }));
 
   const columns: DataTableColumn<SiteRow>[] = [

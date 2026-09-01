@@ -5,6 +5,7 @@
   import { toast } from 'svelte-sonner';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
+  import { STALE } from '$lib/query';
   import * as Popover from '$lib/components/ui/popover/index.js';
   import Button from '$lib/components/ui/button/button.svelte';
   import MultiSelect from '$lib/components/multi-select.svelte';
@@ -18,13 +19,13 @@
   const prefsQuery = createQuery(() => ({
     queryKey: ['reports.getMyPrefs'],
     queryFn: () => trpc.reports.getMyPrefs.query(),
-    staleTime: 60_000,
+    staleTime: STALE.PAGE,
   }));
 
   const sitesQuery = createQuery(() => ({
     queryKey: ['reports.listScopeSites'],
     queryFn: () => trpc.reports.listScopeSites.query(),
-    staleTime: 5 * 60_000,
+    staleTime: STALE.REF,
   }));
 
   const groupsQuery = createQuery(() => ({
@@ -40,7 +41,7 @@
         integrationId: 'microsoft-365',
         status: 'active',
       }),
-    staleTime: 5 * 60_000,
+    staleTime: STALE.REF,
   }));
 
   // -- popover state ---------------------------------------------------------

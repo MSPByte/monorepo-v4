@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import SingleSelect from '$lib/components/single-select.svelte';
   import type { FieldReference } from '@mspbyte/shared';
+  import { debounce } from '$lib/utils/debounce';
 
   let {
     ref,
@@ -19,7 +20,6 @@
 
   let options = $state<{ value: string; label: string }[]>([]);
   let loading = $state(false);
-  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   function buildUrl(query?: string, exactValue?: string): string {
     const params = new URLSearchParams({
@@ -70,16 +70,13 @@
     loading = false;
   });
 
-  function handleSearch(query: string) {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(async () => {
-      loading = true;
-      const rows = await fetchRows(query);
-      const currentItem = options.find((o) => o.value === selected);
-      options = mergeOptions(ref.specialValues ?? [], rows, currentItem ? [currentItem] : []);
-      loading = false;
-    }, 300);
-  }
+  const handleSearch = debounce(async (query: string) => {
+    loading = true;
+    const rows = await fetchRows(query);
+    const currentItem = options.find((o) => o.value === selected);
+    options = mergeOptions(ref.specialValues ?? [], rows, currentItem ? [currentItem] : []);
+    loading = false;
+  }, 300);
 </script>
 
 <SingleSelect

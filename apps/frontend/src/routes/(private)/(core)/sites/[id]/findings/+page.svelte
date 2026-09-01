@@ -13,7 +13,7 @@
   import { relativeDateColumn, stateColumn, textColumn } from '$lib/components/data-table/column-defs';
   import FindingStatusBadge from '$lib/components/domain/finding-status-badge.svelte';
   import { toServerTableInput } from '$lib/components/domain/server-table';
-  import SectionPanel from '../_components/section-panel.svelte';
+  import SectionPanel from '$lib/components/panel/section-panel.svelte';
   import { useSiteContext } from '../_components/site-context';
 
   const ctx = useSiteContext();

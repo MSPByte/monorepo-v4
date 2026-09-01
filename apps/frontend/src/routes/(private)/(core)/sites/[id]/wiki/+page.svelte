@@ -3,7 +3,7 @@
   import { createQuery } from '@tanstack/svelte-query';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
-  import SectionPanel from '../_components/section-panel.svelte';
+  import SectionPanel from '$lib/components/panel/section-panel.svelte';
   import { useSiteContext } from '../_components/site-context';
   import { formatRelativeDate } from '$lib/utils/format';
   import Plus from '@lucide/svelte/icons/plus';

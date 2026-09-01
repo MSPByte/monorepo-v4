@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
+  import { STALE } from '$lib/query';
   import { toast } from 'svelte-sonner';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
@@ -49,7 +50,7 @@
   const overview = createQuery(() => ({
     queryKey: ['findings.overview'],
     queryFn: () => trpc.findings.overview.query(),
-    staleTime: 60_000,
+    staleTime: STALE.PAGE,
   }));
 
   const columns: DataTableColumn<FindingRow>[] = [

@@ -11,9 +11,11 @@
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
+  import { STALE } from '$lib/query';
   import SectionPanel from '$lib/components/panel/section-panel.svelte';
   import { serializeFilters } from '$lib/components/data-table';
   import { prettyText } from '$lib/utils/format';
+  import { debounce } from '$lib/utils/debounce';
   import { authStore } from '$lib/stores/auth.store.svelte';
 
   import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
@@ -80,20 +82,14 @@
   let addOpen = $state(false);
   let searchInput = $state('');
   let searchDebounced = $state('');
-  let debounceHandle: ReturnType<typeof setTimeout> | null = null;
 
-  function scheduleSearch(value: string) {
-    if (debounceHandle) clearTimeout(debounceHandle);
-    debounceHandle = setTimeout(() => {
-      searchDebounced = value.trim();
-    }, 200);
-  }
+  const scheduleSearch = debounce((value: string) => {
+    searchDebounced = value.trim();
+  }, 200);
 
   $effect(() => {
     scheduleSearch(searchInput);
-    return () => {
-      if (debounceHandle) clearTimeout(debounceHandle);
-    };
+    return scheduleSearch.cancel;
   });
 
   $effect(() => {
@@ -113,7 +109,7 @@
         limit: 25,
       }),
     enabled: addOpen,
-    staleTime: 15_000,
+    staleTime: STALE.ENTITY,
   }));
 
   type Candidate = NonNullable<typeof candidatesQuery.data>[number];

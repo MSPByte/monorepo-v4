@@ -10,7 +10,7 @@
 
   function isRouteActive(route: Route, pathname: string): boolean {
     if (route.children?.length) return route.children.some((c) => isRouteActive(c, pathname));
-    if (route.href === '/home') return pathname === '/home' || pathname === '/';
+    if (route.href === '/home' && pathname === '/') return true;
     return pathname === route.href || pathname.startsWith(route.href + '/');
   }
 

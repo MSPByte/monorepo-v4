@@ -5,7 +5,7 @@
   import { cn } from '$lib/utils';
   import type { createTrpcClient } from '$lib/trpc';
   import type { DataTableColumn } from '$lib/components/data-table/types';
-  import VendorDataTable from '$lib/components/data-table/VendorDataTable.svelte';
+  import VendorDataTable from '$lib/components/data-table/vendor-data-table.svelte';
   import * as Sheet from '$lib/components/ui/sheet/index.js';
   import { relativeDateColumn } from '$lib/components/data-table';
   import { nullableTextColumn, textColumn } from '$lib/components/data-table/column-defs';

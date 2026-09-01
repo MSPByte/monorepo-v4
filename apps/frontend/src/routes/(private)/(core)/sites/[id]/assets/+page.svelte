@@ -8,7 +8,7 @@
   import SourceBadge from '$lib/components/domain/source-badge.svelte';
   import { toServerTableInput } from '$lib/components/domain/server-table';
   import { prettyText } from '$lib/utils/format';
-  import SectionPanel from '../_components/section-panel.svelte';
+  import SectionPanel from '$lib/components/panel/section-panel.svelte';
   import { useSiteContext } from '../_components/site-context';
 
   const ctx = useSiteContext();

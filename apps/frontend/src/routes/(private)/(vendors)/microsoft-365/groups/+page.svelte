@@ -1,7 +1,7 @@
 <script lang="ts">
   import { authStore } from '$lib/stores/auth.store.svelte';
   import { scopeStore } from '$lib/stores/scope.store.svelte';
-  import VendorDataTable from '$lib/components/data-table/VendorDataTable.svelte';
+  import VendorDataTable from '$lib/components/data-table/vendor-data-table.svelte';
   import {
     textColumn,
     boolBadgeColumn,

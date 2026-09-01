@@ -48,6 +48,7 @@
   import MultiSelect from '$lib/components/multi-select.svelte';
   import { OPERATOR_LABELS } from '$lib/components/data-table';
   import { showErrorToast } from '$lib/utils/errors';
+  import { STALE } from '$lib/query';
   import ScopeBar from '../_components/scope-bar.svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
@@ -158,7 +159,7 @@
   const sourcesQuery = createQuery(() => ({
     queryKey: ['reports.listSources'],
     queryFn: () => trpc.reports.listSources.query(),
-    staleTime: 5 * 60_000,
+    staleTime: STALE.REF,
   }));
 
   const existingQuery = createQuery(() => ({
@@ -170,7 +171,7 @@
     queryFn: () =>
       trpc.reports.listFilterValues.query({ source: 'm365Identities', column: 'assignedLicenses' }),
     enabled: source === 'm365Identities',
-    staleTime: 5 * 60_000,
+    staleTime: STALE.REF,
   }));
 
   // -- derived ---------------------------------------------------------------

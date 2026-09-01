@@ -1,6 +1,6 @@
 // Main component
 export { default as DataTable } from "./data-table.svelte";
-export { default as VendorDataTable } from "./VendorDataTable.svelte";
+export { default as VendorDataTable } from "./vendor-data-table.svelte";
 
 // Types
 export type {

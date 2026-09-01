@@ -131,6 +131,7 @@
     type Source,
   } from './_binding-presentation';
   import { fieldLabel } from '$lib/utils/label';
+  import { STALE } from '$lib/query';
   import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
   import {
     ArrowLeft,
@@ -178,7 +179,7 @@
   const capabilitiesQuery = createQuery(() => ({
     queryKey: ['packages.metadata.capabilities'],
     queryFn: () => trpc.packages.capabilities.query(),
-    staleTime: 5 * 60_000,
+    staleTime: STALE.REF,
   }));
 
   // Available packages that can be referenced as sub-packages. The list mutation
@@ -187,7 +188,7 @@
   const subpackagesQuery = createQuery(() => ({
     queryKey: ['packages.list.forSubpackageRef'],
     queryFn: () => trpc.packages.list.query({}),
-    staleTime: 30_000,
+    staleTime: STALE.LIST,
   }));
   const subpackageIndex = $derived(
     new Map((subpackagesQuery.data ?? []).map((p) => [p.id, p]))
@@ -231,13 +232,13 @@
   const generatorsQuery = createQuery(() => ({
     queryKey: ['packages.metadata.generators'],
     queryFn: () => trpc.packages.generators.query(),
-    staleTime: 5 * 60_000,
+    staleTime: STALE.REF,
   }));
 
   const siteFactFieldsQuery = createQuery(() => ({
     queryKey: ['packages.metadata.siteFactFields'],
     queryFn: () => trpc.packages.siteFactFields.query(),
-    staleTime: 5 * 60_000,
+    staleTime: STALE.REF,
   }));
 
   // Match a site fact to the capability's resolved platform type. Resource
@@ -269,13 +270,13 @@
   const sitesQuery = createQuery(() => ({
     queryKey: ['sites.list.scopePicker'],
     queryFn: () => trpc.sites.list.query(),
-    staleTime: 60_000,
+    staleTime: STALE.PAGE,
   }));
 
   const siteGroupsQuery = createQuery(() => ({
     queryKey: ['siteGroups.list.scopePicker'],
     queryFn: () => trpc.siteGroups.list.query(),
-    staleTime: 60_000,
+    staleTime: STALE.PAGE,
   }));
 
   const siteOptions = $derived(
@@ -287,7 +288,7 @@
   const tenantLinksQuery = createQuery(() => ({
     queryKey: ['integrationLinks.list.packageScope'],
     queryFn: () => trpc.integrationLinks.list.query({ status: 'active' }),
-    staleTime: 60_000,
+    staleTime: STALE.PAGE,
   }));
   const tenantLinkOptions = $derived(
     (tenantLinksQuery.data ?? [])

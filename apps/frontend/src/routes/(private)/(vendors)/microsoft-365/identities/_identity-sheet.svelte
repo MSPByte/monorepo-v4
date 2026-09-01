@@ -1,4 +1,3 @@
-<!-- TODO: Findings Implementation -->
 <script lang="ts">
   import { getContext } from 'svelte';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';

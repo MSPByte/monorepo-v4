@@ -1,4 +1,3 @@
-<!-- TODO: Findings Implementation -->
 <script lang="ts">
   import { getContext, onMount } from 'svelte';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
@@ -7,7 +6,8 @@
   import { authStore } from '$lib/stores/auth.store.svelte';
   import { scopeStore } from '$lib/stores/scope.store.svelte';
   import type { createTrpcClient } from '$lib/trpc';
-  import VendorDataTable from '$lib/components/data-table/VendorDataTable.svelte';
+  import { STALE } from '$lib/query';
+  import VendorDataTable from '$lib/components/data-table/vendor-data-table.svelte';
   import {
     textColumn,
     boolBadgeColumn,
@@ -145,7 +145,7 @@
   const packagesQuery = createQuery(() => ({
     queryKey: ['packages.list'],
     queryFn: () => trpc.packages.list.query(),
-    staleTime: 60_000,
+    staleTime: STALE.PAGE,
   }));
   const resetPasswordPackage = $derived(
     (packagesQuery.data ?? []).find(

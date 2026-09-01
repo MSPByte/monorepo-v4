@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
+  import { STALE } from '$lib/query';
   import { authStore } from '$lib/stores/auth.store.svelte';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
@@ -220,7 +221,7 @@
       queryClient.fetchQuery({
         queryKey: ['packages.metadata.capabilities'],
         queryFn: () => trpc.packages.capabilities.query(),
-        staleTime: 5 * 60_000,
+        staleTime: STALE.REF,
       }),
     ]);
 

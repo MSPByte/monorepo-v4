@@ -5,7 +5,7 @@
   import { cn } from '$lib/utils';
   import type { createTrpcClient } from '$lib/trpc';
   import type { DataTableColumn, TableView } from '$lib/components/data-table/types';
-  import VendorDataTable from '$lib/components/data-table/VendorDataTable.svelte';
+  import VendorDataTable from '$lib/components/data-table/vendor-data-table.svelte';
   import * as Sheet from '$lib/components/ui/sheet/index.js';
   import { BACKUP_STATUS_COLORS, BACKUP_STATUS_LABEL } from './_backup-status';
   import Loader from '$lib/components/transition/loader.svelte';

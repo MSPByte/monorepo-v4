@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { page } from '$app/state';
+  import { STALE } from '$lib/query';
   import { goto } from '$app/navigation';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { getLocalTimeZone, parseDate, today, type CalendarDate } from '@internationalized/date';
@@ -77,14 +78,14 @@
     queryKey: ['findings.neighbor', id, 'prev'],
     queryFn: () => trpc.findings.neighbor.query({ id, direction: 'prev' }),
     enabled: !!id && canNavigateQueue,
-    staleTime: 30_000,
+    staleTime: STALE.LIST,
   }));
 
   const nextQuery = createQuery(() => ({
     queryKey: ['findings.neighbor', id, 'next'],
     queryFn: () => trpc.findings.neighbor.query({ id, direction: 'next' }),
     enabled: !!id && canNavigateQueue,
-    staleTime: 30_000,
+    staleTime: STALE.LIST,
   }));
 
   function invalidateLists() {

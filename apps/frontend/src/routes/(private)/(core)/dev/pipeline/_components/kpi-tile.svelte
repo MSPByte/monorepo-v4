@@ -11,14 +11,14 @@
     label: string;
     value: string | number;
     detail?: string;
-    tone?: 'neutral' | 'warning' | 'destructive' | 'success';
+    tone?: 'neutral' | 'warning' | 'danger' | 'success';
     children?: Snippet;
   } = $props();
 
   const toneClass = $derived(
     tone === 'warning'
       ? 'text-warning'
-      : tone === 'destructive'
+      : tone === 'danger'
         ? 'text-destructive'
         : tone === 'success'
           ? 'text-success'
