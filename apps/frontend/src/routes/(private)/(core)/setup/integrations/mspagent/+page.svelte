@@ -1,10 +1,11 @@
 <script lang="ts">
   import { getContext } from 'svelte';
-  import { createQuery } from '@tanstack/svelte-query';
+  import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
   import { INTEGRATIONS } from '@mspbyte/shared';
   import type { createTrpcClient } from '$lib/trpc';
   import IntegrationHeader from '../_helpers/integration-header.svelte';
   import * as Sheet from '$lib/components/ui/sheet/index.js';
+  import * as Dialog from '$lib/components/ui/dialog/index.js';
   import * as Card from '$lib/components/ui/card/index.js';
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import * as Select from '$lib/components/ui/select/index.js';
@@ -20,6 +21,9 @@
     CircleX,
     CircleDot,
     ServerCog,
+    KeyRound,
+    Copy,
+    Check,
   } from '@lucide/svelte';
   import { enhance } from '$app/forms';
   import { toast } from 'svelte-sonner';
@@ -43,6 +47,7 @@
   type CheckResult = { status: 'ok' | 'missing' | 'mismatch'; currentValue: string | null };
 
   const trpc = getContext<ReturnType<typeof createTrpcClient>>('trpc');
+  const queryClient = useQueryClient();
   const integration = INTEGRATIONS['mspagent'];
 
   const integrationQuery = createQuery(() => ({
@@ -102,6 +107,50 @@
         })
     )
   );
+
+  const canManageTokens = $derived(authStore.isAllowed('Agents.Write'));
+
+  const tokenListQuery = createQuery(() => ({
+    queryKey: ['agents.enrollmentToken.list'],
+    queryFn: () => trpc.agents.enrollmentToken.list.query(),
+    enabled: canManageTokens,
+  }));
+
+  // Keyed by site_id for O(1) lookup in the site list.
+  const tokenBySite = $derived(
+    new Map((tokenListQuery.data ?? []).map((t) => [t.siteId, t]))
+  );
+
+  let tokenDialogSite = $state<{ id: string; name: string } | null>(null);
+  let newToken = $state<string | null>(null);
+  let copied = $state(false);
+  let generatingToken = $state(false);
+
+  const regenerateTokenMutation = createMutation(() => ({
+    mutationFn: (siteId: string) => trpc.agents.enrollmentToken.regenerate.mutate({ siteId }),
+  }));
+
+  async function handleGenerateToken(siteId: string) {
+    generatingToken = true;
+    newToken = null;
+    copied = false;
+    try {
+      const data = await regenerateTokenMutation.mutateAsync(siteId);
+      newToken = data.token;
+      queryClient.invalidateQueries({ queryKey: ['agents.enrollmentToken.list'] });
+    } catch (err) {
+      toast.error(toUserMessage(err, 'Failed to generate enrollment token'));
+    } finally {
+      generatingToken = false;
+    }
+  }
+
+  async function copyToken() {
+    if (!newToken) return;
+    await navigator.clipboard.writeText(newToken);
+    copied = true;
+    setTimeout(() => (copied = false), 2000);
+  }
 
   let siteSearch = $state('');
   let activeFilter = $state<'All' | 'Linked' | 'Unlinked' | 'Mismatched' | 'Missing'>('All');
@@ -344,6 +393,80 @@
   </Sheet.Root>
 {/if}
 
+<Dialog.Root
+  open={!!tokenDialogSite}
+  onOpenChange={(open) => {
+    if (!open) {
+      tokenDialogSite = null;
+      newToken = null;
+      copied = false;
+    }
+  }}
+>
+  <Dialog.Content class="max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Enrollment Token</Dialog.Title>
+      <Dialog.Description>
+        {#if tokenDialogSite}
+          {tokenDialogSite.name}
+        {/if}
+      </Dialog.Description>
+    </Dialog.Header>
+
+    <div class="flex flex-col gap-4 py-2">
+      {#if newToken}
+        <div class="flex flex-col gap-2">
+          <p class="text-sm text-muted-foreground">
+            Copy this token and store it in your RMM as a site variable. It will not be shown again.
+          </p>
+          <div class="flex gap-2 items-center">
+            <code class="flex-1 px-3 py-2 bg-muted rounded text-sm font-mono break-all select-all">
+              {newToken}
+            </code>
+            <button
+              onclick={copyToken}
+              class="shrink-0 p-2 rounded border hover:bg-muted transition-colors"
+              title="Copy token"
+            >
+              {#if copied}
+                <Check class="size-4 text-emerald-500" />
+              {:else}
+                <Copy class="size-4" />
+              {/if}
+            </button>
+          </div>
+          <p class="text-xs text-muted-foreground">
+            Pass it to the installer via <code class="font-mono">/ENROLLMENT_TOKEN=[token]</code>
+          </p>
+        </div>
+      {:else}
+        <p class="text-sm text-muted-foreground">
+          {#if tokenDialogSite && tokenBySite.has(tokenDialogSite.id)}
+            This site already has an enrollment token. Regenerating will invalidate the existing
+            token — update your RMM deployment after generating.
+          {:else}
+            Generate an enrollment token for this site. Devices use it to self-register on first
+            run.
+          {/if}
+        </p>
+        <Button
+          onclick={() => tokenDialogSite && handleGenerateToken(tokenDialogSite.id)}
+          disabled={generatingToken}
+          class="w-full"
+        >
+          {#if generatingToken}
+            Generating...
+          {:else if tokenDialogSite && tokenBySite.has(tokenDialogSite.id)}
+            Regenerate Token
+          {:else}
+            Generate Token
+          {/if}
+        </Button>
+      {/if}
+    </div>
+  </Dialog.Content>
+</Dialog.Root>
+
 <div class="flex flex-col size-full p-4 gap-4 overflow-hidden">
   <div class="flex items-start justify-between shrink-0">
     <IntegrationHeader {integration} active={isConfigured} loading={integrationQuery.isLoading} />
@@ -519,8 +642,23 @@
                   </div>
                 </div>
 
-                {#if isLinked && dattoLink}
-                  <div class="flex items-center gap-2 justify-end">
+                <div class="flex items-center gap-2 justify-end">
+                  {#if canManageTokens}
+                    {@const hasToken = tokenBySite.has(site.id)}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      class="gap-1.5 {hasToken ? 'text-emerald-600' : 'text-muted-foreground'}"
+                      onclick={() => { tokenDialogSite = { id: site.id, name: site.name }; newToken = null; }}
+                      title={hasToken ? 'Token active — click to regenerate' : 'Generate enrollment token'}
+                    >
+                      <KeyRound class="size-3.5" />
+                      {hasToken ? 'Token' : 'Get Token'}
+                    </Button>
+                  {/if}
+
+                  {#if isLinked && dattoLink}
                     <form
                       method="POST"
                       action="?/checkVars"
@@ -556,8 +694,8 @@
                         </Button>
                       </form>
                     {/if}
-                  </div>
-                {/if}
+                  {/if}
+                </div>
               </div>
             {/each}
           </div>

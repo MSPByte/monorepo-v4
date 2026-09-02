@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "bin/agent-core",
+    "crates/agent-ipc",
+    "crates/agent-platform",
+]
+resolver = "2"

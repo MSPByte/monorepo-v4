@@ -8,10 +8,10 @@ import {
   integrations,
   integrationLinks
 } from '@mspbyte/drizzle';
-import { getTenantServiceDbByOrgId } from '@mspbyte/drizzle-catalog';
 import { Encryption } from '@mspbyte/encryption';
 import { HaloPSAConnector } from '@mspbyte/connectors';
 import type { HaloPSAAsset, HaloPSASite } from '@mspbyte/connectors';
+import { getTenantDb } from '../db.js';
 import { logger } from '../logger.js';
 import { env } from '../env.js';
 import type { FastifyInstance } from 'fastify';
@@ -85,12 +85,12 @@ export function ticketRoute(fastify: FastifyInstance) {
       });
     }
 
-    let db: Awaited<ReturnType<typeof getTenantServiceDbByOrgId>>['db'];
+    let db: Awaited<ReturnType<typeof getTenantDb>>;
     try {
-      ({ db } = await getTenantServiceDbByOrgId(env.ORG_ID, env.ENCRYPTION_KEY));
+      db = await getTenantDb();
     } catch {
-      return reply.status(404).send({
-        error: { module: 'v1.0/ticket/create', context: 'POST', message: 'Org not found' }
+      return reply.status(503).send({
+        error: { module: 'v1.0/ticket/create', context: 'POST', message: 'Database unavailable' }
       });
     }
 

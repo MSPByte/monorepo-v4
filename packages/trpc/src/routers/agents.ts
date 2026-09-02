@@ -1,7 +1,8 @@
+import crypto from 'node:crypto';
 import { z } from 'zod';
-import { and, count, desc, eq, inArray, max, sql } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNull, max, sql } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
-import { agents, agentLogs, agentTickets, customerLogs, sites } from '@mspbyte/drizzle';
+import { agents, agentLogs, agentTickets, agentSiteTokens, customerLogs, sites } from '@mspbyte/drizzle';
 import { ActionLabels } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 import { loadGroupTargets } from './group-targets.js';
@@ -12,50 +13,54 @@ function scopedSiteFilter(scope: 'all' | readonly string[]) {
   return inArray(agents.siteId, [...scope]);
 }
 
+// Active (non-deleted) devices only.
+const notDeleted = isNull(agents.deletedAt);
+
 export const agentsRouter = t.router({
   siteOverview: authProcedure
     .input(z.object({ groupId: z.string().uuid().optional() }).optional())
     .query(async ({ ctx, input }) => {
-    if (!ctx.can('Assets.Read')) {
-      throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Read permission required' });
-    }
-    const scope = ctx.scopeFor('Assets.Read');
-    if (scope !== 'all' && scope.length === 0) return [];
-    const groupTargets = input?.groupId ? await loadGroupTargets(ctx.db, input.groupId) : null;
-    if (groupTargets && groupTargets.siteIds.length === 0) return [];
+      if (!ctx.can('Agents.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Agents.Read permission required' });
+      }
+      const scope = ctx.scopeFor('Agents.Read');
+      if (scope !== 'all' && scope.length === 0) return [];
+      const groupTargets = input?.groupId ? await loadGroupTargets(ctx.db, input.groupId) : null;
+      if (groupTargets && groupTargets.siteIds.length === 0) return [];
 
-    const conditions = [
-      scope === 'all' ? undefined : inArray(agents.siteId, [...scope]),
-      groupTargets ? inArray(agents.siteId, groupTargets.siteIds) : undefined,
-    ].filter((c): c is NonNullable<typeof c> => c !== undefined);
+      const conditions = [
+        notDeleted,
+        scope === 'all' ? undefined : inArray(agents.siteId, [...scope]),
+        groupTargets ? inArray(agents.siteId, groupTargets.siteIds) : undefined,
+      ].filter((c): c is NonNullable<typeof c> => c !== undefined);
 
-    const rows = await ctx.db
-      .select({
-        siteId: agents.siteId,
-        siteName: sites.name,
-        agentCount: count(agents.id),
-        lastCheckIn: max(agents.updatedAt),
-      })
-      .from(agents)
-      .leftJoin(sites, eq(sites.id, agents.siteId))
-      .where(conditions.length ? and(...conditions) : undefined)
-      .groupBy(agents.siteId, sites.name);
+      const rows = await ctx.db
+        .select({
+          siteId: agents.siteId,
+          siteName: sites.name,
+          agentCount: count(agents.id),
+          lastCheckIn: max(agents.lastCheckinAt),
+        })
+        .from(agents)
+        .leftJoin(sites, eq(sites.id, agents.siteId))
+        .where(and(...conditions))
+        .groupBy(agents.siteId, sites.name);
 
-    return rows.map((row) => ({
-      siteId: row.siteId,
-      siteName: row.siteName ?? 'Unknown Site',
-      agentCount: Number(row.agentCount ?? 0),
-      lastCheckIn: row.lastCheckIn,
-    }));
+      return rows.map((row) => ({
+        siteId: row.siteId,
+        siteName: row.siteName ?? 'Unknown Site',
+        agentCount: Number(row.agentCount ?? 0),
+        lastCheckIn: row.lastCheckIn,
+      }));
     }),
 
   list: authProcedure
     .input(z.object({ siteId: z.string().uuid().optional(), groupId: z.string().uuid().optional() }).optional())
     .query(async ({ ctx, input }) => {
-      if (!ctx.can('Assets.Read')) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Read permission required' });
+      if (!ctx.can('Agents.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Agents.Read permission required' });
       }
-      const scope = ctx.scopeFor('Assets.Read');
+      const scope = ctx.scopeFor('Agents.Read');
       const siteId = input?.siteId;
       const groupId = input?.groupId;
       const groupTargets = groupId ? await loadGroupTargets(ctx.db, groupId) : null;
@@ -71,12 +76,13 @@ export const agentsRouter = t.router({
       }
 
       const conditions = [
+        notDeleted,
         siteId ? eq(agents.siteId, siteId) : undefined,
         !siteId && groupTargets ? inArray(agents.siteId, groupTargets.siteIds) : undefined,
         !siteId ? scopedSiteFilter(scope) : undefined,
       ].filter((c): c is NonNullable<typeof c> => c !== undefined);
 
-      const rows = await ctx.db
+      return ctx.db
         .select({
           id: agents.id,
           siteId: agents.siteId,
@@ -84,29 +90,29 @@ export const agentsRouter = t.router({
           hostname: agents.hostname,
           platform: agents.platform,
           version: agents.version,
+          machineId: agents.machineId,
+          serial: agents.serial,
+          username: agents.username,
           ipAddress: agents.ipAddress,
           extAddress: agents.extAddress,
           macAddress: agents.macAddress,
+          lastCheckinAt: agents.lastCheckinAt,
           registeredAt: agents.registeredAt,
           createdAt: agents.createdAt,
-          updatedAt: agents.updatedAt,
-          deletedAt: agents.deletedAt,
         })
         .from(agents)
         .leftJoin(sites, eq(sites.id, agents.siteId))
-        .where(conditions.length ? and(...conditions) : undefined)
+        .where(and(...conditions))
         .orderBy(agents.hostname);
-
-      return rows;
     }),
 
   listTickets: authProcedure
     .input(z.object({ siteId: z.string().uuid().optional(), groupId: z.string().uuid().optional() }).optional())
     .query(async ({ ctx, input }) => {
-      if (!ctx.can('Assets.Read')) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Read permission required' });
+      if (!ctx.can('Agents.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Agents.Read permission required' });
       }
-      const scope = ctx.scopeFor('Assets.Read');
+      const scope = ctx.scopeFor('Agents.Read');
       const siteId = input?.siteId;
       const groupId = input?.groupId;
       const groupTargets = groupId ? await loadGroupTargets(ctx.db, groupId) : null;
@@ -127,7 +133,7 @@ export const agentsRouter = t.router({
         !siteId && scope !== 'all' ? inArray(agentTickets.siteId, [...scope]) : undefined,
       ].filter((c): c is NonNullable<typeof c> => c !== undefined);
 
-      const rows = await ctx.db
+      return ctx.db
         .select({
           id: agentTickets.id,
           agentId: agentTickets.agentId,
@@ -144,26 +150,22 @@ export const agentsRouter = t.router({
         .leftJoin(sites, eq(sites.id, agentTickets.siteId))
         .where(conditions.length ? and(...conditions) : undefined)
         .orderBy(agentTickets.createdAt);
-
-      return rows;
     }),
 
   listLogs: authProcedure
     .input(
-      z
-        .object({
-          agentId: z.string().uuid().optional(),
-          siteId: z.string().uuid().optional(),
-          groupId: z.string().uuid().optional(),
-          limit: z.number().int().min(1).max(5000).default(2000),
-        })
-        .optional()
+      z.object({
+        agentId: z.string().uuid().optional(),
+        siteId: z.string().uuid().optional(),
+        groupId: z.string().uuid().optional(),
+        limit: z.number().int().min(1).max(5000).default(2000),
+      }).optional()
     )
     .query(async ({ ctx, input }) => {
-      if (!ctx.can('Assets.Read')) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Read permission required' });
+      if (!ctx.can('Agents.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Agents.Read permission required' });
       }
-      const scope = ctx.scopeFor('Assets.Read');
+      const scope = ctx.scopeFor('Agents.Read');
       const agentId = input?.agentId;
       const siteId = input?.siteId;
       const groupId = input?.groupId;
@@ -174,7 +176,7 @@ export const agentsRouter = t.router({
         const [agent] = await ctx.db
           .select({ siteId: agents.siteId })
           .from(agents)
-          .where(eq(agents.id, agentId))
+          .where(and(eq(agents.id, agentId), notDeleted))
           .limit(1);
         if (!agent) throw new TRPCError({ code: 'NOT_FOUND' });
         if (scope !== 'all' && (!agent.siteId || !scope.includes(agent.siteId))) {
@@ -194,12 +196,10 @@ export const agentsRouter = t.router({
         agentId ? eq(agentLogs.agentId, agentId) : undefined,
         !agentId && siteId ? eq(agents.siteId, siteId) : undefined,
         !agentId && !siteId && groupTargets ? inArray(agents.siteId, groupTargets.siteIds) : undefined,
-        !agentId && !siteId && scope !== 'all'
-          ? inArray(agents.siteId, [...scope])
-          : undefined,
+        !agentId && !siteId && scope !== 'all' ? inArray(agents.siteId, [...scope]) : undefined,
       ].filter((c): c is NonNullable<typeof c> => c !== undefined);
 
-      const rows = await ctx.db
+      return ctx.db
         .select({
           id: agentLogs.id,
           agentId: agentLogs.agentId,
@@ -219,32 +219,28 @@ export const agentsRouter = t.router({
         .where(conditions.length ? and(...conditions) : undefined)
         .orderBy(desc(agentLogs.createdAt))
         .limit(limit);
-
-      return rows;
     }),
 
+  // Soft-delete: sets deleted_at rather than hard-deleting the row.
+  // The agent can no longer check in once revoked. Re-enrollment creates a fresh row.
   delete: authProcedure
     .input(z.object({ ids: z.array(z.string().uuid()).min(1).max(500) }))
     .mutation(async ({ ctx, input }) => {
-      if (!ctx.can('Assets.Delete')) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Assets.Delete permission required' });
+      if (!ctx.can('Agents.Delete')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Agents.Delete permission required' });
       }
 
       const uniqueIds = [...new Set(input.ids)];
       const rows = await ctx.db
-        .select({
-          id: agents.id,
-          siteId: agents.siteId,
-          hostname: agents.hostname,
-        })
+        .select({ id: agents.id, siteId: agents.siteId, hostname: agents.hostname })
         .from(agents)
-        .where(inArray(agents.id, uniqueIds));
+        .where(and(inArray(agents.id, uniqueIds), notDeleted));
 
       if (rows.length === 0) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'No agents found' });
       }
 
-      const scope = ctx.scopeFor('Assets.Delete');
+      const scope = ctx.scopeFor('Agents.Delete');
       const allowed = rows.filter(
         (row) => scope === 'all' || (row.siteId && scope.includes(row.siteId))
       );
@@ -253,7 +249,11 @@ export const agentsRouter = t.router({
       }
 
       const allowedIds = allowed.map((row) => row.id);
-      await ctx.db.delete(agents).where(inArray(agents.id, allowedIds));
+      const now = new Date().toISOString();
+      await ctx.db
+        .update(agents)
+        .set({ deletedAt: now })
+        .where(inArray(agents.id, allowedIds));
 
       const auditRows = allowed.map((row) => ({
         siteId: row.siteId,
@@ -261,7 +261,7 @@ export const agentsRouter = t.router({
         actorId: ctx.user.id,
         actorLabel: ctx.user.name || ctx.user.email,
         action: 'delete' as const,
-        actionLabel: ActionLabels.MspAgentDelete,
+        actionLabel: ActionLabels.MspAgentRevoke,
         targetType: 'mspagent_agent',
         targetId: row.id,
         targetLabel: row.hostname,
@@ -274,9 +274,123 @@ export const agentsRouter = t.router({
         await ctx.db.insert(customerLogs).values(auditRows);
       }
 
-      return {
-        deleted: allowed.length,
-        skipped: rows.length - allowed.length,
-      };
+      return { revoked: allowed.length, skipped: rows.length - allowed.length };
     }),
+
+  enrollmentToken: t.router({
+    // Returns token metadata (not the hash) for all sites that have tokens,
+    // scoped to the caller's Agents.Write permission.
+    list: authProcedure.query(async ({ ctx }) => {
+      if (!ctx.can('Agents.Write')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Agents.Write permission required' });
+      }
+      const scope = ctx.scopeFor('Agents.Write');
+
+      const rows = await ctx.db
+        .select({
+          siteId: agentSiteTokens.siteId,
+          label: agentSiteTokens.label,
+          createdBy: agentSiteTokens.createdBy,
+          createdAt: agentSiteTokens.createdAt,
+          revokedAt: agentSiteTokens.revokedAt,
+        })
+        .from(agentSiteTokens)
+        .where(
+          scope === 'all'
+            ? isNull(agentSiteTokens.revokedAt)
+            : and(isNull(agentSiteTokens.revokedAt), inArray(agentSiteTokens.siteId, [...scope]))
+        );
+
+      return rows;
+    }),
+
+    get: authProcedure
+      .input(z.object({ siteId: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        if (!ctx.can('Agents.Write')) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Agents.Write permission required' });
+        }
+        const scope = ctx.scopeFor('Agents.Write');
+        if (scope !== 'all' && !scope.includes(input.siteId)) {
+          throw new TRPCError({ code: 'NOT_FOUND' });
+        }
+
+        const [token] = await ctx.db
+          .select({
+            id: agentSiteTokens.id,
+            label: agentSiteTokens.label,
+            createdBy: agentSiteTokens.createdBy,
+            createdAt: agentSiteTokens.createdAt,
+            revokedAt: agentSiteTokens.revokedAt,
+          })
+          .from(agentSiteTokens)
+          .where(eq(agentSiteTokens.siteId, input.siteId))
+          .limit(1);
+
+        // Returns metadata only — the plaintext token is never stored or returned here.
+        return token ?? null;
+      }),
+
+    regenerate: authProcedure
+      .input(z.object({ siteId: z.string().uuid() }))
+      .mutation(async ({ ctx, input }) => {
+        if (!ctx.can('Agents.Write')) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Agents.Write permission required' });
+        }
+        const scope = ctx.scopeFor('Agents.Write');
+        if (scope !== 'all' && !scope.includes(input.siteId)) {
+          throw new TRPCError({ code: 'NOT_FOUND' });
+        }
+
+        // Verify the site exists in scope
+        const [site] = await ctx.db
+          .select({ id: sites.id })
+          .from(sites)
+          .where(eq(sites.id, input.siteId))
+          .limit(1);
+        if (!site) throw new TRPCError({ code: 'NOT_FOUND' });
+
+        // Generate a new random token — 32 bytes = 64 hex chars
+        const plaintext = crypto.randomBytes(32).toString('hex');
+        const tokenHash = crypto.createHash('sha256').update(plaintext).digest('hex');
+
+        // Upsert: revoke old token and insert new one in a single replace
+        await ctx.db
+          .insert(agentSiteTokens)
+          .values({
+            siteId: input.siteId,
+            tokenHash,
+            label: `Generated by ${ctx.user.name || ctx.user.email}`,
+            createdBy: ctx.user.id,
+          })
+          .onConflictDoUpdate({
+            target: agentSiteTokens.siteId,
+            set: {
+              tokenHash,
+              label: `Generated by ${ctx.user.name || ctx.user.email}`,
+              createdBy: ctx.user.id,
+              createdAt: new Date().toISOString(),
+              revokedAt: null,
+            },
+          });
+
+        await ctx.db.insert(customerLogs).values({
+          siteId: input.siteId,
+          actorType: 'user',
+          actorId: ctx.user.id,
+          actorLabel: ctx.user.name || ctx.user.email,
+          action: 'create',
+          actionLabel: ActionLabels.MspAgentEnrollmentTokenRegenerate,
+          targetType: 'mspagent_enrollment_token',
+          targetId: input.siteId,
+          targetLabel: `Site enrollment token`,
+          result: 'success',
+          ipAddress: ctx.ipAddress,
+          userAgent: ctx.userAgent,
+        });
+
+        // Plaintext returned once — the caller must display and copy it.
+        return { token: plaintext };
+      }),
+  }),
 });

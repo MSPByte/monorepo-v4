@@ -4,7 +4,6 @@ config();
 
 const schema = z.object({
   PORT: z.coerce.number().default(3001),
-  AGENT_API_SECRET: z.string().min(1),
   CATALOG_DATABASE_URL: z.url(),
   ORG_ID: z.string().min(1),
   ENCRYPTION_KEY: z.string().length(64),

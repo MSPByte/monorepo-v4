@@ -13,9 +13,14 @@ export const agents = agentSchema.table(
     hostname: text('hostname').notNull(),
     platform: text('platform').notNull(),
     version: text('version').notNull(),
+    machineId: text('machine_id'),
+    serial: text('serial'),
+    username: text('username'),
+    sid: text('sid'),
     ipAddress: text('ip_address'),
     extAddress: text('ext_address'),
     macAddress: text('mac_address'),
+    lastCheckinAt: timestamp('last_checkin_at', { withTimezone: true, mode: 'string' }),
     registeredAt: timestamp('registered_at', { withTimezone: true, mode: 'string' })
       .notNull()
       .defaultNow(),
@@ -70,6 +75,28 @@ export const agentTickets = agentSchema.table(
   () => [crudPolicy({ role: authenticatedRole, read: true, modify: true })]
 );
 
+// Per-site enrollment token. Long-standing; MSP regenerates when needed.
+// The plaintext token is never stored — only a SHA-256 hex digest.
+export const agentSiteTokens = agentSchema.table(
+  'site_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .unique()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    label: text('label'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'string' })
+  },
+  () => [crudPolicy({ role: authenticatedRole, read: true, modify: true })]
+);
+
 export type Agent = typeof agents.$inferSelect;
 export type AgentLog = typeof agentLogs.$inferSelect;
 export type AgentTicket = typeof agentTickets.$inferSelect;
+export type AgentSiteToken = typeof agentSiteTokens.$inferSelect;

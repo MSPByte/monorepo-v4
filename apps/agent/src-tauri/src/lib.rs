@@ -1,13 +1,11 @@
 mod device_manager;
-mod device_registration;
 mod heartbeat;
+mod ipc_client;
 mod logger;
 
 use base64::engine::general_purpose;
 use base64::Engine;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 use tauri::{
     AppHandle, Emitter, EventTarget, Manager, WebviewUrl, WebviewWindowBuilder,
     tray::TrayIconBuilder,
@@ -15,9 +13,9 @@ use tauri::{
 };
 use tauri_plugin_screenshots::{get_monitor_screenshot, get_screenshotable_monitors};
 
-use device_manager::{get_settings, is_device_registered, get_rmm_device_id};
-use device_registration::register_device_with_server;
-use heartbeat::{start_heartbeat_task, gather_system_info, HeartbeatRequest};
+use device_manager::{get_settings, get_rmm_device_id};
+use heartbeat::gather_system_info;
+use heartbeat::HeartbeatRequest;
 use logger::log_to_file;
 
 #[cfg(target_os = "windows")]
@@ -79,37 +77,22 @@ pub fn run() {
             // Store the flags in app state for cleanup
             // app.manage(heartbeat_running);
 
-            // Check and register device on first launch
+            // Log agent-core reachability; enrollment is handled by agent-core.
             tauri::async_runtime::spawn(async move {
-                match register_device_with_server().await {
-                    Ok(response) => {
+                match ipc_client::get_status().await {
+                    Ok(status) => {
                         log_to_file(
                             String::from("INFO"),
-                            String::from("Device registered successfully"),
-                        );
-                        log_to_file(
-                            String::from("INFO"),
-                            format!("Device ID: {}", response.data.device_id),
-                        );
-                        log_to_file(
-                            String::from("INFO"),
-                            format!("GUID: {}", response.data.guid),
+                            format!("agent-core reachable; enrolled={}", status.enrolled),
                         );
                     }
                     Err(e) => {
                         log_to_file(
-                            String::from("ERROR"),
-                            format!("Failed to regiter device: {}", e),
-                        );
-                        log_to_file(
-                            String::from("ERROR"),
-                            String::from("Will retry on next launch"),
+                            String::from("WARN"),
+                            format!("agent-core not reachable: {}. Is the service running?", e),
                         );
                     }
                 }
-
-                // Start background tasks after registration check
-                // start_heartbeat_task(heartbeat_flag.clone());
             });
 
             // Conditionally create system tray based on settings
@@ -163,7 +146,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_settings_info,
-            check_registration_status,
+            get_agent_status,
             hide_window,
             show_window,
             take_screenshot,
@@ -398,11 +381,9 @@ async fn get_settings_info() -> Result<device_manager::Settings, String> {
 }
 
 #[tauri::command]
-async fn check_registration_status() -> Result<bool, String> {
-    log_to_file(String::from("INFO"), String::from("check_registration_status command invoked"));
-    let is_registered = is_device_registered().await;
-    log_to_file(String::from("INFO"), format!("Device registration status: {}", is_registered));
-    Ok(is_registered)
+async fn get_agent_status() -> Result<agent_ipc::StatusPayload, String> {
+    log_to_file(String::from("INFO"), String::from("get_agent_status command invoked"));
+    ipc_client::get_status().await
 }
 
 #[tauri::command]

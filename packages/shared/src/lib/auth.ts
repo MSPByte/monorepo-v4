@@ -31,6 +31,7 @@ export const PERMISSION_TREE = {
   Billing: {},
   Findings: {},
   Reports: {},
+  Agents: { $actions: ['Read', 'Write', 'Delete'] as const },
   // Configuration
   Users: {},
   Roles: {},
@@ -301,11 +302,13 @@ export const SYSTEM_ROLES: readonly SystemRole[] = [
       'People.Delete',
       'Wiki.Delete',
       'Vendors.Delete',
+      'Packages.Delete',
       'Policies.Delete',
       'Frameworks.Delete',
       'Billing.Delete',
       'Findings.Delete',
-      'Reports.Delete'
+      'Reports.Delete',
+      'Agents.Delete'
     ],
     isSystem: true
   },
@@ -323,7 +326,8 @@ export const SYSTEM_ROLES: readonly SystemRole[] = [
       'Frameworks.Read',
       'Billing.Read',
       'Findings.Read',
-      'Reports.Read'
+      'Reports.Read',
+      'Agents.Read'
     ],
     isSystem: true
   },
@@ -341,7 +345,8 @@ export const SYSTEM_ROLES: readonly SystemRole[] = [
       'Frameworks.Read',
       'Billing.Read',
       'Findings.Read',
-      'Reports.Read'
+      'Reports.Read',
+      'Agents.Read'
     ],
     isSystem: true
   }

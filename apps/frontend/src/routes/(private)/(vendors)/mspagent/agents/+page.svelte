@@ -31,7 +31,7 @@
 
   const STALE_MS = 60 * 86_400_000;
 
-  const canDeleteAssets = $derived(authStore.isAllowed('Assets.Delete'));
+  const canDeleteAgents = $derived(authStore.isAllowed('Agents.Delete'));
 
   const queryKey = $derived(['agents.list', scopeStore.currentSite ?? 'all', scopeStore.currentGroup ?? 'all'] as const);
   const scopeKey = $derived(`${scopeStore.currentSite ?? 'all'}:${scopeStore.currentGroup ?? 'all'}`);
@@ -78,7 +78,7 @@
         defaultOperator: 'lt',
       },
     }),
-    relativeDateColumn<AgentRow>('updatedAt', 'Last Seen', {
+    relativeDateColumn<AgentRow>('lastCheckinAt', 'Last Seen', {
       width: '140px',
       filter: {
         type: 'date',
@@ -99,38 +99,38 @@
           value: new Date(Date.now() - STALE_MS).toISOString(),
         },
       ],
-      sort: { field: 'updatedAt', dir: 'asc' },
+      sort: { field: 'lastCheckinAt', dir: 'asc' },
     },
   ];
 
   const rowActions: RowAction<AgentRow>[] = $derived(
-    canDeleteAssets
+    canDeleteAgents
       ? [
           {
-            label: 'Delete',
+            label: 'Revoke',
             icon: Trash2Icon,
             variant: 'destructive',
             onclick: async (rows, fetchData, { setProgress }) => {
               const ids = rows.map((row) => row.id).filter(Boolean);
               if (ids.length === 0) return;
 
-              setProgress(`Deleting ${ids.length} agent${ids.length === 1 ? '' : 's'}...`);
+              setProgress(`Revoking ${ids.length} device${ids.length === 1 ? '' : 's'}...`);
               const result = await trpc.agents.delete.mutate({ ids });
               setProgress('Refreshing agents...');
               await queryClient.invalidateQueries({ queryKey: ['agents.list'] });
               await queryClient.invalidateQueries({ queryKey: ['agents.siteOverview'] });
               await fetchData();
 
-              if (result.skipped > 0 && result.deleted > 0) {
+              if (result.skipped > 0 && result.revoked > 0) {
                 toast.warning(
-                  `Deleted ${result.deleted} agent${result.deleted === 1 ? '' : 's'}, skipped ${result.skipped} out of scope`
+                  `Revoked ${result.revoked} device${result.revoked === 1 ? '' : 's'}, skipped ${result.skipped} out of scope`
                 );
-              } else if (result.deleted > 0) {
+              } else if (result.revoked > 0) {
                 toast.success(
-                  `Deleted ${result.deleted} agent${result.deleted === 1 ? '' : 's'}`
+                  `Revoked ${result.revoked} device${result.revoked === 1 ? '' : 's'}`
                 );
               } else {
-                toast.error('Failed to delete agents');
+                toast.error('Failed to revoke devices');
               }
             },
           } satisfies RowAction<AgentRow>,
@@ -255,7 +255,7 @@
       {columns}
       {views}
       {rowActions}
-      enableRowSelection={canDeleteAssets}
+      enableRowSelection={canDeleteAgents}
       defaultSort={{ field: 'hostname', dir: 'asc' }}
       refreshKey={agentsQuery.dataUpdatedAt}
       onrowclick={(row) => (drawerAgent = row)}
@@ -319,11 +319,13 @@
         {#if activeTab === 'Details'}
           <div class="flex flex-col gap-2">
             {#each [
+              { label: 'Username', value: ag.username },
               { label: 'IP Address', value: ag.ipAddress },
               { label: 'External IP', value: ag.extAddress },
               { label: 'MAC Address', value: ag.macAddress },
+              { label: 'Serial', value: ag.serial },
               { label: 'Registered', value: absoluteDate(ag.registeredAt) },
-              { label: 'Last Seen', value: relativeTime(ag.updatedAt) },
+              { label: 'Last Check-in', value: relativeTime(ag.lastCheckinAt) },
             ] as item}
               {#if item.value && item.value !== '—'}
                 <div class="rounded border bg-card px-3 py-2">

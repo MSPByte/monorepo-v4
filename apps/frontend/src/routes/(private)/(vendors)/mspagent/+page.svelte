@@ -74,7 +74,7 @@
   const agentStats = $derived.by(() => {
     const rows = agentsQuery.data ?? [];
     const stale = rows.filter(
-      (a) => !a.updatedAt || NOW - new Date(a.updatedAt).getTime() > 60 * 86_400_000
+      (a) => !a.lastCheckinAt || NOW - new Date(a.lastCheckinAt).getTime() > 60 * 86_400_000
     ).length;
     return { total: rows.length, stale };
   });

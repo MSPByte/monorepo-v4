@@ -10,6 +10,8 @@ import { registerRoute } from './routes/register.js';
 import { ticketRoute } from './routes/ticket.js';
 import { debugRoutes } from './routes/debug.js';
 import { downloadsRoutes } from './routes/downloads.js';
+import { enrollRoute } from './routes/enroll.js';
+import { checkinRoute } from './routes/checkin.js';
 
 const fastify = Fastify({ logger: false });
 
@@ -32,30 +34,17 @@ await fastify.register(fastifyStatic, {
   serve: false,
 });
 
-// Bearer token auth hook for agent endpoints
-fastify.addHook('onRequest', async (req, reply) => {
-  const path = req.url;
-
-  // Debug, health, and download routes don't require auth
-  if (path.startsWith('/debug')) return;
-  if (path.startsWith('/downloads')) return;
-  if (path === '/health') return;
-
-  const authHeader = req.headers['authorization'] ?? '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-
-  // TODO: Add agent authentication
-  // if (!token || token !== env.AGENT_API_SECRET) {
-  //   return reply.status(401).send({ error: 'Unauthorized' });
-  // }
-});
-
 fastify.get('/health', async () => ({ status: 'ok' }));
 
+// v1.0 routes — kept for backward compatibility with existing enrolled agents
 registerRoute(fastify);
 ticketRoute(fastify);
 debugRoutes(fastify);
 downloadsRoutes(fastify);
+
+// v2.0 routes — token-based enrollment and authenticated checkin
+enrollRoute(fastify);
+checkinRoute(fastify);
 
 await fastify.listen({ port: env.PORT, host: '0.0.0.0' });
 logger.info('Agents server started', { port: env.PORT });

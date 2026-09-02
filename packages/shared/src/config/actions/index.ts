@@ -76,6 +76,8 @@ export enum ActionLabels {
   WikiOverrideUpdate = 'wiki.override.update',
   WikiOverrideDelete = 'wiki.override.delete',
   MspAgentDelete = 'mspagent.agent.delete',
+  MspAgentRevoke = 'mspagent.agent.revoke',
+  MspAgentEnrollmentTokenRegenerate = 'mspagent.enrollment_token.regenerate',
   M365IdentityRevokeSessions = 'm365.identity.revoke_sessions',
   M365IdentityDisable = 'm365.identity.disable',
   M365IdentityEnable = 'm365.identity.enable',
@@ -424,6 +426,14 @@ export const ActionResources = {
   [ActionLabels.MspAgentDelete]: {
     label: ActionLabels.MspAgentDelete,
     name: 'MSPAgent delete'
+  },
+  [ActionLabels.MspAgentRevoke]: {
+    label: ActionLabels.MspAgentRevoke,
+    name: 'MSPAgent device revoke'
+  },
+  [ActionLabels.MspAgentEnrollmentTokenRegenerate]: {
+    label: ActionLabels.MspAgentEnrollmentTokenRegenerate,
+    name: 'MSPAgent enrollment token regenerate'
   },
   [ActionLabels.M365IdentityRevokeSessions]: {
     label: ActionLabels.M365IdentityRevokeSessions,

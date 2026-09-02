@@ -1,9 +1,8 @@
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { agents, sites } from '@mspbyte/drizzle';
-import { getTenantServiceDbByOrgId } from '@mspbyte/drizzle-catalog';
+import { getTenantDb } from '../db.js';
 import { logger } from '../logger.js';
-import { env } from '../env.js';
 import type { FastifyInstance } from 'fastify';
 
 const BodySchema = z.object({
@@ -29,13 +28,13 @@ export function registerRoute(fastify: FastifyInstance) {
     const { site_id, hostname, version, platform, device_id, mac, ip_address, ext_address } =
       body.data;
 
-    let db: Awaited<ReturnType<typeof getTenantServiceDbByOrgId>>['db'];
+    let db: Awaited<ReturnType<typeof getTenantDb>>;
     try {
-      ({ db } = await getTenantServiceDbByOrgId(env.ORG_ID, env.ENCRYPTION_KEY));
+      db = await getTenantDb();
     } catch {
       return reply
-        .status(404)
-        .send({ error: { module: 'v1.0/register', context: 'POST', message: 'Org not found' } });
+        .status(503)
+        .send({ error: { module: 'v1.0/register', context: 'POST', message: 'Database unavailable' } });
     }
 
     // Verify site exists in this org's MSP DB
