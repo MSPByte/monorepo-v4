@@ -16,6 +16,7 @@ import { vendorRouter } from './routers/vendor.js';
 import { packagesRouter } from './routers/packages.js';
 import { packageRunsRouter } from './routers/package-runs.js';
 import { agentsRouter } from './routers/agents.js';
+import { formsRouter } from './routers/forms.js';
 import { pipelineRouter } from './routers/pipeline.js';
 import { wikiRouter } from './routers/wiki.js';
 import { auditRouter } from './routers/audit.js';
@@ -44,6 +45,7 @@ export const appRouter = t.router({
   packages: packagesRouter,
   packageRuns: packageRunsRouter,
   agents: agentsRouter,
+  forms: formsRouter,
   pipeline: pipelineRouter,
   wiki: wikiRouter,
   audit: auditRouter,

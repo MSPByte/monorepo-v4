@@ -1,0 +1,23 @@
+[Unit]
+Description=MSPByte Agent Core
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/agent-core
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mspagent-core
+
+# Restrict capabilities to the minimum needed.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/mspagent
+ProtectHome=read-only
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

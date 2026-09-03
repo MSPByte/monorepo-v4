@@ -1,8 +1,9 @@
 import crypto from 'node:crypto';
+import type { BundleData } from '../types/bundle.js';
 import { z } from 'zod';
 import { and, count, desc, eq, inArray, isNull, max, sql } from 'drizzle-orm';
 import { TRPCError } from '@trpc/server';
-import { agents, agentLogs, agentTickets, agentSiteTokens, customerLogs, sites } from '@mspbyte/drizzle';
+import { agents, agentLogs, agentTickets, agentSiteTokens, agentBundles, customerLogs, sites } from '@mspbyte/drizzle';
 import { ActionLabels } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
 import { loadGroupTargets } from './group-targets.js';
@@ -276,6 +277,62 @@ export const agentsRouter = t.router({
 
       return { revoked: allowed.length, skipped: rows.length - allowed.length };
     }),
+
+  bundle: t.router({
+    get: authProcedure
+      .input(z.object({ siteId: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        if (!ctx.can('Agents.Read')) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Agents.Read permission required' });
+        }
+        const scope = ctx.scopeFor('Agents.Read');
+        if (scope !== 'all' && !scope.includes(input.siteId)) {
+          throw new TRPCError({ code: 'NOT_FOUND' });
+        }
+
+        const [row] = await ctx.db
+          .select({ data: agentBundles.data, etag: agentBundles.etag, updatedAt: agentBundles.updatedAt })
+          .from(agentBundles)
+          .where(eq(agentBundles.siteId, input.siteId))
+          .limit(1);
+
+        return row ?? null;
+      }),
+
+    upsert: authProcedure
+      .input(z.object({ siteId: z.string().uuid(), data: z.record(z.string(), z.unknown()) }))
+      .mutation(async ({ ctx, input }) => {
+        if (!ctx.can('Agents.Write')) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Agents.Write permission required' });
+        }
+        const scope = ctx.scopeFor('Agents.Write');
+        if (scope !== 'all' && !scope.includes(input.siteId)) {
+          throw new TRPCError({ code: 'FORBIDDEN' });
+        }
+
+        const etag = crypto
+          .createHash('sha256')
+          .update(JSON.stringify(input.data))
+          .digest('hex');
+        const now = new Date().toISOString();
+
+        await ctx.db
+          .insert(agentBundles)
+          .values({
+            siteId: input.siteId,
+            etag,
+            data: input.data,
+            updatedAt: now,
+            updatedBy: ctx.user.id,
+          })
+          .onConflictDoUpdate({
+            target: agentBundles.siteId,
+            set: { etag, data: input.data, updatedAt: now, updatedBy: ctx.user.id },
+          });
+
+        return { etag };
+      }),
+  }),
 
   enrollmentToken: t.router({
     // Returns token metadata (not the hash) for all sites that have tokens,

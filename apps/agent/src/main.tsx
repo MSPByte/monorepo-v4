@@ -1,12 +1,12 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import Support from './Support';
+import App from './App';
 import { Toaster } from '@/ui/components/sonner';
 import './styles/globals.css';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
-    <Support />
+    <App />
     <Toaster position="bottom-right" />
   </React.StrictMode>
 );

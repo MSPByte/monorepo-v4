@@ -1,8 +1,10 @@
+mod bundle;
 mod checkin;
 mod config;
 mod logger;
 mod server;
 mod state;
+mod update;
 
 use std::{sync::Arc, time::Duration};
 use tokio::sync::RwLock;
@@ -14,6 +16,10 @@ use logger::{info, logerr};
 async fn main() {
     let root = root_path();
 
+    // Apply any staged update before logging or doing anything else.
+    // If an update is applied, this call exec's the new binary and never returns.
+    update::apply_pending(&root);
+
     logger::init(&root);
 
     info!("agent-core {} starting", env!("CARGO_PKG_VERSION"));
@@ -23,7 +29,6 @@ async fn main() {
         std::process::exit(1);
     }
 
-    // Ensure root directory exists.
     if let Err(e) = std::fs::create_dir_all(&root) {
         logerr!("Cannot create root dir {}: {}", root.display(), e);
         std::process::exit(1);
@@ -44,8 +49,14 @@ async fn main() {
     let checkin_cfg = cfg.clone();
     let checkin_root = root.clone();
     tokio::spawn(async move {
-        checkin::run_checkin_loop(checkin_cfg, checkin_root, checkin_state, Duration::from_secs(300)).await;
+        checkin::run_checkin_loop(
+            checkin_cfg,
+            checkin_root,
+            checkin_state,
+            Duration::from_secs(300),
+        )
+        .await;
     });
 
-    server::run_ipc_server(socket_path(), shared_state).await;
+    server::run_ipc_server(socket_path(), root, cfg, shared_state).await;
 }

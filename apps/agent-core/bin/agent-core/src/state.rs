@@ -7,6 +7,7 @@ pub struct State {
     pub device_id: Option<String>,
     pub bundle_etag: Option<String>,
     pub bundle_fetched_at: Option<DateTime<Utc>>,
+    pub pending_update_version: Option<String>,
 }
 
 pub fn load(root: &Path) -> State {

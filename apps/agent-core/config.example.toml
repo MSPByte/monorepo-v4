@@ -1,0 +1,13 @@
+# MSPByte Agent Core — example configuration
+# Copy to:
+#   Windows:  C:\ProgramData\MSPAgent\config.toml
+#   macOS:    /Library/Application Support/MSPAgent/config.toml
+#   Linux:    /etc/mspagent/config.toml
+
+[agent]
+# Base URL of the MSPByte agents backend (no trailing slash).
+server_url = "https://agents.example.com"
+
+# Per-site enrollment token — obtain from the MSP portal under
+# Setup → Integrations → MSP Agent → Sites → Token.
+enrollment_token = "tok_live_REPLACE_ME"

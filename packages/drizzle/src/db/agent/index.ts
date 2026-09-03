@@ -1,4 +1,4 @@
-import { uuid, text, integer, jsonb, timestamp } from 'drizzle-orm/pg-core';
+import { uuid, text, integer, jsonb, timestamp, varchar } from 'drizzle-orm/pg-core';
 import { crudPolicy, authenticatedRole } from 'drizzle-orm/neon';
 import { agentSchema } from '../schemas.js';
 import { sites } from '../public/index.js';
@@ -96,7 +96,51 @@ export const agentSiteTokens = agentSchema.table(
   () => [crudPolicy({ role: authenticatedRole, read: true, modify: true })]
 );
 
+// Tenant-wide form definitions. `rows` is the display-safe field tree; `psaMappings`
+// maps field IDs to PSA ticket fields and is never sent to agents.
+export const agentForms = agentSchema.table(
+  'forms',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    description: text('description'),
+    rows: jsonb('rows').notNull().default([]),
+    psaMappings: jsonb('psa_mappings').notNull().default({}),
+    createdBy: uuid('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  },
+  () => [crudPolicy({ role: authenticatedRole, read: true, modify: true })]
+);
+
+// Per-site config bundle: branding, tray menu, form definitions.
+// The etag is a SHA-256 hex digest of the data JSON used for 304 responses.
+export const agentBundles = agentSchema.table(
+  'bundles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .unique()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    etag: varchar('etag', { length: 64 }).notNull(),
+    data: jsonb('data').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    updatedBy: uuid('updated_by'),
+  },
+  () => [crudPolicy({ role: authenticatedRole, read: true, modify: true })]
+);
+
 export type Agent = typeof agents.$inferSelect;
 export type AgentLog = typeof agentLogs.$inferSelect;
 export type AgentTicket = typeof agentTickets.$inferSelect;
 export type AgentSiteToken = typeof agentSiteTokens.$inferSelect;
+export type AgentBundle = typeof agentBundles.$inferSelect;
+export type AgentForm = typeof agentForms.$inferSelect;

@@ -12,6 +12,10 @@ import { debugRoutes } from './routes/debug.js';
 import { downloadsRoutes } from './routes/downloads.js';
 import { enrollRoute } from './routes/enroll.js';
 import { checkinRoute } from './routes/checkin.js';
+import { bundleRoute } from './routes/bundle.js';
+import { submitRoute } from './routes/submit.js';
+import { ticketsV2Route } from './routes/tickets_v2.js';
+import { updatesRoute } from './routes/updates.js';
 
 const fastify = Fastify({ logger: false });
 
@@ -45,6 +49,10 @@ downloadsRoutes(fastify);
 // v2.0 routes — token-based enrollment and authenticated checkin
 enrollRoute(fastify);
 checkinRoute(fastify);
+bundleRoute(fastify);
+submitRoute(fastify);
+ticketsV2Route(fastify);
+updatesRoute(fastify);
 
 await fastify.listen({ port: env.PORT, host: '0.0.0.0' });
 logger.info('Agents server started', { port: env.PORT });

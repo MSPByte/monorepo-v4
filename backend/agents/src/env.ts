@@ -7,7 +7,10 @@ const schema = z.object({
   CATALOG_DATABASE_URL: z.url(),
   ORG_ID: z.string().min(1),
   ENCRYPTION_KEY: z.string().length(64),
-  LOG_LEVEL: z.enum(['trace', 'info', 'debug', 'warn', 'silent', 'error', 'fatal']).default('info')
+  LOG_LEVEL: z.enum(['trace', 'info', 'debug', 'warn', 'silent', 'error', 'fatal']).default('info'),
+  // Self-update: the canonical version agents should run and the public base URL.
+  AGENT_CORE_VERSION: z.string().default('0.1.0'),
+  AGENT_SERVER_URL: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

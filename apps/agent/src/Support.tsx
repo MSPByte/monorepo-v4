@@ -1,28 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
-import z from 'zod';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { toast } from 'sonner';
-import {
-  chooseImageDialog,
-  readFileBase64,
-  takeScreenshot,
-  logToFile,
-  readFileBinary,
-} from '@/lib/file.ts';
+import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { fetch } from '@tauri-apps/plugin-http';
-import { getSettings, getRmmId } from '@/lib/agent.ts';
-import type { APIResponse } from '@/lib/logger';
-import { hideWindow, showWindow } from '@/lib/window.ts';
-import {
-  Form,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormControl,
-  FormMessage,
-} from '@/ui/components/form';
+import { toast } from 'sonner';
+import type { Bundle, FieldDef, FormDef } from '@/lib/bundle';
+import { ipc, type Attachment, type OsUser } from '@/lib/ipc';
+import { readFileBase64, chooseImageDialog, takeScreenshot, logToFile } from '@/lib/file';
+import { showWindow } from '@/lib/window';
+import { Input } from '@/ui/components/input';
+import { Textarea } from '@/ui/components/textarea';
 import {
   Select,
   SelectContent,
@@ -30,425 +14,391 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/ui/components/select';
-import { Textarea } from '@/ui/components/textarea';
-import { Input } from '@/ui/components/input';
 import { Button } from '@/ui/components/button';
 import { SubmitButton } from '@/ui/components/submit-button';
+import Loader from '@/ui/components/loader';
 
-const phoneSchema = z
-  .string()
-  .min(1, 'Phone # is required')
-  .refine(
-    (val) => {
-      // Remove everything that's not a digit
-      const digits = val.replace(/\D/g, '');
-      return digits.length === 10;
-    },
-    {
-      message: 'Phone number must be 10 digits',
-    }
-  );
+type FieldValues = Record<string, string>;
+type ImageBlobs = Record<string, { path: string; name: string; b64: string }>;
 
-const formSchema = z.object({
-  summary: z.string().min(1, 'Title is required'),
-  description: z.string().optional(),
-  impact: z.string(),
-  urgency: z.string(),
+function colSpanClass(span: 1 | 2 | 3) {
+  if (span === 3) return 'col-span-3';
+  if (span === 2) return 'col-span-2';
+  return 'col-span-1';
+}
 
-  name: z.string().min(1, 'Name is required'),
-  email: z.email().min(1, 'Email is required'),
-  phone: phoneSchema,
-
-  screenshot: z.string().optional(),
-  screenshot_url: z.string().optional(),
-  screenshot_blob: z.string().optional(),
-});
-type FormSchema = z.infer<typeof formSchema>;
-
-export default function Support() {
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const form = useForm<FormSchema>({
-    resolver: zodResolver(formSchema),
-    defaultValues: {
-      summary: '',
-      description: '',
-      impact: '3',
-      urgency: '3',
-
-      name: '',
-      email: '',
-      phone: '',
-
-      screenshot: undefined,
-      screenshot_url: undefined,
-      screenshot_blob: undefined,
-    },
-  });
-  const formValues = form.watch();
-
-  useEffect(() => {
-    const usePromise = listen('use_screenshot', async (path) => {
-      try {
-        form.setValue('screenshot', path.payload as string);
-      } catch (err) {
-        toast.error('Failed to get screenshot');
-      }
-    });
-
-    return () => {
-      usePromise.then((unlisten) => unlisten());
-    };
-  }, []);
-
-  useEffect(() => {
-    const unlistenPromise = listen('on_hide', async () => {
-      form.reset();
-    });
-
-    return () => {
-      unlistenPromise.then((unlisten) => unlisten());
-    };
-  }, []);
-
-  // Process screenshot changes when path changes
-  useEffect(() => {
-    if (formValues.screenshot) {
-      (async () => {
-        const { data: base64 } = await readFileBase64(formValues.screenshot!);
-
-        if (base64) {
-          form.setValue('screenshot_url', `data:image/png;base64,${base64}`);
-          form.setValue('screenshot_blob', base64);
-        } else {
-          toast.error('Failed to process file');
-          form.setValue('screenshot_url', undefined);
-          form.setValue('screenshot_blob', undefined);
-        }
-      })();
-    } else {
-      // reset when screenshot is cleared
-      form.setValue('screenshot_url', undefined);
-      form.setValue('screenshot_blob', undefined);
-    }
-  }, [formValues.screenshot]);
-
-  // Derived object for UI rendering
-  const screenshot = useMemo(() => {
-    if (!formValues.screenshot) return undefined;
-
-    const name = formValues.screenshot.includes('/')
-      ? formValues.screenshot.split('/').pop()
-      : formValues.screenshot.split('\\').pop();
-
-    return {
-      name,
-      url: formValues.screenshot_url ?? '',
-      data: formValues.screenshot_blob ?? null,
-    };
-  }, [formValues.screenshot, formValues.screenshot_url, formValues.screenshot_blob]);
-
-  const onSubmit = async (formData: FormSchema) => {
-    setIsSubmitting(true);
-    await logToFile('INFO', 'Starting ticket submission');
-
-    try {
-      await logToFile('INFO', 'Fetching agent settings');
-      const { data: settings } = await getSettings();
-      if (!settings || !settings.device_id || !settings.site_id || !settings.api_host) {
-        const errMsg = 'Invalid settings. Please restart agent.';
-        await logToFile('ERROR', errMsg);
-        throw errMsg;
-      }
-
-      await logToFile(
-        'INFO',
-        `Settings loaded: device_id=${settings.device_id}, site_id=${settings.site_id}`
-      );
-
-      await logToFile('INFO', 'Fetching RMM ID from registry');
-      const { data: rmmId, error: rmmError } = await getRmmId();
-      if (!rmmId) {
-        await logToFile('WARN', `Failed to get RMM ID: ${rmmError?.message}`);
-      } else {
-        await logToFile('INFO', `RMM ID: ${rmmId}`);
-      }
-
-      const apiUrl = `${settings.api_host}/v1.0/ticket/create`;
-      await logToFile('INFO', `Submitting ticket to: ${apiUrl}`);
-      await logToFile(
-        'INFO',
-        `Ticket data: summary="${formData.summary}", urgency=${formData.urgency}, impact=${formData.impact}, has_screenshot=${!!screenshot}`
-      );
-
-      // Use FormData for multipart/form-data to handle large screenshots
-      const formDataToSend = new FormData();
-      formDataToSend.append('summary', formData.summary);
-      formDataToSend.append('description', formData.description || '');
-      formDataToSend.append('impact', formData.impact);
-      formDataToSend.append('urgency', formData.urgency);
-      formDataToSend.append('name', formData.name);
-      formDataToSend.append('email', formData.email);
-      formDataToSend.append('phone', formData.phone.replace(/\D/g, ''));
-      if (rmmId) {
-        formDataToSend.append('rmm_id', rmmId);
-      }
-
-      // Add screenshot as a file if present
-      if (screenshot && formData.screenshot) {
-        await logToFile('INFO', `Adding screenshot file: ${screenshot.name}`);
-        // Read the file as a blob
-        const { data: fileContent } = await readFileBinary(formData.screenshot);
-
-        if (fileContent) {
-          const blob = new Blob([new Uint8Array(fileContent)], {
-            type: 'image/png',
-          });
-          formDataToSend.append('screenshot', blob, screenshot.name || 'screenshot.png');
-          await logToFile('INFO', `Screenshot file size: ${blob.size} bytes`);
-        } else {
-          await logToFile('WARN', `Screenshot failed to be read as binary: ${formData.screenshot}`);
-        }
-      }
-
-      const res = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'X-Site-ID': settings.site_id,
-          'X-Device-ID': settings.device_id,
-          // Don't set Content-Type - browser will set it with boundary
-        },
-        body: formDataToSend,
-      });
-
-      await logToFile('INFO', `API response status: ${res.status}`);
-
-      if (!res.ok) {
-        const errorText = await res.text();
-        await logToFile('ERROR', `API request failed with status ${res.status}: ${errorText}`);
-        throw 'API Fetch Error';
-      }
-
-      const ret: APIResponse<string> = await res.json();
-      await logToFile('INFO', `Ticket created successfully! Ticket ID: ${ret.data}`);
-
-      alert(`Support ticket created successfully! Ticket ID: ${ret.data}`);
-      form.reset();
-      await hideWindow('support');
-    } catch (err) {
-      const errMsg = `Failed to submit ticket: ${err}`;
-      await logToFile('ERROR', errMsg);
-      toast.error(errMsg);
-    } finally {
-      setIsSubmitting(false);
-      await logToFile('INFO', 'Ticket submission completed');
-    }
-  };
-
-  const handleFileSelect = async () => {
+function FieldInput({
+  field,
+  value,
+  onChange,
+  imageBlob,
+  onImageChange,
+  disabled,
+}: {
+  field: FieldDef;
+  value: string;
+  onChange: (v: string) => void;
+  imageBlob?: { path: string; name: string; b64: string };
+  onImageChange: (blob: { path: string; name: string; b64: string } | null) => void;
+  disabled: boolean;
+}) {
+  const handleChooseImage = async () => {
     const { data: path } = await chooseImageDialog();
-    if (!path) {
-      toast.info('No file was chosen or found');
-      return;
-    }
-
-    form.setValue('screenshot', path);
+    if (!path) return;
+    const { data: b64 } = await readFileBase64(path);
+    if (!b64) return;
+    const name = path.split(/[\\/]/).pop() ?? 'image.png';
+    onImageChange({ path, name, b64 });
   };
 
   const handleScreenshot = async () => {
     const { data: path } = await takeScreenshot();
     await showWindow('support');
-    form.setValue('screenshot', path);
+    if (!path) return;
+    const { data: b64 } = await readFileBase64(path);
+    if (!b64) return;
+    const name = path.split(/[\\/]/).pop() ?? 'screenshot.png';
+    onImageChange({ path, name, b64 });
+  };
+
+  if (field.type === 'image') {
+    return (
+      <div className="flex flex-col gap-1">
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleChooseImage}
+            disabled={disabled}
+            className="flex-1 truncate"
+          >
+            {imageBlob ? imageBlob.name : 'Choose image'}
+          </Button>
+          {imageBlob ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onImageChange(null)}
+              disabled={disabled}
+            >
+              Clear
+            </Button>
+          ) : (
+            <Button type="button" variant="outline" size="sm" onClick={handleScreenshot} disabled={disabled}>
+              Screenshot
+            </Button>
+          )}
+        </div>
+        {imageBlob && (
+          <img
+            src={`data:image/png;base64,${imageBlob.b64}`}
+            alt="preview"
+            className="max-h-32 object-contain rounded border"
+          />
+        )}
+      </div>
+    );
+  }
+
+  if (field.type === 'checkbox') {
+    return (
+      <label className="flex items-center gap-2 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={value === 'true'}
+          onChange={(e) => onChange(e.target.checked ? 'true' : 'false')}
+          disabled={disabled}
+          className="h-4 w-4 rounded border border-input accent-primary"
+        />
+        <span className="text-sm text-muted-foreground">{field.placeholder ?? field.label}</span>
+      </label>
+    );
+  }
+
+  if (field.type === 'select' && field.options?.length) {
+    return (
+      <Select value={value} onValueChange={onChange} disabled={disabled}>
+        <SelectTrigger>
+          <SelectValue placeholder={field.placeholder ?? `Select ${field.label}`} />
+        </SelectTrigger>
+        <SelectContent>
+          {field.options.map((opt) => (
+            <SelectItem key={opt} value={opt}>
+              {opt}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  if (field.type === 'textarea') {
+    return (
+      <Textarea
+        placeholder={field.placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="resize-none h-20"
+      />
+    );
+  }
+
+  return (
+    <Input
+      type={
+        field.type === 'email' ? 'email'
+        : field.type === 'phone' ? 'tel'
+        : field.type === 'number' ? 'number'
+        : 'text'
+      }
+      placeholder={field.placeholder}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+    />
+  );
+}
+
+function DynamicForm({
+  form,
+  osUser,
+  onSuccess,
+}: {
+  form: FormDef;
+  osUser: OsUser | null;
+  onSuccess: () => void;
+}) {
+  const [values, setValues] = useState<FieldValues>({});
+  const [images, setImages] = useState<ImageBlobs>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const setField = (id: string, val: string) =>
+    setValues((prev) => ({ ...prev, [id]: val }));
+  const setImage = (id: string, blob: { path: string; name: string; b64: string } | null) =>
+    setImages((prev) => {
+      const next = { ...prev };
+      if (blob) next[id] = blob;
+      else delete next[id];
+      return next;
+    });
+
+  const validate = () => {
+    const errs: Record<string, string> = {};
+    for (const row of form.rows) {
+      for (const field of row.cols) {
+        if (!field.required) continue;
+        if (field.type === 'image') {
+          if (!images[field.id]) errs[field.id] = `${field.label} is required`;
+        } else {
+          if (!values[field.id]?.trim()) errs[field.id] = `${field.label} is required`;
+        }
+      }
+    }
+    setErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!validate()) return;
+    setSubmitting(true);
+    try {
+      const attachments: Attachment[] = Object.entries(images).map(([field_id, blob]) => ({
+        field_id,
+        name: blob.name,
+        mime_type: 'image/png',
+        data_b64: blob.b64,
+      }));
+
+      const ack = await ipc.submitForm({
+        form_id: form.id,
+        form_version_id: form.id,
+        answers: values,
+        os_user: osUser ?? { username: 'unknown', sid: null, display_name: null },
+        attachments,
+      });
+
+      if (ack.accepted) {
+        toast.success('Ticket submitted' + (ack.submission_id ? ` (#${ack.submission_id})` : ''));
+        setValues({});
+        setImages({});
+        onSuccess();
+      } else {
+        toast.error(ack.message || 'Submission failed');
+      }
+    } catch (err) {
+      await logToFile('ERROR', `Form submit error: ${err}`);
+      toast.error('Failed to submit ticket');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
-    <main className="flex flex-col size-full p-6 gap-2 items-center">
-      <h1 className="flex text-4xl text-center items-center">
-        <span className="text-6xl text-primary">Centriserve IT</span>
-      </h1>
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4 flex-1">
+      {form.description && (
+        <p className="text-sm text-muted-foreground">{form.description}</p>
+      )}
 
-      <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col gap-4 size-full">
-          <FormField
-            control={form.control}
-            name="summary"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Title</FormLabel>
-                <FormControl>
-                  <Input placeholder="Ticket title" {...field} disabled={isSubmitting} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          <FormField
-            control={form.control}
-            name="description"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Description</FormLabel>
-                <FormControl>
-                  <Textarea
-                    placeholder="Tell us about the issue"
-                    className="h-20 resize-none"
-                    {...field}
-                    disabled={isSubmitting}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          <div className="grid grid-cols-2 gap-2 w-full">
-            <FormField
-              control={form.control}
-              name="urgency"
-              render={({ field }) => (
-                <FormItem className="flex flex-col w-full">
-                  <FormLabel>Urgency?</FormLabel>
-                  <FormControl>
-                    <Select
-                      onValueChange={field.onChange}
-                      value={field.value}
-                      disabled={isSubmitting}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="Select urgency" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="3">Low</SelectItem>
-                        <SelectItem value="2">Medium</SelectItem>
-                        <SelectItem value="1">High</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="impact"
-              render={({ field }) => (
-                <FormItem className="flex flex-col w-full">
-                  <FormLabel>Who is impacted?</FormLabel>
-                  <FormControl>
-                    <Select
-                      onValueChange={field.onChange}
-                      value={field.value}
-                      disabled={isSubmitting}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="Select urgency" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="3">Only Me</SelectItem>
-                        <SelectItem value="2">Mutliple Users</SelectItem>
-                        <SelectItem value="1">Company Wide</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-
-          <div className="grid grid-cols-8 gap-2 w-full">
-            <FormField
-              control={form.control}
-              name="name"
-              render={({ field }) => (
-                <FormItem className="col-span-3">
-                  <FormLabel>Name *</FormLabel>
-                  <FormControl>
-                    <Input placeholder="John Doe" {...field} disabled={isSubmitting} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="email"
-              render={({ field }) => (
-                <FormItem className="col-span-3">
-                  <FormLabel>Email *</FormLabel>
-                  <FormControl>
-                    <Input
-                      type="email"
-                      placeholder="john.doe@gmail.com"
-                      {...field}
-                      disabled={isSubmitting}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="phone"
-              render={({ field }) => (
-                <FormItem className="col-span-2">
-                  <FormLabel>Phone Number *</FormLabel>
-                  <FormControl>
-                    <Input placeholder="123-123-1234" {...field} disabled={isSubmitting} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-
-          <div className="flex flex-col w-full gap-2">
-            <FormLabel>Screenshot (Optional)</FormLabel>
-            <div className="flex w-full gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleFileSelect}
-                disabled={isSubmitting}
-                className="w-1/2"
-              >
-                {screenshot ? screenshot.name : 'Choose Image'}
-              </Button>
-              {!!screenshot ? (
-                <Button
-                  variant="destructive"
-                  onClick={() => form.setValue('screenshot', undefined)}
-                  disabled={isSubmitting}
-                >
-                  Clear Screenshot
-                </Button>
-              ) : (
-                <Button type="button" onClick={handleScreenshot} disabled={isSubmitting}>
-                  Take Screenshot
-                </Button>
-              )}
-            </div>
-
-            {screenshot && (
-              <div className="border rounded p-2 w-fit overflow-clip">
-                <img
-                  src={screenshot.url}
-                  alt="Screenshot preview"
-                  className="w-full h-52 object-contain"
+      <div className="flex flex-col gap-3 flex-1">
+        {form.rows.map((row, rIdx) => (
+          <div key={rIdx} className="grid grid-cols-3 gap-3">
+            {row.cols.map((field) => (
+              <div key={field.id} className={`flex flex-col gap-1 ${colSpanClass(field.col_span)}`}>
+                <label className="text-sm font-medium">
+                  {field.label}
+                  {field.required && <span className="text-destructive ml-0.5">*</span>}
+                </label>
+                <FieldInput
+                  field={field}
+                  value={values[field.id] ?? ''}
+                  onChange={(v) => setField(field.id, v)}
+                  imageBlob={images[field.id]}
+                  onImageChange={(b) => setImage(field.id, b)}
+                  disabled={submitting}
                 />
+                {errors[field.id] && (
+                  <span className="text-xs text-destructive">{errors[field.id]}</span>
+                )}
               </div>
-            )}
+            ))}
           </div>
+        ))}
+      </div>
 
-          <div className="flex w-full mt-auto">
-            <SubmitButton pending={isSubmitting}>Submit Ticket</SubmitButton>
+      <div className="mt-auto">
+        <SubmitButton pending={submitting}>Submit</SubmitButton>
+      </div>
+    </form>
+  );
+}
+
+export default function Support() {
+  const [bundle, setBundle] = useState<Bundle | null>(null);
+  const [osUser, setOsUser] = useState<OsUser | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [offline, setOffline] = useState(false);
+  const [selectedForm, setSelectedForm] = useState<FormDef | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [b, user] = await Promise.all([ipc.getConfigBundle(), ipc.getOsUser().catch(() => null)]);
+      setBundle(b);
+      setOsUser(user);
+      setOffline(!b);
+      if (b?.forms?.length === 1) setSelectedForm(b.forms[0]);
+    } catch {
+      setOffline(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  // Reset on window hide
+  useEffect(() => {
+    const p = listen('on_hide', () => {
+      setSelectedForm(null);
+      setSuccess(false);
+      if (bundle?.forms?.length === 1) setSelectedForm(bundle.forms[0]);
+    });
+    return () => { p.then((u) => u()); };
+  }, [bundle]);
+
+  const accentColor = bundle?.branding?.accentColor;
+  const companyName = bundle?.branding?.companyName ?? 'IT Support';
+
+  if (loading) {
+    return (
+      <main className="flex flex-col size-full items-center justify-center">
+        <Loader />
+      </main>
+    );
+  }
+
+  return (
+    <main className="flex flex-col size-full overflow-hidden">
+      {/* Brand header bar */}
+      <div
+        className="flex items-center px-4 py-2 shrink-0"
+        style={{ backgroundColor: accentColor ?? 'hsl(var(--primary))' }}
+      >
+        <span className="text-white font-semibold text-sm tracking-wide">{companyName}</span>
+      </div>
+
+      <div className="flex flex-col flex-1 p-4 gap-3 overflow-y-auto min-h-0">
+        {success ? (
+          <div className="flex flex-col items-center justify-center flex-1 gap-3">
+            <p className="text-lg font-medium">Ticket submitted</p>
+            <p className="text-sm text-muted-foreground">Your request has been received.</p>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSuccess(false);
+                if (bundle?.forms && bundle.forms.length > 1) setSelectedForm(null);
+              }}
+            >
+              Submit another
+            </Button>
           </div>
-        </form>
-      </Form>
+        ) : offline ? (
+          <div className="flex flex-col items-center justify-center flex-1 gap-2">
+            <p className="font-medium">Agent unavailable</p>
+            <p className="text-sm text-muted-foreground">
+              The support agent is not running or not yet enrolled.
+            </p>
+            <Button variant="outline" size="sm" onClick={load}>
+              Retry
+            </Button>
+          </div>
+        ) : !bundle?.forms?.length ? (
+          <div className="flex flex-col items-center justify-center flex-1">
+            <p className="text-sm text-muted-foreground">No support forms configured.</p>
+          </div>
+        ) : !selectedForm ? (
+          <div className="flex flex-col gap-2">
+            <p className="text-sm font-medium">How can we help?</p>
+            {bundle!.forms.map((f: FormDef) => (
+              <button
+                key={f.id}
+                onClick={() => setSelectedForm(f)}
+                className="text-left border rounded-lg p-3 hover:bg-accent transition-colors"
+              >
+                <p className="font-medium text-sm">{f.name}</p>
+                {f.description && (
+                  <p className="text-xs text-muted-foreground mt-0.5">{f.description}</p>
+                )}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <>
+            {bundle.forms.length > 1 && (
+              <button
+                onClick={() => setSelectedForm(null)}
+                className="text-xs text-muted-foreground hover:text-foreground self-start"
+              >
+                ← Back
+              </button>
+            )}
+            <p className="font-semibold">{selectedForm.name}</p>
+            <DynamicForm
+              form={selectedForm}
+              osUser={osUser}
+              onSuccess={() => setSuccess(true)}
+            />
+          </>
+        )}
+      </div>
     </main>
   );
 }

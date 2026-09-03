@@ -13,6 +13,7 @@ export const MSPAGENT_CONFIG: Integration = {
     { label: "Agents", route: "/agents", isNullable: false },
     { label: "Logs", route: "/logs", isNullable: false },
     { label: "Tickets", route: "/tickets", isNullable: false },
+    { label: "Forms", route: "/forms", isNullable: false },
   ],
   info: {
     summary: 'MSPAgent connects MSPByte-managed agents to their devices, logs, and automation activity.',

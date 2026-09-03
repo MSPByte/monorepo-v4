@@ -182,12 +182,37 @@ pub async fn run_checkin_loop(
         match checkin(&cfg, &device_id).await {
             Ok(()) => {
                 info!("Checkin OK");
-                let mut s = state.write().await;
-                s.bundle_etag = s.bundle_etag.clone(); // keep etag
-                let _ = save(&root, &s);
             }
             Err(e) => {
                 logwarn!("Checkin failed: {}", e);
+            }
+        }
+
+        // Fetch bundle after each checkin. The state write happens inside fetch().
+        {
+            let mut s = state.write().await;
+            match crate::bundle::fetch(&cfg, &root, &mut s).await {
+                Ok(_) => {
+                    let _ = save(&root, &s);
+                }
+                Err(e) => {
+                    logwarn!("Bundle fetch failed: {}", e);
+                }
+            }
+        }
+
+        // Check for a newer agent-core binary. If one is staged, the next
+        // service restart will apply it automatically.
+        {
+            let mut s = state.write().await;
+            match crate::update::check_and_stage(&cfg, &root, &mut s).await {
+                Ok(true) => {
+                    let _ = save(&root, &s);
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    logwarn!("Update check failed: {}", e);
+                }
             }
         }
 

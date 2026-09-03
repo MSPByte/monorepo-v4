@@ -24,6 +24,9 @@
     KeyRound,
     Copy,
     Check,
+    Palette,
+    Plus,
+    Trash2,
   } from '@lucide/svelte';
   import { enhance } from '$app/forms';
   import { toast } from 'svelte-sonner';
@@ -150,6 +153,86 @@
     await navigator.clipboard.writeText(newToken);
     copied = true;
     setTimeout(() => (copied = false), 2000);
+  }
+
+  // Bundle / branding editor
+  type TrayItem = { id: string; label: string; action: 'open_support' };
+  let bundleDialogSite = $state<{ id: string; name: string } | null>(null);
+  let bundleCompanyName = $state('');
+  let bundleAccentColor = $state('#3b82f6');
+  let bundleShowTray = $state(true);
+  let bundleTrayItems = $state<TrayItem[]>([{ id: 'support', label: 'Request Support', action: 'open_support' }]);
+  let savingBundle = $state(false);
+
+  function addTrayItem() {
+    bundleTrayItems = [...bundleTrayItems, { id: crypto.randomUUID(), label: '', action: 'open_support' }];
+  }
+  function removeTrayItem(idx: number) {
+    bundleTrayItems = bundleTrayItems.filter((_, i) => i !== idx);
+  }
+  function updateTrayLabel(idx: number, label: string) {
+    bundleTrayItems = bundleTrayItems.map((item, i) => (i === idx ? { ...item, label } : item));
+  }
+
+  const bundleQuery = createQuery(() => ({
+    queryKey: ['agents.bundle.get', bundleDialogSite?.id ?? ''],
+    queryFn: () => trpc.agents.bundle.get.query({ siteId: bundleDialogSite!.id }),
+    enabled: !!bundleDialogSite && canManageTokens,
+  }));
+
+  $effect(() => {
+    if (!bundleDialogSite) return;
+    const raw = bundleQuery.data;
+    if (raw) {
+      const d = raw.data as {
+        branding?: { companyName?: string; accentColor?: string };
+        tray?: { showTray?: boolean; items?: TrayItem[] };
+      };
+      bundleCompanyName = d?.branding?.companyName ?? '';
+      bundleAccentColor = d?.branding?.accentColor ?? '#3b82f6';
+      bundleShowTray = d?.tray?.showTray ?? true;
+      bundleTrayItems = d?.tray?.items?.length
+        ? d.tray.items
+        : [{ id: 'support', label: 'Request Support', action: 'open_support' }];
+    } else if (raw === null) {
+      bundleCompanyName = '';
+      bundleAccentColor = '#3b82f6';
+      bundleShowTray = true;
+      bundleTrayItems = [{ id: 'support', label: 'Request Support', action: 'open_support' }];
+    }
+  });
+
+  const upsertBundleMutation = createMutation(() => ({
+    mutationFn: ({ siteId, data }: { siteId: string; data: Record<string, unknown> }) =>
+      trpc.agents.bundle.upsert.mutate({ siteId, data }),
+  }));
+
+  async function handleSaveBundle() {
+    if (!bundleDialogSite) return;
+    savingBundle = true;
+    try {
+      const validItems = bundleTrayItems.filter((item) => item.label.trim());
+      await upsertBundleMutation.mutateAsync({
+        siteId: bundleDialogSite.id,
+        data: {
+          branding: {
+            ...(bundleCompanyName ? { companyName: bundleCompanyName } : {}),
+            accentColor: bundleAccentColor,
+          },
+          tray: {
+            showTray: bundleShowTray,
+            items: validItems,
+          },
+        },
+      });
+      queryClient.invalidateQueries({ queryKey: ['agents.bundle.get'] });
+      bundleDialogSite = null;
+      toast.success('Branding saved');
+    } catch (err) {
+      toast.error(toUserMessage(err, 'Failed to save branding'));
+    } finally {
+      savingBundle = false;
+    }
   }
 
   let siteSearch = $state('');
@@ -467,6 +550,111 @@
   </Dialog.Content>
 </Dialog.Root>
 
+<Dialog.Root
+  open={!!bundleDialogSite}
+  onOpenChange={(open) => {
+    if (!open) bundleDialogSite = null;
+  }}
+>
+  <Dialog.Content class="max-w-sm">
+    <Dialog.Header>
+      <Dialog.Title>Agent Branding</Dialog.Title>
+      <Dialog.Description>
+        {#if bundleDialogSite}{bundleDialogSite.name}{/if}
+      </Dialog.Description>
+    </Dialog.Header>
+
+    <div class="flex flex-col gap-4 py-2">
+      {#if bundleQuery.isLoading}
+        <div class="text-sm text-muted-foreground">Loading...</div>
+      {:else}
+        <div class="flex flex-col gap-1.5">
+          <label class="text-sm font-medium" for="bundle-company-name">Company Name</label>
+          <input
+            id="bundle-company-name"
+            type="text"
+            bind:value={bundleCompanyName}
+            placeholder="Your company name"
+            class="px-3 py-1.5 text-sm rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        </div>
+
+        <div class="flex flex-col gap-1.5">
+          <label class="text-sm font-medium" for="bundle-accent-color">Accent Color</label>
+          <div class="flex items-center gap-2">
+            <input
+              id="bundle-accent-color"
+              type="color"
+              bind:value={bundleAccentColor}
+              class="h-8 w-14 rounded border cursor-pointer bg-background"
+            />
+            <span class="text-sm text-muted-foreground font-mono">{bundleAccentColor}</span>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between">
+          <span class="text-sm font-medium">Show Tray Icon</span>
+          <button
+            type="button"
+            role="switch"
+            aria-label="Toggle tray icon"
+            aria-checked={bundleShowTray}
+            onclick={() => (bundleShowTray = !bundleShowTray)}
+            class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors
+              {bundleShowTray ? 'bg-primary' : 'bg-muted-foreground/30'}"
+          >
+            <span
+              class="inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform
+                {bundleShowTray ? 'translate-x-4.5' : 'translate-x-0.5'}"
+            ></span>
+          </button>
+        </div>
+
+        {#if bundleShowTray}
+          <div class="flex flex-col gap-2">
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-medium">Tray Menu Items</span>
+              <button
+                type="button"
+                onclick={addTrayItem}
+                class="flex items-center gap-1 text-xs text-primary hover:underline"
+              >
+                <Plus class="size-3" /> Add item
+              </button>
+            </div>
+            {#each bundleTrayItems as item, idx}
+              <div class="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={item.label}
+                  oninput={(e) => updateTrayLabel(idx, (e.target as HTMLInputElement).value)}
+                  placeholder="Menu item label"
+                  class="flex-1 px-2 py-1 text-sm rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <button
+                  type="button"
+                  onclick={() => removeTrayItem(idx)}
+                  class="text-muted-foreground hover:text-destructive"
+                  aria-label="Remove item"
+                >
+                  <Trash2 class="size-3.5" />
+                </button>
+              </div>
+            {/each}
+            {#if bundleTrayItems.length === 0}
+              <p class="text-xs text-muted-foreground">No items — tray will show a default item.</p>
+            {/if}
+          </div>
+        {/if}
+
+        <Button onclick={handleSaveBundle} disabled={savingBundle} class="w-full mt-1">
+          {savingBundle ? 'Saving...' : 'Save Branding'}
+        </Button>
+      {/if}
+    </div>
+  </Dialog.Content>
+</Dialog.Root>
+
 <div class="flex flex-col size-full p-4 gap-4 overflow-hidden">
   <div class="flex items-start justify-between shrink-0">
     <IntegrationHeader {integration} active={isConfigured} loading={integrationQuery.isLoading} />
@@ -645,6 +833,17 @@
                 <div class="flex items-center gap-2 justify-end">
                   {#if canManageTokens}
                     {@const hasToken = tokenBySite.has(site.id)}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      class="gap-1.5 text-muted-foreground"
+                      onclick={() => { bundleDialogSite = { id: site.id, name: site.name }; }}
+                      title="Edit agent branding for this site"
+                    >
+                      <Palette class="size-3.5" />
+                      Branding
+                    </Button>
                     <Button
                       type="button"
                       size="sm"

@@ -77,54 +77,49 @@ pub fn run() {
             // Store the flags in app state for cleanup
             // app.manage(heartbeat_running);
 
-            // Log agent-core reachability; enrollment is handled by agent-core.
-            tauri::async_runtime::spawn(async move {
-                match ipc_client::get_status().await {
-                    Ok(status) => {
-                        log_to_file(
-                            String::from("INFO"),
-                            format!("agent-core reachable; enrolled={}", status.enrolled),
-                        );
-                    }
-                    Err(e) => {
-                        log_to_file(
-                            String::from("WARN"),
-                            format!("agent-core not reachable: {}. Is the service running?", e),
-                        );
-                    }
-                }
-            });
-
-            // Conditionally create system tray based on settings
+            // Load the config bundle from agent-core and build the tray from it.
+            // Falls back to a minimal tray if agent-core is unreachable at startup.
             let app_handle = app.app_handle().clone();
             tauri::async_runtime::spawn(async move {
-                match get_settings().await {
-                    Ok(settings) => {
-                        // Only create tray if show_tray is explicitly set to true
-                        if settings.show_tray.unwrap_or(false) {
-                            log_to_file(
-                                String::from("INFO"),
-                                String::from("show_tray is enabled, creating tray icon"),
-                            );
-                            if let Err(e) = create_tray_icon(&app_handle) {
-                                log_to_file(
-                                    String::from("ERROR"),
-                                    format!("Failed to create tray icon: {}", e),
-                                );
-                            }
-                        } else {
-                            log_to_file(
-                                String::from("INFO"),
-                                String::from("show_tray is disabled or not set, skipping tray creation"),
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        log_to_file(
-                            String::from("WARN"),
-                            format!("Could not load settings for tray creation: {}", e),
-                        );
-                    }
+                let bundle: Option<serde_json::Value> = ipc_client::get_config_bundle()
+                    .await
+                    .ok()
+                    .and_then(|p| p.bundle);
+
+                let show_tray = bundle
+                    .as_ref()
+                    .and_then(|b| b.get("tray"))
+                    .and_then(|t| t.get("showTray"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                if !show_tray {
+                    log_to_file(String::from("INFO"), String::from("Tray disabled by bundle config"));
+                    return;
+                }
+
+                // Extract tray items: [{id, label, action}] from bundle.tray.items
+                let items: Vec<(String, String)> = bundle
+                    .as_ref()
+                    .and_then(|b| b.get("tray"))
+                    .and_then(|t| t.get("items"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|item| {
+                                let label = item.get("label")?.as_str()?.to_string();
+                                let action = item.get("action")?.as_str()?.to_string();
+                                Some((label, action))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_else(|| {
+                        // Default fallback item when bundle provides no items
+                        vec![("Request Support".into(), "open_support".into())]
+                    });
+
+                if let Err(e) = create_bundle_tray(&app_handle, items) {
+                    log_to_file(String::from("ERROR"), format!("Failed to create tray: {}", e));
                 }
             });
 
@@ -147,6 +142,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_settings_info,
             get_agent_status,
+            get_config_bundle,
+            get_os_user,
+            submit_form,
+            get_tickets,
+            add_ticket_note,
             hide_window,
             show_window,
             take_screenshot,
@@ -162,51 +162,52 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-fn create_tray_icon(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    log_to_file(String::from("INFO"), String::from("Creating system tray icon"));
+/// Build the system tray from bundle-supplied items.
+/// Each item is `(label, action)` where action is currently `"open_support"`.
+fn create_bundle_tray(app: &AppHandle, items: Vec<(String, String)>) -> Result<(), Box<dyn std::error::Error>> {
+    log_to_file(String::from("INFO"), String::from("Creating bundle-driven tray icon"));
 
-    let request_support_sc_i = MenuItem::with_id(
-        app,
-        "request_support_sc",
-        "Take Screenshot and Request Support",
-        true,
-        None::<&str>,
-    )?;
-    let request_support_i = MenuItem::with_id(
-        app,
-        "request_support",
-        "Request Support",
-        true,
-        None::<&str>,
-    )?;
+    let mut menu_items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
+
+    for (idx, (label, _action)) in items.iter().enumerate() {
+        let id = format!("bundle_item_{}", idx);
+        let item = MenuItem::with_id(app, id, label, true, None::<&str>)?;
+        menu_items.push(Box::new(item));
+    }
+
+    // Always append a separator and About entry.
     let about_i = MenuItem::with_id(app, "about", "About", true, None::<&str>)?;
-    // let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    menu_items.push(Box::new(about_i));
 
-    // Create menu with items
-    let menu = Menu::with_items(app, &[&request_support_sc_i, &request_support_i, &about_i])?;
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+        menu_items.iter().map(|b| b.as_ref()).collect();
 
-    // Build tray icon with menu
+    let menu = Menu::with_items(app, refs.as_slice())?;
+    let actions = items.into_iter().map(|(_, a)| a).collect::<Vec<_>>();
+
     let _tray = TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
         .menu(&menu)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "request_support_sc" => {
-                handle_support_window(app, true);
+        .on_menu_event(move |app, event| {
+            let id = event.id.as_ref();
+            if id == "about" {
+                handle_about_window(app);
+                return;
             }
-            "request_support" => {
-                handle_support_window(app, false);
+            // bundle_item_<idx>
+            if let Some(rest) = id.strip_prefix("bundle_item_") {
+                if let Ok(idx) = rest.parse::<usize>() {
+                    let action = actions.get(idx).map(|s| s.as_str()).unwrap_or("");
+                    match action {
+                        "open_support" => handle_support_window(app, false),
+                        _ => {}
+                    }
+                }
             }
-            "about" => {
-                handle_about_window(app);               
-            }
-            // "quit" => {
-            //     app.exit(0);
-            // }
-            _ => {}
         })
         .build(app)?;
 
-    log_to_file(String::from("INFO"), String::from("System tray icon created successfully"));
+    log_to_file(String::from("INFO"), String::from("Bundle tray created successfully"));
     Ok(())
 }
 
@@ -384,6 +385,139 @@ async fn get_settings_info() -> Result<device_manager::Settings, String> {
 async fn get_agent_status() -> Result<agent_ipc::StatusPayload, String> {
     log_to_file(String::from("INFO"), String::from("get_agent_status command invoked"));
     ipc_client::get_status().await
+}
+
+#[tauri::command]
+async fn get_config_bundle() -> Result<agent_ipc::ConfigBundlePayload, String> {
+    ipc_client::get_config_bundle().await
+}
+
+#[tauri::command]
+fn get_os_user() -> Result<agent_ipc::OsUserPayload, String> {
+    let username = whoami::username();
+    let sid = current_user_sid();
+    Ok(agent_ipc::OsUserPayload { username, sid, display_name: None })
+}
+
+/// Returns a stable, unique-per-user identifier.
+/// On Windows: the SID string (S-1-5-21-...).
+/// On Unix: "uid:<effective-uid>" — not a SID but serves the same scoping purpose.
+fn current_user_sid() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::Security::{
+            GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER,
+        };
+        use windows_sys::Win32::System::Memory::LocalFree;
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        use std::ptr;
+
+        unsafe {
+            let mut token = 0isize;
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+                return None;
+            }
+
+            // First call: get required buffer size.
+            let mut needed: u32 = 0;
+            GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut needed);
+            if needed == 0 {
+                CloseHandle(token);
+                return None;
+            }
+
+            let buf: Vec<u8> = vec![0u8; needed as usize];
+            let ok = GetTokenInformation(
+                token,
+                TokenUser,
+                buf.as_ptr() as *mut _,
+                needed,
+                &mut needed,
+            );
+            CloseHandle(token);
+            if ok == 0 {
+                return None;
+            }
+
+            let tu = &*(buf.as_ptr() as *const TOKEN_USER);
+            let sid_ptr = tu.User.Sid;
+            Some(sid_to_string(sid_ptr))
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        Some(format!("uid:{}", unsafe { libc::getuid() }))
+    }
+
+    #[cfg(not(any(target_os = "windows", unix)))]
+    None
+}
+
+/// Formats a Windows SID pointer as the canonical S-1-... string.
+#[cfg(target_os = "windows")]
+unsafe fn sid_to_string(sid: *const std::ffi::c_void) -> String {
+    let bytes = std::slice::from_raw_parts(sid as *const u8, 8);
+    let revision = bytes[0];
+    let sub_count = bytes[1] as usize;
+    // Authority is 6 bytes big-endian starting at offset 2
+    let authority: u64 = (bytes[2] as u64) << 40
+        | (bytes[3] as u64) << 32
+        | (bytes[4] as u64) << 24
+        | (bytes[5] as u64) << 16
+        | (bytes[6] as u64) << 8
+        | (bytes[7] as u64);
+
+    let sub_bytes = std::slice::from_raw_parts((sid as *const u8).add(8), sub_count * 4);
+    let mut parts = format!("S-{}-{}", revision, authority);
+    for i in 0..sub_count {
+        let sub = u32::from_le_bytes([
+            sub_bytes[i * 4],
+            sub_bytes[i * 4 + 1],
+            sub_bytes[i * 4 + 2],
+            sub_bytes[i * 4 + 3],
+        ]);
+        parts.push('-');
+        parts.push_str(&sub.to_string());
+    }
+    parts
+}
+
+#[tauri::command]
+async fn submit_form(payload: serde_json::Value) -> Result<agent_ipc::SubmitFormAckPayload, String> {
+    let payload: agent_ipc::SubmitFormPayload =
+        serde_json::from_value(payload).map_err(|e| format!("Invalid payload: {}", e))?;
+    ipc_client::submit_form(payload).await
+}
+
+#[tauri::command]
+async fn get_tickets(os_user_sid: Option<String>) -> Result<agent_ipc::TicketListPayload, String> {
+    log_to_file(String::from("INFO"), String::from("get_tickets command invoked"));
+    ipc_client::get_tickets(os_user_sid).await
+}
+
+#[tauri::command]
+async fn add_ticket_note(
+    ticket_id: String,
+    note: String,
+    os_username: String,
+    os_user_sid: Option<String>,
+) -> Result<agent_ipc::TicketNoteAckPayload, String> {
+    log_to_file(
+        String::from("INFO"),
+        format!("add_ticket_note command invoked for ticket {}", ticket_id),
+    );
+    ipc_client::add_ticket_note(
+        ticket_id,
+        note,
+        agent_ipc::OsUserPayload {
+            username: os_username,
+            sid: os_user_sid,
+            display_name: None,
+        },
+    )
+    .await
 }
 
 #[tauri::command]

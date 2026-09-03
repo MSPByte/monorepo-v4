@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// Every IPC message is wrapped in an Envelope so responses can be correlated
-/// to their originating requests by matching the `id` field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Envelope {
     pub id: u64,
@@ -15,9 +13,6 @@ impl Envelope {
     }
 }
 
-/// All messages that can flow over the IPC socket. Both directions use this
-/// same enum. The `kind` field is the discriminator; unit variants omit
-/// `payload` entirely.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
 pub enum Message {
@@ -33,11 +28,19 @@ pub enum Message {
     GetConfigBundle,
     ConfigBundle(ConfigBundlePayload),
 
-    // Ticket submission (Phase 4 adds real forms; this is the wire contract now)
+    // Ticket submission
     SubmitForm(SubmitFormPayload),
     SubmitFormAck(SubmitFormAckPayload),
 
-    // OS user — collected by the UI process since core runs as SYSTEM/root
+    // Ticket listing — optionally filtered by OS user SID for per-user scoping
+    GetTickets(GetTicketsPayload),
+    TicketList(TicketListPayload),
+
+    // Add a note / reply to an existing ticket
+    AddTicketNote(AddTicketNotePayload),
+    TicketNoteAck(TicketNoteAckPayload),
+
+    // OS user info
     GetOsUser,
     OsUser(OsUserPayload),
 
@@ -60,7 +63,6 @@ pub struct ConfigBundlePayload {
     pub etag: Option<String>,
     pub fetched_at: Option<String>,
     pub offline: bool,
-    /// The full bundle JSON from the server, or None if never fetched.
     pub bundle: Option<serde_json::Value>,
 }
 
@@ -89,9 +91,41 @@ pub struct SubmitFormAckPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetTicketsPayload {
+    /// When set, only tickets whose os_user_sid matches are returned.
+    /// Implements per-user scoping on shared machines (decision #7).
+    pub os_user_sid: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TicketSummary {
+    pub id: String,         // agent.tickets.id (internal UUID)
+    pub ticket_id: String,  // PSA ticket ID
+    pub summary: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TicketListPayload {
+    pub tickets: Vec<TicketSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddTicketNotePayload {
+    pub ticket_id: String,  // PSA ticket ID
+    pub note: String,
+    pub os_user: OsUserPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TicketNoteAckPayload {
+    pub accepted: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OsUserPayload {
     pub username: String,
-    /// Windows SID, None on macOS/Linux.
     pub sid: Option<String>,
     pub display_name: Option<String>,
 }
