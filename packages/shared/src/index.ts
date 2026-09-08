@@ -42,3 +42,4 @@ export * from "./types/integration.js";
 export * from "./types/provider.js";
 export * from "./types/schema-registry.js";
 export * from "./types/field-types.js";
+export * from "./types/agent-forms.js";

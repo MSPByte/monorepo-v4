@@ -3,7 +3,8 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import { and, eq, isNull } from 'drizzle-orm';
 import { agents } from '@mspbyte/drizzle';
-import { getTenantDb } from '../db.js';
+import { getTenantDbForOrg } from '../db.js';
+import { requireOrgId } from '../require-device.js';
 import { env } from '../env.js';
 import type { FastifyInstance } from 'fastify';
 
@@ -11,7 +12,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const BINARIES_DIR = path.resolve(__dirname, '../../assets/binaries');
 
-// Platform slugs the agent sends in the User-Agent or X-Platform header.
 const PLATFORM_SLUGS = ['windows-x86_64', 'linux-x86_64', 'linux-aarch64', 'darwin-x86_64', 'darwin-aarch64'] as const;
 type PlatformSlug = (typeof PLATFORM_SLUGS)[number];
 
@@ -21,14 +21,16 @@ function downloadUrl(base: string, platform: PlatformSlug, version: string): str
 }
 
 export function updatesRoute(fastify: FastifyInstance) {
-  // Returns the latest available agent-core version and per-platform download URL.
   fastify.get('/v2.0/updates', async (req, reply) => {
     const deviceId = (req.headers['x-device-id'] as string | undefined)?.trim();
     if (!deviceId) return reply.status(401).send({ error: 'Missing X-Device-ID' });
 
-    let db: Awaited<ReturnType<typeof getTenantDb>>;
+    const orgId = requireOrgId(req, reply);
+    if (!orgId) return;
+
+    let db: Awaited<ReturnType<typeof getTenantDbForOrg>>;
     try {
-      db = await getTenantDb();
+      db = await getTenantDbForOrg(orgId);
     } catch {
       return reply.status(503).send({ error: 'Database unavailable' });
     }
@@ -77,9 +79,8 @@ export function updatesRoute(fastify: FastifyInstance) {
         return reply.status(404).send({ error: 'Binary not found for this version/platform' });
       }
 
-      const contentType = ext ? 'application/octet-stream' : 'application/octet-stream';
       return reply
-        .header('Content-Type', contentType)
+        .header('Content-Type', 'application/octet-stream')
         .header('Content-Disposition', `attachment; filename="${fileName}"`)
         .send(fs.createReadStream(filePath));
     }

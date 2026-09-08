@@ -8,6 +8,9 @@ pub struct State {
     pub bundle_etag: Option<String>,
     pub bundle_fetched_at: Option<DateTime<Utc>>,
     pub pending_update_version: Option<String>,
+    /// Version string of the last binary that successfully started.
+    /// Used to detect version changes and trigger log rotation.
+    pub last_version: Option<String>,
 }
 
 pub fn load(root: &Path) -> State {

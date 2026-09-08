@@ -20,6 +20,9 @@ export type TicketSummary = {
   ticket_id: string;
   summary: string;
   created_at: string;
+  status_id: number | null;
+  status_name: string | null;
+  is_open: boolean | null;
 };
 
 export type Attachment = {
@@ -48,6 +51,26 @@ export type TicketNoteAck = {
   message: string;
 };
 
+export type TicketAction = {
+  id: string;
+  note_html: string;
+  note: string;
+  who: string;
+  is_agent: boolean;
+  created_at: string;
+};
+
+export type TicketDetail = {
+  ticket_id: string;
+  actions: TicketAction[];
+};
+
+export type NoteAttachment = {
+  name: string;
+  mime_type: string;
+  data_b64: string;
+};
+
 async function wrapInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   return invoke<T>(cmd, args);
 }
@@ -68,11 +91,18 @@ export const ipc = {
   getTickets: (osSid?: string) =>
     wrapInvoke<{ tickets: TicketSummary[] }>('get_tickets', { osUserSid: osSid ?? null }),
 
-  addTicketNote: (ticketId: string, note: string, osUsername: string, osSid?: string) =>
+  addTicketNote: (ticketId: string, note: string, osUsername: string, osSid?: string, attachments?: NoteAttachment[]) =>
     wrapInvoke<TicketNoteAck>('add_ticket_note', {
       ticketId,
       note,
       osUsername,
       osUserSid: osSid ?? null,
+      attachments: attachments ?? [],
     }),
+
+  getTicketDetail: (ticketId: string) =>
+    wrapInvoke<TicketDetail>('get_ticket_detail', { ticketId }),
+
+  getPendingEvents: () =>
+    wrapInvoke<void>('get_pending_events'),
 };

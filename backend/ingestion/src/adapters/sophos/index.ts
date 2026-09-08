@@ -141,8 +141,14 @@ async function* fetchFirewallLicenses(
   context: IngestionAdapterContext
 ): AsyncGenerator<FetchPage> {
   const tenantId = getTenantId(context);
-  const items = await connector.license.firewalls(tenantId);
-  yield page(ProviderFacet.SophosFirewallLicenses, items);
+  const firewalls = await connector.license.firewalls(tenantId);
+  const licenses = firewalls.flatMap((firewall) => {
+    const record = asRecord(firewall);
+    const serialNumber = stringField(record, 'serialNumber');
+    const entries = Array.isArray(record.licenses) ? record.licenses : [];
+    return entries.map((license) => ({ ...asRecord(license), serialNumber }));
+  });
+  yield page(ProviderFacet.SophosFirewallLicenses, licenses);
 }
 
 async function* fetchTamperProtection(
@@ -242,9 +248,6 @@ function envelope(facet: ProviderFacet, record: unknown): RawRecordEnvelope {
 function externalId(facet: ProviderFacet, record: Record<string, unknown>): string {
   if (facet === ProviderFacet.SophosTamperProtection) {
     return stringField(record, '_endpoint_external_id');
-  }
-  if (facet === ProviderFacet.SophosFirewallLicenses) {
-    return stringField(record, 'serialNumber');
   }
   return stringField(record, 'id');
 }

@@ -2,11 +2,25 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { and, eq, isNull } from 'drizzle-orm';
 import { agents, agentSiteTokens } from '@mspbyte/drizzle';
-import { getTenantDb } from '../db.js';
+import { getTenantDbForOrg } from '../db.js';
 import { logger } from '../logger.js';
 import type { FastifyInstance } from 'fastify';
 
+/** Walk Drizzle's DrizzleQueryError.cause chain to get the real DB error message. */
+function dbErrMsg(err: unknown): string {
+  let e: unknown = err;
+  const seen = new Set<unknown>();
+  while (e instanceof Error) {
+    if (seen.has(e)) break;
+    seen.add(e);
+    if (e.cause) { e = e.cause; continue; }
+    return e.message;
+  }
+  return String(err);
+}
+
 const BodySchema = z.object({
+  org_id: z.string().min(1),
   enrollment_token: z.string().min(1),
   hostname: z.string().min(1),
   platform: z.string().min(1),
@@ -28,6 +42,7 @@ export function enrollRoute(fastify: FastifyInstance) {
     }
 
     const {
+      org_id,
       enrollment_token,
       hostname,
       platform,
@@ -41,20 +56,27 @@ export function enrollRoute(fastify: FastifyInstance) {
       sid
     } = body.data;
 
-    let db: Awaited<ReturnType<typeof getTenantDb>>;
+    let db: Awaited<ReturnType<typeof getTenantDbForOrg>>;
     try {
-      db = await getTenantDb();
+      db = await getTenantDbForOrg(org_id);
     } catch {
       return reply.status(503).send({ error: 'Database unavailable' });
     }
 
     const tokenHash = crypto.createHash('sha256').update(enrollment_token).digest('hex');
 
-    const [tokenRow] = await db
-      .select({ id: agentSiteTokens.id, siteId: agentSiteTokens.siteId })
-      .from(agentSiteTokens)
-      .where(and(eq(agentSiteTokens.tokenHash, tokenHash), isNull(agentSiteTokens.revokedAt)))
-      .limit(1);
+    let tokenRow: { id: string; siteId: string } | undefined;
+    try {
+      [tokenRow] = await db
+        .select({ id: agentSiteTokens.id, siteId: agentSiteTokens.siteId })
+        .from(agentSiteTokens)
+        .where(and(eq(agentSiteTokens.tokenHash, tokenHash), isNull(agentSiteTokens.revokedAt)))
+        .limit(1);
+    } catch (err) {
+      const cause = dbErrMsg(err);
+      logger.error('agent.site_tokens query failed', { cause });
+      return reply.status(503).send({ error: 'Database query failed', cause });
+    }
 
     if (!tokenRow) {
       return reply.status(401).send({ error: 'Invalid or revoked enrollment token' });
@@ -66,36 +88,42 @@ export function enrollRoute(fastify: FastifyInstance) {
     // Try to match an existing device by machine_id to handle reinstalls cleanly.
     let agentId: string;
 
-    if (machine_id) {
-      const [existing] = await db
-        .select({ id: agents.id })
-        .from(agents)
-        .where(and(eq(agents.siteId, siteId), eq(agents.machineId, machine_id), isNull(agents.deletedAt)))
-        .limit(1);
+    try {
+      if (machine_id) {
+        const [existing] = await db
+          .select({ id: agents.id })
+          .from(agents)
+          .where(and(eq(agents.siteId, siteId), eq(agents.machineId, machine_id), isNull(agents.deletedAt)))
+          .limit(1);
 
-      if (existing) {
-        await db.update(agents).set({
-          hostname,
-          version,
-          platform,
-          machineId: machine_id,
-          macAddress: mac ?? null,
-          ipAddress: ip_address ?? null,
-          extAddress: ext_address ?? null,
-          serial: serial ?? null,
-          username: username ?? null,
-          sid: sid ?? null,
-          lastCheckinAt: now,
-          updatedAt: now
-        }).where(eq(agents.id, existing.id));
+        if (existing) {
+          await db.update(agents).set({
+            hostname,
+            version,
+            platform,
+            machineId: machine_id,
+            macAddress: mac ?? null,
+            ipAddress: ip_address ?? null,
+            extAddress: ext_address ?? null,
+            serial: serial ?? null,
+            username: username ?? null,
+            sid: sid ?? null,
+            lastCheckinAt: now,
+            updatedAt: now
+          }).where(eq(agents.id, existing.id));
 
-        agentId = existing.id;
-        logger.info('Agent re-enrolled (matched by machine_id)', { agentId, hostname, siteId });
+          agentId = existing.id;
+          logger.info('Agent re-enrolled (matched by machine_id)', { agentId, hostname, siteId });
+        } else {
+          agentId = await insertNewAgent({ db, siteId, hostname, platform, version, machine_id, mac, ip_address, ext_address, serial, username, sid, now });
+        }
       } else {
-        agentId = await insertNewAgent({ db, siteId, hostname, platform, version, machine_id, mac, ip_address, ext_address, serial, username, sid, now });
+        agentId = await insertNewAgent({ db, siteId, hostname, platform, version, machine_id: null, mac, ip_address, ext_address, serial, username, sid, now });
       }
-    } else {
-      agentId = await insertNewAgent({ db, siteId, hostname, platform, version, machine_id: null, mac, ip_address, ext_address, serial, username, sid, now });
+    } catch (err) {
+      const cause = dbErrMsg(err);
+      logger.error('agent enroll db write failed', { cause, hostname, siteId });
+      return reply.status(503).send({ error: 'Database write failed', cause });
     }
 
     return reply.status(200).send({ data: { device_id: agentId } });
@@ -103,7 +131,7 @@ export function enrollRoute(fastify: FastifyInstance) {
 }
 
 async function insertNewAgent(params: {
-  db: Awaited<ReturnType<typeof getTenantDb>>;
+  db: Awaited<ReturnType<typeof getTenantDbForOrg>>;
   siteId: string;
   hostname: string;
   platform: string;

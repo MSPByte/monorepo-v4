@@ -7,12 +7,12 @@ import {
   agentLogs,
   integrations,
   integrationLinks,
-  sites,
 } from '@mspbyte/drizzle';
 import { Encryption } from '@mspbyte/encryption';
 import { HaloPSAConnector } from '@mspbyte/connectors';
 import type { HaloPSAAsset, HaloPSASite } from '@mspbyte/connectors';
-import { getTenantDb } from '../db.js';
+import { getTenantDbForOrg } from '../db.js';
+import { requireOrgId } from '../require-device.js';
 import { logger } from '../logger.js';
 import { env } from '../env.js';
 import type { FastifyInstance } from 'fastify';
@@ -60,9 +60,12 @@ export function submitRoute(fastify: FastifyInstance) {
       return reply.status(401).send({ error: 'Missing X-Device-ID' });
     }
 
-    let db: Awaited<ReturnType<typeof getTenantDb>>;
+    const orgId = requireOrgId(req, reply);
+    if (!orgId) return;
+
+    let db: Awaited<ReturnType<typeof getTenantDbForOrg>>;
     try {
-      db = await getTenantDb();
+      db = await getTenantDbForOrg(orgId);
     } catch {
       return reply.status(503).send({ error: 'Database unavailable' });
     }
@@ -73,7 +76,6 @@ export function submitRoute(fastify: FastifyInstance) {
     }
     const { form_id, answers, os_user, attachments } = body.data;
 
-    // Validate device.
     const [device] = await db
       .select({ id: agents.id, siteId: agents.siteId, hostname: agents.hostname })
       .from(agents)
@@ -84,9 +86,14 @@ export function submitRoute(fastify: FastifyInstance) {
       return reply.status(401).send({ error: 'Unknown or revoked device' });
     }
 
-    // Load form + PSA mappings (psa_mappings never sent to agents — used here only).
+    // Load form — psa_mappings kept for backward compat with old forms.
     const [form] = await db
-      .select({ rows: agentForms.rows, psaMappings: agentForms.psaMappings })
+      .select({
+        rows: agentForms.rows,
+        psaMappings: agentForms.psaMappings,
+        ticketTitle: agentForms.ticketTitle,
+        ticketBody: agentForms.ticketBody,
+      })
       .from(agentForms)
       .where(and(eq(agentForms.id, form_id), isNull(agentForms.deletedAt)))
       .limit(1);
@@ -95,16 +102,72 @@ export function submitRoute(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Form not found' });
     }
 
+    // Build per-field index: hydrationKey → answer, and collect psaMetric fields.
+    type FieldDef = {
+      id: string;
+      hydrationKey?: string;
+      psaMetric?: string;
+      optionMappings?: Record<string, string>;
+    };
+
+    const allFields: FieldDef[] = [];
+    const rows = Array.isArray(form.rows) ? form.rows : [];
+    for (const row of rows as Array<{ cols?: unknown[] }>) {
+      for (const col of row.cols ?? []) {
+        const f = col as FieldDef;
+        if (f.id) allFields.push(f);
+      }
+    }
+
+    // Hydration map: {{key}} → answer value
+    const hydration: Record<string, string> = {
+      device_hostname: device.hostname ?? '',
+      os_user: os_user.username,
+      os_display_name: os_user.display_name ?? os_user.username,
+    };
+    for (const f of allFields) {
+      if (f.hydrationKey && answers[f.id] !== undefined) {
+        hydration[f.hydrationKey] = String(answers[f.id] ?? '');
+      }
+    }
+
+    function hydrate(template: string): string {
+      return template.replace(/\{\{(\w+)\}\}/g, (_, k) => hydration[k] ?? '');
+    }
+
+    // PSA metric map: metric name → resolved PSA value
+    const psaMetrics: Record<string, string> = {};
+    for (const f of allFields) {
+      if (!f.psaMetric || answers[f.id] === undefined) continue;
+      const raw = String(answers[f.id] ?? '');
+      const mapped = f.optionMappings?.[raw];
+      psaMetrics[f.psaMetric] = mapped ?? raw;
+    }
+
+    // Derive ticket fields — prefer new template system, fall back to old psaMappings.
     const mappings = (form.psaMappings ?? {}) as Record<string, PsaMapping>;
+    const hasNewSystem = !!(form.ticketTitle || form.ticketBody || allFields.some(f => f.hydrationKey));
 
-    // Extract standard ticket fields via mappings.
-    const summary    = getField(answers, mappings, 'summary') || `Support request from ${os_user.username}`;
-    const description = getField(answers, mappings, 'description');
-    const contactName = getField(answers, mappings, 'name') || os_user.display_name || os_user.username;
-    const email       = getField(answers, mappings, 'email');
-    const phone       = getField(answers, mappings, 'phone');
+    let summary: string;
+    let description: string;
+    let contactName: string;
+    let email: string;
+    let phone: string;
 
-    // Load PSA config.
+    if (hasNewSystem) {
+      summary     = form.ticketTitle ? hydrate(form.ticketTitle) : (hydration['summary'] || `Support request from ${os_user.username}`);
+      description = form.ticketBody ? hydrate(form.ticketBody) : (hydration['description'] ?? '');
+      email       = psaMetrics['contact_email'] ?? hydration['contact_email'] ?? '';
+      contactName = psaMetrics['contact_name'] ?? hydration['contact_name'] ?? os_user.display_name ?? os_user.username;
+      phone       = psaMetrics['contact_phone'] ?? hydration['contact_phone'] ?? '';
+    } else {
+      summary     = getField(answers, mappings, 'summary') || `Support request from ${os_user.username}`;
+      description = getField(answers, mappings, 'description');
+      contactName = getField(answers, mappings, 'name') || os_user.display_name || os_user.username;
+      email       = getField(answers, mappings, 'email');
+      phone       = getField(answers, mappings, 'phone');
+    }
+
     const [[psaIntegration], [psaLink]] = await Promise.all([
       db.select().from(integrations).where(eq(integrations.id, 'halopsa')).limit(1),
       db.select().from(integrationLinks)
@@ -123,7 +186,6 @@ export function submitRoute(fastify: FastifyInstance) {
 
     const linkedPsaSiteId = psaLink.externalId ?? undefined;
 
-    // Verify linked PSA site (fall back gracefully).
     let linkedHaloSite: HaloPSASite | null = null;
     if (linkedPsaSiteId) {
       try {
@@ -136,7 +198,6 @@ export function submitRoute(fastify: FastifyInstance) {
     const psaSiteId = (linkedHaloSite ? linkedPsaSiteId : psaConfig.fallbackSiteId) || undefined;
     const usingFallback = !!linkedPsaSiteId && !linkedHaloSite;
 
-    // Match asset (best-effort).
     let assetIds: number[] = [];
     if (psaSiteId && !usingFallback) {
       try {
@@ -148,7 +209,6 @@ export function submitRoute(fastify: FastifyInstance) {
       }
     }
 
-    // Look up contact by email (best-effort).
     let contactId: number | undefined;
     if (email) {
       try {
@@ -159,7 +219,6 @@ export function submitRoute(fastify: FastifyInstance) {
       }
     }
 
-    // Upload image attachments (best-effort).
     const imageUrls: string[] = [];
     for (const att of attachments) {
       if (!att.mime_type.startsWith('image/')) continue;
@@ -175,23 +234,39 @@ export function submitRoute(fastify: FastifyInstance) {
       }
     }
 
-    const images = imageUrls
+    const imageHtml = imageUrls
       .map((src) => `<img src="${src}" class="fr-fil fr-dib" width="720" height="374">`)
       .join('<br>');
 
-    const detailLines = [
-      `[Agent Form Submission]`,
-      `Summary: ${summary}`,
-      description ? `Details: ${description}` : '',
-      `User: ${contactName}`,
-      email ? `Email: ${email}` : '',
-      phone ? `Phone: ${phone}` : '',
-      `Device: ${device.hostname}`,
-      `OS User: ${os_user.username}`,
-      os_user.sid ? `SID: ${os_user.sid}` : '',
-    ].filter(Boolean);
+    // Build ticket body HTML. If the MSP defined a body template, hydrate it;
+    // otherwise fall back to the legacy detail-line format.
+    let details_html: string;
+    if (form.ticketBody) {
+      // Markdown-style body → simple HTML (just wrap paras, real markdown rendering is overkill here)
+      const bodyText = hydrate(form.ticketBody);
+      details_html = `<p>${bodyText.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}</p>`;
+      if (imageHtml) details_html += `<p>${imageHtml}</p>`;
+    } else {
+      const detailLines = [
+        `[Agent Form Submission]`,
+        `Summary: ${summary}`,
+        description ? `Details: ${description}` : '',
+        `User: ${contactName}`,
+        email ? `Email: ${email}` : '',
+        phone ? `Phone: ${phone}` : '',
+        `Device: ${device.hostname}`,
+        `OS User: ${os_user.username}`,
+        os_user.sid ? `SID: ${os_user.sid}` : '',
+      ].filter(Boolean);
+      details_html = `<p>${detailLines.join('<br>')}<br>${imageHtml}</p>`;
+    }
 
-    const details_html = `<p>${detailLines.join('<br>')}<br>${images}</p>`;
+    // Map PSA metrics → HaloPSA ticket fields
+    const priority_id = psaMetrics['priority']   ? Number(psaMetrics['priority'])     : 4;
+    const urgency_id  = psaMetrics['urgency']    ? Number(psaMetrics['urgency'])      : undefined;
+    const tickettype_id = psaMetrics['ticket_type'] ? Number(psaMetrics['ticket_type']) : 3;
+    const category_1  = psaMetrics['category']   ?? 'Standard - Incident';
+    const category_2  = psaMetrics['subcategory'] ?? undefined;
 
     const psaParentCompanyId =
       !usingFallback && linkedHaloSite?.client_id != null ? linkedHaloSite.client_id : undefined;
@@ -200,18 +275,20 @@ export function submitRoute(fastify: FastifyInstance) {
     try {
       ticketId = await connector.tickets.create({
         site_id: psaSiteId ? Number(psaSiteId) : undefined,
-        priority_id: 4,
+        priority_id,
+        ...(urgency_id !== undefined ? { urgency_id } : {}),
         files: null,
         usertype: 1,
         user_id: contactId,
         reportedby: email || undefined,
-        tickettype_id: 3,
+        tickettype_id,
         timerinuse: false,
         itil_tickettype_id: '-1',
         tickettype_group_id: '-1',
         summary,
         details_html,
-        category_1: 'Standard - Incident',
+        category_1,
+        ...(category_2 ? { category_2 } : {}),
         donotapplytemplateintheapi: true,
         utcoffset: 300,
         form_id: 'newticket622a2b46-24eb-46b5-b5d1-4b1e6ed66834',

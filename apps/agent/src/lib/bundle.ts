@@ -20,13 +20,19 @@ export type FormDef = {
 };
 
 export type Branding = {
-  companyName: string;
-  accentColor: string;
+  appName?: string;
+  primaryColor?: string;
+  supportEmail?: string;
+  supportPhone?: string;
   logoUrl?: string;
 };
 
 export type Bundle = {
   branding: Branding;
-  tray?: { showTray: boolean };
+  tray?: {
+    show?: boolean;
+    label?: string;
+    showMyTickets?: boolean;
+  };
   forms: FormDef[];
 };

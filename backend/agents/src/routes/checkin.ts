@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { agents } from '@mspbyte/drizzle';
-import { getTenantDb } from '../db.js';
-import { requireDevice } from '../require-device.js';
+import { getTenantDbForOrg } from '../db.js';
+import { requireDevice, requireOrgId } from '../require-device.js';
 import { logger } from '../logger.js';
 import type { FastifyInstance } from 'fastify';
 
@@ -17,9 +17,12 @@ const BodySchema = z.object({
 
 export function checkinRoute(fastify: FastifyInstance) {
   fastify.post('/v2.0/checkin', async (req, reply) => {
-    let db: Awaited<ReturnType<typeof getTenantDb>>;
+    const orgId = requireOrgId(req, reply);
+    if (!orgId) return;
+
+    let db: Awaited<ReturnType<typeof getTenantDbForOrg>>;
     try {
-      db = await getTenantDb();
+      db = await getTenantDbForOrg(orgId);
     } catch {
       return reply.status(503).send({ error: 'Database unavailable' });
     }

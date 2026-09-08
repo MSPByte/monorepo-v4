@@ -1,7 +1,8 @@
-import { uuid, text, integer, jsonb, timestamp, varchar } from 'drizzle-orm/pg-core';
+import { uuid, text, integer, jsonb, timestamp, varchar, boolean, unique, check } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { crudPolicy, authenticatedRole } from 'drizzle-orm/neon';
 import { agentSchema } from '../schemas.js';
-import { sites } from '../public/index.js';
+import { sites, siteGroups } from '../public/index.js';
 
 export const agents = agentSchema.table(
   'agents',
@@ -75,8 +76,8 @@ export const agentTickets = agentSchema.table(
   () => [crudPolicy({ role: authenticatedRole, read: true, modify: true })]
 );
 
-// Per-site enrollment token. Long-standing; MSP regenerates when needed.
-// The plaintext token is never stored — only a SHA-256 hex digest.
+// Per-site enrollment token. The hash enables fast existence checks; the AES-GCM
+// encrypted ciphertext enables plaintext reveal and CSV export without storing raw tokens.
 export const agentSiteTokens = agentSchema.table(
   'site_tokens',
   {
@@ -86,6 +87,7 @@ export const agentSiteTokens = agentSchema.table(
       .unique()
       .references(() => sites.id, { onDelete: 'cascade' }),
     tokenHash: text('token_hash').notNull(),
+    tokenEncrypted: text('token_encrypted'),
     label: text('label'),
     createdBy: text('created_by'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
@@ -105,6 +107,8 @@ export const agentForms = agentSchema.table(
     name: text('name').notNull(),
     description: text('description'),
     rows: jsonb('rows').notNull().default([]),
+    ticketTitle: text('ticket_title'),
+    ticketBody: text('ticket_body'),
     psaMappings: jsonb('psa_mappings').notNull().default({}),
     createdBy: uuid('created_by'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
@@ -118,18 +122,21 @@ export const agentForms = agentSchema.table(
   () => [crudPolicy({ role: authenticatedRole, read: true, modify: true })]
 );
 
-// Per-site config bundle: branding, tray menu, form definitions.
-// The etag is a SHA-256 hex digest of the data JSON used for 304 responses.
+// Tenant-wide named config bundles (branding, tray, form list).
+// Previously per-site; now reusable configs assigned to sites or site groups via agentBundleAssignments.
+// The etag is a SHA-256 hex digest of the data JSON, used for 304 responses when agents poll.
 export const agentBundles = agentSchema.table(
   'bundles',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    siteId: uuid('site_id')
-      .notNull()
-      .unique()
-      .references(() => sites.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description'),
+    isDefault: boolean('is_default').notNull().default(false),
     etag: varchar('etag', { length: 64 }).notNull(),
     data: jsonb('data').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
       .notNull()
       .defaultNow(),
@@ -138,9 +145,33 @@ export const agentBundles = agentSchema.table(
   () => [crudPolicy({ role: authenticatedRole, read: true, modify: true })]
 );
 
+// Maps a named config bundle to a site or site group.
+// Resolution order at bundle serve time: site assignment → site group assignment → isDefault bundle.
+export const agentBundleAssignments = agentSchema.table(
+  'bundle_assignments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    bundleId: uuid('bundle_id')
+      .notNull()
+      .references(() => agentBundles.id, { onDelete: 'cascade' }),
+    siteId: uuid('site_id').references(() => sites.id, { onDelete: 'cascade' }),
+    siteGroupId: uuid('site_group_id').references(() => siteGroups.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    unique('bundle_assignments_site_unique').on(t.siteId),
+    unique('bundle_assignments_site_group_unique').on(t.siteGroupId),
+    check('chk_assignment_target', sql`(${t.siteId} IS NOT NULL AND ${t.siteGroupId} IS NULL) OR (${t.siteId} IS NULL AND ${t.siteGroupId} IS NOT NULL)`),
+    crudPolicy({ role: authenticatedRole, read: true, modify: true }),
+  ]
+);
+
 export type Agent = typeof agents.$inferSelect;
 export type AgentLog = typeof agentLogs.$inferSelect;
 export type AgentTicket = typeof agentTickets.$inferSelect;
 export type AgentSiteToken = typeof agentSiteTokens.$inferSelect;
 export type AgentBundle = typeof agentBundles.$inferSelect;
+export type AgentBundleAssignment = typeof agentBundleAssignments.$inferSelect;
 export type AgentForm = typeof agentForms.$inferSelect;

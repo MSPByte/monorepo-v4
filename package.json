@@ -4,7 +4,8 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
-    "dev:agent": "turbo run dev --filter=agent --filter=agents",
+    "dev:agent": "turbo run dev --filter=agent --filter=agents --filter=agent-core",
+    "build:agent": "bash apps/agent-core/build-release.sh && bun run --cwd apps/agent build",
     "dev:web": "turbo run dev --filter=frontend --filter=@mspbyte/shared --filter=@mspbyte/trpc",
     "dev:pipeline": "INGESTION_SCHEDULER_ENABLED=false turbo run dev --filter=ingestion --filter=normalize --filter=policies --filter=packages",
     "dev:pipeline:scheduled": "turbo run dev --filter=ingestion --filter=normalize --filter=policies --filter=packages-worker",

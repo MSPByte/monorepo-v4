@@ -12,6 +12,7 @@ export default defineConfig(async () => ({
       input: {
         main: "./index.html", // Main app
         about: "./about.html", // About window
+        tickets: "./tickets.html", // My Tickets window
       },
     },
   },

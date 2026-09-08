@@ -86,13 +86,20 @@ function normalizeLicense(raw: SophosLicense): RecordValue {
 
 function normalizeFirewallLicense(raw: SophosFirewallLicense): RecordValue {
   return {
-    externalId: raw.serialNumber,
+    externalId: raw.id,
     serialNumber: raw.serialNumber,
-    ownerType: raw.owner.type,
-    model: raw.model,
-    modelType: raw.modelType === 'virtual' ? 'virtual' : 'hardware',
-    licenses: raw.licenses,
-    lastCheckedAt: dateString(raw.lastSeenAt),
+    licenseIdentifier: raw.licenseIdentifier,
+    productCode: raw.product.code,
+    productName: raw.product.name ?? raw.product.code,
+    productGenericCode: raw.product.genericCode ?? null,
+    type: raw.type,
+    perpetual: raw.perpetual,
+    quantity: raw.quantity ?? null,
+    usageCount: raw.usage?.current?.count ?? null,
+    usageDate: dateString(raw.usage?.current?.date),
+    usageCollectedAt: dateString(raw.usage?.current?.collectedAt),
+    startedAt: dateString(raw.startDate),
+    endsAt: dateString(raw.endDate),
   };
 }
 

@@ -2,7 +2,6 @@
   import { getContext } from 'svelte';
   import { createQuery } from '@tanstack/svelte-query';
   import { scopeStore } from '$lib/stores/scope.store.svelte';
-  import { cn } from '$lib/utils';
   import type { createTrpcClient } from '$lib/trpc';
   import type { DataTableColumn } from '$lib/components/data-table/types';
   import VendorDataTable from '$lib/components/data-table/vendor-data-table.svelte';
@@ -12,7 +11,7 @@
     relativeDateColumn,
     textColumn,
   } from '$lib/components/data-table/column-defs';
-  import * as Sheet from '$lib/components/ui/sheet/index.js';
+  import SophosFirewallDetailSheet from '$lib/components/domain/sophos-firewall-detail-sheet.svelte';
 
   import type { sophosFirewallsWithSite } from '@mspbyte/drizzle';
 
@@ -89,17 +88,6 @@
   ] as DataTableColumn<FirewallRow>[]);
 
   let drawerFirewall = $state<FirewallRow | null>(null);
-
-  function relativeTime(ts?: string | number | null) {
-    if (!ts) return '—';
-    const diff = Date.now() - new Date(ts).getTime();
-    const mins = Math.floor(diff / 60_000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    return `${Math.floor(hrs / 24)}d ago`;
-  }
 </script>
 
 {#if scopeStore.currentSite && siteLinkQuery.isLoading}
@@ -122,50 +110,10 @@
   />
 {/if}
 
-<!-- Firewall detail sheet -->
-<Sheet.Root
+<SophosFirewallDetailSheet
   open={!!drawerFirewall}
+  firewall={drawerFirewall}
   onOpenChange={(open) => {
     if (!open) drawerFirewall = null;
   }}
->
-  <Sheet.Content side="right" class="w-80 flex flex-col p-0">
-    {#if drawerFirewall}
-      {@const fw = drawerFirewall}
-      <Sheet.Header class="p-4 border-b">
-        <Sheet.Title>{String(fw['name'] ?? '—')}</Sheet.Title>
-        <Sheet.Description class="flex gap-1.5 mt-1">
-          <span
-            class={cn(
-              'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium',
-              fw['connected'] ? 'bg-success/15 text-success' : 'bg-muted text-muted-foreground'
-            )}
-          >
-            {fw['connected'] ? 'Online' : 'Offline'}
-          </span>
-          {#if fw['upgradeToVersion']}
-            <span
-              class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-warning/20 text-warning"
-            >
-              Upgrade Available
-            </span>
-          {/if}
-        </Sheet.Description>
-      </Sheet.Header>
-
-      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-2.5">
-        <div class="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-          Details
-        </div>
-        {#each [{ label: 'Hostname', value: fw['hostname'] }, { label: 'Model', value: fw['model'] }, { label: 'Serial', value: fw['serialNumber'] }, { label: 'External IP', value: fw['externalIp'] }, { label: 'Firmware', value: fw['firmwareVersion'] }, { label: 'Upgrade To', value: fw['upgradeToVersion'] }, { label: 'Managing', value: fw['managing'] }, { label: 'Reporting', value: fw['reporting'] }, { label: 'Suspended', value: fw['suspended'] ? 'Yes' : null }, { label: 'Last Change', value: relativeTime(fw['lastChangeAt'] as string | null) }] as item}
-          {#if item.value}
-            <div class="flex justify-between text-xs gap-2">
-              <span class="text-muted-foreground shrink-0">{item.label}</span>
-              <span class="font-medium text-right font-mono">{String(item.value)}</span>
-            </div>
-          {/if}
-        {/each}
-      </div>
-    {/if}
-  </Sheet.Content>
-</Sheet.Root>
+/>

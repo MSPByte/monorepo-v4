@@ -1,4 +1,4 @@
-import { uuid, text, boolean, integer, jsonb, timestamp, unique, index } from 'drizzle-orm/pg-core';
+import { uuid, text, boolean, integer, timestamp, unique, index } from 'drizzle-orm/pg-core';
 import { crudPolicy, authenticatedRole } from 'drizzle-orm/neon';
 import { vendorsSchema } from '../schemas.js';
 import { integrationLinks, sites, users } from '../public/index.js';
@@ -138,11 +138,18 @@ export const sophosFirewallLicenses = vendorsSchema.table(
     externalId: text('external_id').notNull(),
     sourceHash: text('source_hash'),
     serialNumber: text('serial_number').notNull(),
-    ownerType: text('owner_type').notNull(),
-    model: text('model').notNull(),
-    modelType: text('model_type', { enum: ['virtual', 'hardware'] }).notNull(),
-    licenses: jsonb('licenses').notNull().default([]),
-    lastCheckedAt: timestamp('last_checked_at', { withTimezone: true, mode: 'string' }),
+    licenseIdentifier: text('license_identifier').notNull(),
+    productCode: text('product_code').notNull(),
+    productName: text('product_name').notNull(),
+    productGenericCode: text('product_generic_code'),
+    type: text('type').notNull(),
+    perpetual: boolean('perpetual').notNull(),
+    quantity: integer('quantity'),
+    usageCount: integer('usage_count'),
+    usageDate: timestamp('usage_date', { withTimezone: true, mode: 'string' }),
+    usageCollectedAt: timestamp('usage_collected_at', { withTimezone: true, mode: 'string' }),
+    startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+    endsAt: timestamp('ends_at', { withTimezone: true, mode: 'string' }),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' })
       .notNull()
       .defaultNow(),
@@ -153,7 +160,12 @@ export const sophosFirewallLicenses = vendorsSchema.table(
       .notNull()
       .defaultNow()
   },
-  (t) => [unique().on(t.linkId, t.externalId), rls]
+  (t) => [
+    unique().on(t.linkId, t.externalId),
+    index('sophos_firewall_licenses_serial_idx').on(t.serialNumber),
+    index('sophos_firewall_licenses_product_name_idx').on(t.productName),
+    rls
+  ]
 );
 
 export const sophosEndpointMigrations = vendorsSchema.table(

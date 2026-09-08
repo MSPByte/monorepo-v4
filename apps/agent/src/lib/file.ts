@@ -18,6 +18,29 @@ export async function takeScreenshot(): Promise<APIResponse<string>> {
   }
 }
 
+export async function chooseFileDialog(): Promise<APIResponse<string>> {
+  try {
+    const file = await open({
+      multiple: false,
+      directory: false,
+    });
+
+    if (!file) {
+      throw 'No file selected.';
+    }
+
+    return {
+      data: file,
+    };
+  } catch (err) {
+    return Logger.error({
+      module: 'File',
+      context: 'chooseFileDialog',
+      message: String(err),
+    });
+  }
+}
+
 export async function chooseImageDialog(): Promise<APIResponse<string>> {
   try {
     const file = await open({

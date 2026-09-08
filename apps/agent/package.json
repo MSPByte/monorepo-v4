@@ -4,9 +4,9 @@
   "version": "0.1.21",
   "type": "module",
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "MSPAGENT_DEV=1 tauri dev",
     "dev:frontend": "vite",
-    "builds": "tauri build",
+    "build": "tauri build",
     "build:app": "tsc && vite build",
     "check-types": "tsc --noEmit",
     "preview": "vite preview",

@@ -5,7 +5,7 @@ mod logger;
 
 use base64::engine::general_purpose;
 use base64::Engine;
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::{Arc, Mutex}};
 use tauri::{
     AppHandle, Emitter, EventTarget, Manager, WebviewUrl, WebviewWindowBuilder,
     tray::TrayIconBuilder,
@@ -17,6 +17,9 @@ use device_manager::{get_settings, get_rmm_device_id};
 use heartbeat::gather_system_info;
 use heartbeat::HeartbeatRequest;
 use logger::log_to_file;
+
+#[derive(Clone)]
+struct TrayActions(Arc<Mutex<Vec<String>>>);
 
 #[cfg(target_os = "windows")]
 fn acquire_single_instance_lock() -> Option<windows_sys::Win32::Foundation::HANDLE> {
@@ -89,7 +92,9 @@ pub fn run() {
                 let show_tray = bundle
                     .as_ref()
                     .and_then(|b| b.get("tray"))
-                    .and_then(|t| t.get("showTray"))
+                    // `show` is the current bundle contract. Keep the former
+                    // camelCase spelling readable for already-published bundles.
+                    .and_then(|t| t.get("show").or_else(|| t.get("showTray")))
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
@@ -98,28 +103,71 @@ pub fn run() {
                     return;
                 }
 
-                // Extract tray items: [{id, label, action}] from bundle.tray.items
-                let items: Vec<(String, String)> = bundle
+                let mut items: Vec<(String, String)> = bundle
                     .as_ref()
-                    .and_then(|b| b.get("tray"))
-                    .and_then(|t| t.get("items"))
+                    .and_then(|b| b.get("forms"))
                     .and_then(|v| v.as_array())
                     .map(|arr| {
                         arr.iter()
                             .filter_map(|item| {
-                                let label = item.get("label")?.as_str()?.to_string();
-                                let action = item.get("action")?.as_str()?.to_string();
-                                Some((label, action))
+                                let id = item.get("id")?.as_str()?;
+                                let label = item.get("name")?.as_str()?.to_string();
+                                Some((label, format!("open_form:{}", id)))
                             })
                             .collect()
                     })
-                    .unwrap_or_else(|| {
-                        // Default fallback item when bundle provides no items
-                        vec![("Request Support".into(), "open_support".into())]
-                    });
+                    .unwrap_or_default();
 
-                if let Err(e) = create_bundle_tray(&app_handle, items) {
+                let show_my_tickets = bundle
+                    .as_ref()
+                    .and_then(|b| b.get("tray"))
+                    .and_then(|t| t.get("showMyTickets"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                if show_my_tickets {
+                    items.push(("My Tickets".into(), "open_tickets".into()));
+                }
+
+                let tooltip = bundle
+                    .as_ref()
+                    .and_then(|b| b.get("tray"))
+                    .and_then(|t| t.get("label"))
+                    .and_then(|v| v.as_str())
+                    .or_else(|| bundle.as_ref().and_then(|b| b.get("branding")).and_then(|b| b.get("appName")).and_then(|v| v.as_str()))
+                    .unwrap_or("IT Support");
+                let logo_url = bundle
+                    .as_ref()
+                    .and_then(|b| b.get("branding"))
+                    .and_then(|b| b.get("logoUrl"))
+                    .and_then(|v| v.as_str());
+
+                if let Some(window) = app_handle.get_webview_window("support") {
+                    let display_name = bundle
+                        .as_ref()
+                        .and_then(|b| b.get("branding"))
+                        .and_then(|b| b.get("appName"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("IT Support");
+                    let _ = window.set_title(display_name);
+                }
+
+                if let Err(e) = create_bundle_tray(&app_handle, items, tooltip, logo_url) {
                     log_to_file(String::from("ERROR"), format!("Failed to create tray: {}", e));
+                }
+
+                // agent-core atomically replaces its cached bundle. Poll its IPC view
+                // so an already-running tray reflects the next successful fetch.
+                let mut last_etag = ipc_client::get_config_bundle().await.ok().and_then(|p| p.etag);
+                loop {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                    let Ok(payload) = ipc_client::get_config_bundle().await else { continue };
+                    if payload.etag == last_etag { continue; }
+                    last_etag = payload.etag;
+                    if let Some(bundle) = payload.bundle {
+                        if let Err(e) = refresh_bundle_tray(&app_handle, &bundle) {
+                            log_to_file(String::from("ERROR"), format!("Failed to refresh tray: {}", e));
+                        }
+                    }
                 }
             });
 
@@ -147,6 +195,7 @@ pub fn run() {
             submit_form,
             get_tickets,
             add_ticket_note,
+            get_ticket_detail,
             hide_window,
             show_window,
             take_screenshot,
@@ -156,7 +205,8 @@ pub fn run() {
             read_registry_value,
             log_to_file,
             get_os_info,
-            get_rmm_id
+            get_rmm_id,
+            get_pending_events
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -164,7 +214,12 @@ pub fn run() {
 
 /// Build the system tray from bundle-supplied items.
 /// Each item is `(label, action)` where action is currently `"open_support"`.
-fn create_bundle_tray(app: &AppHandle, items: Vec<(String, String)>) -> Result<(), Box<dyn std::error::Error>> {
+fn create_bundle_tray(
+    app: &AppHandle,
+    items: Vec<(String, String)>,
+    tooltip: &str,
+    logo_url: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     log_to_file(String::from("INFO"), String::from("Creating bundle-driven tray icon"));
 
     let mut menu_items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
@@ -182,11 +237,13 @@ fn create_bundle_tray(app: &AppHandle, items: Vec<(String, String)>) -> Result<(
     let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
         menu_items.iter().map(|b| b.as_ref()).collect();
 
-    let menu = Menu::with_items(app, refs.as_slice())?;
     let actions = items.into_iter().map(|(_, a)| a).collect::<Vec<_>>();
+    app.manage(TrayActions(Arc::new(Mutex::new(actions))));
+    let menu = Menu::with_items(app, refs.as_slice())?;
 
-    let _tray = TrayIconBuilder::new()
-        .icon(app.default_window_icon().unwrap().clone())
+    let tray = TrayIconBuilder::new()
+        .icon(tray_icon(app, logo_url))
+        .tooltip(tooltip)
         .menu(&menu)
         .on_menu_event(move |app, event| {
             let id = event.id.as_ref();
@@ -197,9 +254,22 @@ fn create_bundle_tray(app: &AppHandle, items: Vec<(String, String)>) -> Result<(
             // bundle_item_<idx>
             if let Some(rest) = id.strip_prefix("bundle_item_") {
                 if let Ok(idx) = rest.parse::<usize>() {
-                    let action = actions.get(idx).map(|s| s.as_str()).unwrap_or("");
-                    match action {
+                    let action = app
+                        .state::<TrayActions>()
+                        .0
+                        .lock()
+                        .ok()
+                        .and_then(|actions| actions.get(idx).cloned())
+                        .unwrap_or_default();
+                    match action.as_str() {
                         "open_support" => handle_support_window(app, false),
+                        "open_tickets" => {
+                            handle_tickets_window(app);
+                        }
+                        _ if action.starts_with("open_form:") => {
+                            handle_support_window(app, false);
+                            let _ = app.emit("open_form", action.trim_start_matches("open_form:"));
+                        }
                         _ => {}
                     }
                 }
@@ -207,14 +277,63 @@ fn create_bundle_tray(app: &AppHandle, items: Vec<(String, String)>) -> Result<(
         })
         .build(app)?;
 
+    // Tauri removes a tray icon when its last `TrayIcon` handle is dropped.
+    // Store it in managed application state for the lifetime of the app.
+    app.manage(tray);
+
     log_to_file(String::from("INFO"), String::from("Bundle tray created successfully"));
     Ok(())
 }
 
-fn handle_about_window(app: &AppHandle) {
-    let app_handle = app.clone();
+fn refresh_bundle_tray(app: &AppHandle, bundle: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+    let tray = app.state::<tauri::tray::TrayIcon<tauri::Wry>>();
+    let show_tray = bundle.get("tray")
+        .and_then(|t| t.get("show").or_else(|| t.get("showTray")))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    tray.set_visible(show_tray)?;
+    if !show_tray { return Ok(()); }
 
-    let window = if let Some(window) = app_handle.get_webview_window("about") {
+    let mut items: Vec<(String, String)> = bundle.get("forms").and_then(|v| v.as_array())
+        .map(|forms| forms.iter().filter_map(|form| {
+            Some((form.get("name")?.as_str()?.to_string(), format!("open_form:{}", form.get("id")?.as_str()?)))
+        }).collect())
+        .unwrap_or_default();
+    if bundle.get("tray").and_then(|t| t.get("showMyTickets")).and_then(|v| v.as_bool()).unwrap_or(true) {
+        items.push(("My Tickets".into(), "open_tickets".into()));
+    }
+    let tooltip = bundle.get("tray").and_then(|t| t.get("label")).and_then(|v| v.as_str())
+        .or_else(|| bundle.get("branding").and_then(|b| b.get("appName")).and_then(|v| v.as_str()))
+        .unwrap_or("IT Support");
+    let logo_url = bundle.get("branding").and_then(|b| b.get("logoUrl")).and_then(|v| v.as_str());
+
+    let mut menu_items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
+    for (idx, (label, _)) in items.iter().enumerate() {
+        menu_items.push(Box::new(MenuItem::with_id(app, format!("bundle_item_{}", idx), label, true, None::<&str>)?));
+    }
+    menu_items.push(Box::new(MenuItem::with_id(app, "about", "About", true, None::<&str>)?));
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = menu_items.iter().map(|item| item.as_ref()).collect();
+    tray.set_menu(Some(Menu::with_items(app, refs.as_slice())?))?;
+    *app.state::<TrayActions>().0.lock().map_err(|_| "tray actions lock poisoned")? = items.into_iter().map(|(_, action)| action).collect();
+    tray.set_tooltip(Some(tooltip))?;
+    tray.set_icon(Some(tray_icon(app, logo_url)))?;
+    Ok(())
+}
+
+fn tray_icon(app: &AppHandle, logo_url: Option<&str>) -> tauri::image::Image<'static> {
+    logo_url
+        .and_then(|url| url.split_once(','))
+        .and_then(|(_, encoded)| general_purpose::STANDARD.decode(encoded).ok())
+        .and_then(|bytes| image::load_from_memory(&bytes).ok())
+        .map(|image| {
+            let rgba = image.to_rgba8();
+            tauri::image::Image::new_owned(rgba.to_vec(), rgba.width(), rgba.height())
+        })
+        .unwrap_or_else(|| app.default_window_icon().expect("default tray icon").clone().to_owned())
+}
+
+fn handle_about_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("about") {
         let _ = window.show();
         let _ = window.set_focus();
     } else {
@@ -223,7 +342,20 @@ fn handle_about_window(app: &AppHandle) {
             .inner_size(300.0, 300.0)
             .build()
             .expect("Failed to create about window");
-    };
+    }
+}
+
+fn handle_tickets_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("tickets") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    } else {
+        WebviewWindowBuilder::new(app, "tickets", WebviewUrl::App("tickets.html".into()))
+            .title("My Tickets")
+            .inner_size(1000.0, 800.0)
+            .build()
+            .expect("Failed to create My Tickets window");
+    }
 }
 
 fn create_support_window(app: &AppHandle) {
@@ -503,6 +635,7 @@ async fn add_ticket_note(
     note: String,
     os_username: String,
     os_user_sid: Option<String>,
+    attachments: Vec<agent_ipc::NoteAttachmentPayload>,
 ) -> Result<agent_ipc::TicketNoteAckPayload, String> {
     log_to_file(
         String::from("INFO"),
@@ -516,8 +649,27 @@ async fn add_ticket_note(
             sid: os_user_sid,
             display_name: None,
         },
+        attachments,
     )
     .await
+}
+
+#[tauri::command]
+async fn get_ticket_detail(ticket_id: String) -> Result<agent_ipc::TicketDetailPayload, String> {
+    log_to_file(
+        String::from("INFO"),
+        format!("get_ticket_detail command invoked for ticket {}", ticket_id),
+    );
+    ipc_client::get_ticket_detail(ticket_id).await
+}
+
+#[tauri::command]
+async fn get_pending_events(app: AppHandle) -> Result<(), String> {
+    let payload = ipc_client::get_pending_events().await?;
+    for event in payload.events {
+        let _ = app.emit("push-event", &event);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -594,14 +746,7 @@ fn read_registry_value(_path: &str, _key: &str) -> Result<String, String> {
 
 #[tauri::command]
 async fn get_os_info() -> Result<HeartbeatRequest, String> {
-    match gather_system_info().await {
-        Ok(info) => {
-            return Ok(info);
-        }
-        Err(e) => {
-            return Err(String::from("Failed to get system info"))
-        }
-    }
+    gather_system_info().await.map_err(|e| format!("Failed to get system info: {}", e))
 }
 
 #[tauri::command]

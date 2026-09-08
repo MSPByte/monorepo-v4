@@ -1,10 +1,12 @@
 use agent_ipc::{
-    ConfigBundlePayload, Envelope, ErrorPayload, GetTicketsPayload, IpcListener, Message,
-    OsUserPayload, StatusPayload, SubmitFormAckPayload, TicketListPayload, TicketNoteAckPayload,
-    TicketSummary,
+    ConfigBundlePayload, Envelope, ErrorPayload, IpcListener, Message,
+    OsUserPayload, PendingEventsPayload, StatusPayload, SubmitFormAckPayload,
+    TicketActionSummary, TicketDetailPayload, TicketListPayload, TicketNoteAckPayload, TicketSummary,
 };
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::RwLock;
+
+use crate::ws_client::EventsQueue;
 
 use crate::{
     bundle::load_cached,
@@ -18,6 +20,7 @@ pub async fn run_ipc_server(
     root: PathBuf,
     cfg: Config,
     state: Arc<RwLock<State>>,
+    events: EventsQueue,
 ) {
     let listener = match IpcListener::bind(&socket_path) {
         Ok(l) => l,
@@ -34,9 +37,10 @@ pub async fn run_ipc_server(
                 let state = state.clone();
                 let root = root.clone();
                 let cfg = cfg.clone();
+                let events = events.clone();
                 tokio::spawn(async move {
                     let _ = conn
-                        .handle(|req| async move { dispatch(req, root, cfg, state).await })
+                        .handle(|req| async move { dispatch(req, root, cfg, state, events).await })
                         .await;
                 });
             }
@@ -47,7 +51,7 @@ pub async fn run_ipc_server(
     }
 }
 
-async fn dispatch(req: Envelope, root: PathBuf, cfg: Config, state: Arc<RwLock<State>>) -> Envelope {
+async fn dispatch(req: Envelope, root: PathBuf, cfg: Config, state: Arc<RwLock<State>>, events: EventsQueue) -> Envelope {
     let s = state.read().await;
     match &req.message {
         Message::Ping => req.reply(Message::Pong),
@@ -101,6 +105,7 @@ async fn dispatch(req: Envelope, root: PathBuf, cfg: Config, state: Arc<RwLock<S
             match client
                 .post(&url)
                 .header("X-Device-ID", &device_id)
+                .header("X-Org-ID", &cfg.agent.org_id)
                 .json(payload)
                 .send()
                 .await
@@ -141,7 +146,8 @@ async fn dispatch(req: Envelope, root: PathBuf, cfg: Config, state: Arc<RwLock<S
             let client = reqwest::Client::new();
             let mut rb = client
                 .get(format!("{}/v2.0/tickets", cfg.agent.server_url))
-                .header("X-Device-ID", &device_id);
+                .header("X-Device-ID", &device_id)
+                .header("X-Org-ID", &cfg.agent.org_id);
             if let Some(sid) = &sid {
                 rb = rb.header("X-OS-SID", sid);
             }
@@ -183,6 +189,7 @@ async fn dispatch(req: Envelope, root: PathBuf, cfg: Config, state: Arc<RwLock<S
             match client
                 .post(&url)
                 .header("X-Device-ID", &device_id)
+                .header("X-Org-ID", &cfg.agent.org_id)
                 .json(payload)
                 .send()
                 .await
@@ -202,6 +209,65 @@ async fn dispatch(req: Envelope, root: PathBuf, cfg: Config, state: Arc<RwLock<S
                     message: format!("Request failed: {}", e),
                 })),
             }
+        }
+
+        Message::GetTicketDetail(payload) => {
+            let ticket_id = payload.ticket_id.clone();
+            let device_id = match &s.device_id {
+                Some(id) => id.clone(),
+                None => return req.reply(Message::Error(ErrorPayload {
+                    code: "not_enrolled".into(),
+                    message: "Device is not enrolled".into(),
+                })),
+            };
+            drop(s);
+            let url = format!("{}/v2.0/tickets/{}", cfg.agent.server_url, ticket_id);
+            let client = reqwest::Client::new();
+            match client
+                .get(&url)
+                .header("X-Device-ID", &device_id)
+                .header("X-Org-ID", &cfg.agent.org_id)
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                    let data = &body["data"];
+                    let returned_ticket_id = data["ticket_id"]
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| ticket_id.clone());
+                    let actions: Vec<TicketActionSummary> = data["actions"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    req.reply(Message::TicketDetail(TicketDetailPayload {
+                        ticket_id: returned_ticket_id,
+                        actions,
+                    }))
+                }
+                Ok(resp) => req.reply(Message::Error(ErrorPayload {
+                    code: "ticket_detail_error".into(),
+                    message: format!("Server returned {}", resp.status()),
+                })),
+                Err(e) => req.reply(Message::Error(ErrorPayload {
+                    code: "ticket_detail_error".into(),
+                    message: format!("Request failed: {}", e),
+                })),
+            }
+        }
+
+        Message::GetPendingEvents => {
+            drop(s);
+            let drained: Vec<_> = {
+                let mut q = events.lock().await;
+                q.drain(..).collect()
+            };
+            req.reply(Message::PendingEvents(PendingEventsPayload { events: drained }))
         }
 
         _ => req.reply(Message::Error(ErrorPayload {

@@ -40,9 +40,17 @@ pub enum Message {
     AddTicketNote(AddTicketNotePayload),
     TicketNoteAck(TicketNoteAckPayload),
 
+    // Ticket detail — full action thread for a single ticket
+    GetTicketDetail(GetTicketDetailPayload),
+    TicketDetail(TicketDetailPayload),
+
     // OS user info
     GetOsUser,
     OsUser(OsUserPayload),
+
+    // Pending push events — drain the in-process queue from WS pushes
+    GetPendingEvents,
+    PendingEvents(PendingEventsPayload),
 
     // Generic error response
     Error(ErrorPayload),
@@ -103,6 +111,12 @@ pub struct TicketSummary {
     pub ticket_id: String,  // PSA ticket ID
     pub summary: String,
     pub created_at: String,
+    #[serde(default)]
+    pub status_id: Option<i64>,
+    #[serde(default)]
+    pub status_name: Option<String>,
+    #[serde(default)]
+    pub is_open: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,10 +125,39 @@ pub struct TicketListPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoteAttachmentPayload {
+    pub name: String,
+    pub mime_type: String,
+    pub data_b64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddTicketNotePayload {
     pub ticket_id: String,  // PSA ticket ID
     pub note: String,
     pub os_user: OsUserPayload,
+    pub attachments: Vec<NoteAttachmentPayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetTicketDetailPayload {
+    pub ticket_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TicketActionSummary {
+    pub id: String,
+    pub note_html: String,
+    pub note: String,
+    pub who: String,
+    pub is_agent: bool,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TicketDetailPayload {
+    pub ticket_id: String,
+    pub actions: Vec<TicketActionSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +171,19 @@ pub struct OsUserPayload {
     pub username: String,
     pub sid: Option<String>,
     pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PendingEventEntry {
+    BundleUpdated { etag: Option<String> },
+    TicketNoteAdded { ticket_id: String },
+    TicketStatusChanged { ticket_id: String, status_name: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingEventsPayload {
+    pub events: Vec<PendingEventEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

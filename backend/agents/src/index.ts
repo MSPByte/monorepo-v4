@@ -4,6 +4,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
+import websocket from '@fastify/websocket';
 import { env } from './env.js';
 import { logger } from './logger.js';
 import { registerRoute } from './routes/register.js';
@@ -16,10 +17,13 @@ import { bundleRoute } from './routes/bundle.js';
 import { submitRoute } from './routes/submit.js';
 import { ticketsV2Route } from './routes/tickets_v2.js';
 import { updatesRoute } from './routes/updates.js';
+import { wsRoute } from './routes/ws.js';
+import { internalRoutes } from './routes/internal.js';
 
 const fastify = Fastify({ logger: false });
 
 await fastify.register(cors, { origin: true, credentials: true });
+await fastify.register(websocket);
 await fastify.register(multipart, {
   // Don't 413 on oversized files — the handler checks part.file.truncated and
   // gracefully drops the attachment (see routes/ticket.ts). Screenshots can run
@@ -38,7 +42,9 @@ await fastify.register(fastifyStatic, {
   serve: false,
 });
 
-fastify.get('/health', async () => ({ status: 'ok' }));
+fastify.get('/health', async () => {
+  return { status: 'ok', version: env.AGENT_CORE_VERSION };
+});
 
 // v1.0 routes — kept for backward compatibility with existing enrolled agents
 registerRoute(fastify);
@@ -53,6 +59,8 @@ bundleRoute(fastify);
 submitRoute(fastify);
 ticketsV2Route(fastify);
 updatesRoute(fastify);
+wsRoute(fastify);
+internalRoutes(fastify);
 
 await fastify.listen({ port: env.PORT, host: '0.0.0.0' });
 logger.info('Agents server started', { port: env.PORT });

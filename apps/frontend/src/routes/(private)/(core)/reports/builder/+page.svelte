@@ -168,9 +168,13 @@
   }));
   const licenseOptionsQuery = createQuery(() => ({
     queryKey: ['reports.listFilterValues', source],
-    queryFn: () =>
-      trpc.reports.listFilterValues.query({ source: 'm365Identities', column: 'assignedLicenses' }),
-    enabled: source === 'm365Identities',
+    queryFn: () => {
+      if (source === 'sophosFirewalls') {
+        return trpc.reports.listFilterValues.query({ source: 'sophosFirewalls', column: 'licenses' });
+      }
+      return trpc.reports.listFilterValues.query({ source: 'm365Identities', column: 'assignedLicenses' });
+    },
+    enabled: source === 'm365Identities' || source === 'sophosFirewalls',
     staleTime: STALE.REF,
   }));
 
@@ -359,8 +363,7 @@
 
   function operatorsFor(column: string, type: FieldDefinition['type']): readonly string[] {
     const base = OPERATORS_BY_TYPE[type];
-    if (column === 'hasLicenses') return ['eq', 'neq'];
-    return column === 'assignedLicenses' && licenseOptions.length
+    return (column === 'assignedLicenses' || column === 'licenses') && licenseOptions.length
       ? [...base, 'has_any_of', 'lacks_any_of']
       : base;
   }

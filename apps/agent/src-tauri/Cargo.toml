@@ -33,6 +33,7 @@ tauri-plugin-screenshots = "2.2.0"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 base64 = "0.22.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "webp"] }
 tauri-plugin-notification = "2"
 tauri-plugin-http = "2"
 local-ip-address = "0.6.5"

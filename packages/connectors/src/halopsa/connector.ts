@@ -120,8 +120,16 @@ export interface HaloPSALookupOption {
 // Minimum-viable action payload — Halo accepts many more fields but these
 // cover the log-time / add-note flows the packages system currently drives.
 // Time is passed in decimal hours; the log-time capability converts minutes.
+export interface HaloPSATicketSummary {
+  id: number;
+  summary: string;
+  status_id: number;
+  status: string;
+}
+
 export interface HaloPSAActionBody {
   ticket_id: number;
+  actiontype_id?: number;
   outcome?: string;
   outcome_id?: number;
   note?: string;
@@ -134,6 +142,18 @@ export interface HaloPSAActionBody {
   utcoffset?: number;
   sendemail?: boolean;
   hiddenfromuser?: boolean;
+}
+
+export interface HaloPSAActionDetail {
+  id: number;
+  ticket_id: number;
+  note_html: string;
+  note: string;
+  who: string;
+  who_agentid: number;
+  hiddenfromuser: boolean;
+  actiondatecreated: string;
+  outcome: string;
 }
 
 // ─── Connector ────────────────────────────────────────────────────────────────
@@ -156,10 +176,13 @@ export class HaloPSAConnector {
 
   readonly tickets: {
     create: (body: HaloPSATicketBody) => Promise<string>;
+    get: (id: string | number) => Promise<HaloPSATicketSummary>;
+    update: (id: string | number, fields: { status_id?: number }) => Promise<void>;
   };
 
   readonly actions: {
     create: (body: HaloPSAActionBody) => Promise<string>;
+    list: (ticketId: string | number) => Promise<HaloPSAActionDetail[]>;
   };
 
   readonly priorities: {
@@ -261,7 +284,29 @@ export class HaloPSAConnector {
           'application/json-patch+json'
         );
         return String(data.id);
-      }
+      },
+      get: async (id) => {
+        const data = await this.client.get<unknown>(`/api/tickets/${id}`);
+        // HaloPSA may return { tickets: [ticket] } or the ticket object directly.
+        const ticket: Record<string, unknown> = (
+          isRecord(data) && Array.isArray((data as any).tickets)
+            ? (data as any).tickets[0]
+            : data
+        ) as Record<string, unknown>;
+        return {
+          id: Number(ticket.id),
+          summary: String(ticket.summary ?? ''),
+          status_id: Number(ticket.status_id ?? 0),
+          status: String(ticket.status ?? ticket.statusname ?? ticket.status_name ?? ''),
+        };
+      },
+      update: async (id, fields) => {
+        await this.client.post(
+          '/api/tickets',
+          [{ id: Number(id), ...fields }],
+          'application/json-patch+json'
+        );
+      },
     };
 
     this.actions = {
@@ -278,6 +323,15 @@ export class HaloPSAConnector {
         const id = pickHaloActionId(data);
         if (id == null) throw new Error('HaloPSAConnector.actions.create: no id in response');
         return String(id);
+      },
+      list: async (ticketId) => {
+        const params = new URLSearchParams({
+          ticket_id: String(ticketId),
+          includedetails: 'true',
+        });
+        type Response = { actions: HaloPSAActionDetail[] };
+        const data = await this.client.get<Response>(`/api/actions?${params}`);
+        return Array.isArray(data.actions) ? data.actions : [];
       }
     };
 

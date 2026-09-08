@@ -79,7 +79,8 @@ export class HaloPSAHttpClient {
       body: JSON.stringify(body)
     });
     if (!res.ok) {
-      throw new Error(`HaloPSA POST error: HTTP ${res.status} ${res.statusText} — ${url}`);
+      const responseText = await res.text().catch(() => '');
+      throw new Error(`HaloPSA POST error: HTTP ${res.status} ${res.statusText} — ${url} — ${responseText}`);
     }
     return res.json() as Promise<T>;
   }

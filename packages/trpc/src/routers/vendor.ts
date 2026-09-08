@@ -34,6 +34,7 @@ import {
   sophosEndpoints,
   sophosEndpointMigrations,
   sophosFirewalls,
+  sophosFirewallLicenses,
   sophosLicenses,
   sophosTamperProtection,
   sophosEndpointsWithSite,
@@ -1144,6 +1145,60 @@ async function toggleSophosEndpointTamperProtection(
 }
 
 export const vendorRouter = t.router({
+  sophosFirewallLicenses: authProcedure
+    .input(z.object({ firewallId: z.uuid() }))
+    .query(async ({ ctx, input }) => {
+      if (!ctx.can('Vendors.Read')) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Vendors.Read permission required' });
+      }
+
+      // License pulls run at the partner level, so their integration link can
+      // differ from the firewall's. Authorize access to the firewall first,
+      // then use its serial number as the licensing identity.
+      const [firewall] = await ctx.db
+        .select({
+          siteId: sophosFirewalls.siteId,
+          linkId: sophosFirewalls.linkId,
+          serialNumber: sophosFirewalls.serialNumber
+        })
+        .from(sophosFirewalls)
+        .where(eq(sophosFirewalls.id, input.firewallId))
+        .limit(1);
+
+      if (!firewall) return null;
+
+      const siteScope = ctx.scopeFor('Vendors.Read');
+      const linkScope = ctx.linkScopeFor('Vendors.Read');
+      const hasSiteAccess =
+        siteScope === 'all'
+          ? firewall.siteId !== null
+          : firewall.siteId !== null && siteScope.includes(firewall.siteId);
+      const hasLinkAccess = linkScope === 'all' || linkScope.includes(firewall.linkId);
+      if (!hasSiteAccess && !hasLinkAccess) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      const licenseRows = await ctx.db
+        .select({
+          id: sophosFirewallLicenses.id,
+          licenseIdentifier: sophosFirewallLicenses.licenseIdentifier,
+          productName: sophosFirewallLicenses.productName,
+          productCode: sophosFirewallLicenses.productCode,
+          productGenericCode: sophosFirewallLicenses.productGenericCode,
+          type: sophosFirewallLicenses.type,
+          perpetual: sophosFirewallLicenses.perpetual,
+          quantity: sophosFirewallLicenses.quantity,
+          usageCount: sophosFirewallLicenses.usageCount,
+          usageDate: sophosFirewallLicenses.usageDate,
+          usageCollectedAt: sophosFirewallLicenses.usageCollectedAt,
+          startedAt: sophosFirewallLicenses.startedAt,
+          endsAt: sophosFirewallLicenses.endsAt
+        })
+        .from(sophosFirewallLicenses)
+        .where(eq(sophosFirewallLicenses.serialNumber, firewall.serialNumber))
+        .orderBy(sophosFirewallLicenses.productName);
+
+      return licenseRows;
+    }),
+
   tableData: authProcedure
     .input(
       z.object({

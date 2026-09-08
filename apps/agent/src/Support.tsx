@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { toast } from 'sonner';
 import type { Bundle, FieldDef, FormDef } from '@/lib/bundle';
 import { ipc, type Attachment, type OsUser } from '@/lib/ipc';
@@ -16,7 +17,6 @@ import {
 } from '@/ui/components/select';
 import { Button } from '@/ui/components/button';
 import { SubmitButton } from '@/ui/components/submit-button';
-import Loader from '@/ui/components/loader';
 
 type FieldValues = Record<string, string>;
 type ImageBlobs = Record<string, { path: string; name: string; b64: string }>;
@@ -231,8 +231,9 @@ function DynamicForm({
         toast.error(ack.message || 'Submission failed');
       }
     } catch (err) {
-      await logToFile('ERROR', `Form submit error: ${err}`);
-      toast.error('Failed to submit ticket');
+      const message = typeof err === 'string' ? err : (err instanceof Error ? err.message : null);
+      await logToFile('ERROR', `Form submit error: ${message ?? String(err)}`);
+      toast.error(message || 'Failed to submit ticket');
     } finally {
       setSubmitting(false);
     }
@@ -277,34 +278,34 @@ function DynamicForm({
   );
 }
 
-export default function Support() {
-  const [bundle, setBundle] = useState<Bundle | null>(null);
+export default function Support({
+  bundle,
+  requestedFormId,
+}: {
+  bundle: Bundle | null;
+  requestedFormId: string | null;
+}) {
   const [osUser, setOsUser] = useState<OsUser | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [offline, setOffline] = useState(false);
   const [selectedForm, setSelectedForm] = useState<FormDef | null>(null);
   const [success, setSuccess] = useState(false);
 
-  const load = async () => {
-    setLoading(true);
-    try {
-      const [b, user] = await Promise.all([ipc.getConfigBundle(), ipc.getOsUser().catch(() => null)]);
-      setBundle(b);
-      setOsUser(user);
-      setOffline(!b);
-      if (b?.forms?.length === 1) setSelectedForm(b.forms[0]);
-    } catch {
-      setOffline(true);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Load OS user once — not on every bundle refresh
   useEffect(() => {
-    load();
+    ipc.getOsUser().then(setOsUser).catch(() => null);
   }, []);
 
-  // Reset on window hide
+  // Auto-select when bundle delivers exactly one form
+  useEffect(() => {
+    if (bundle?.forms?.length === 1) setSelectedForm(bundle.forms[0]);
+  }, [bundle]);
+
+  // Open a specific form requested from the tray
+  useEffect(() => {
+    if (!requestedFormId || !bundle) return;
+    setSelectedForm(bundle.forms.find((f) => f.id === requestedFormId) ?? null);
+  }, [bundle, requestedFormId]);
+
+  // Reset state when the window is hidden
   useEffect(() => {
     const p = listen('on_hide', () => {
       setSelectedForm(null);
@@ -314,16 +315,9 @@ export default function Support() {
     return () => { p.then((u) => u()); };
   }, [bundle]);
 
-  const accentColor = bundle?.branding?.accentColor;
-  const companyName = bundle?.branding?.companyName ?? 'IT Support';
-
-  if (loading) {
-    return (
-      <main className="flex flex-col size-full items-center justify-center">
-        <Loader />
-      </main>
-    );
-  }
+  const offline = !bundle;
+  const accentColor = bundle?.branding?.primaryColor;
+  const companyName = bundle?.branding?.appName ?? 'IT Support';
 
   return (
     <main className="flex flex-col size-full overflow-hidden">
@@ -332,6 +326,9 @@ export default function Support() {
         className="flex items-center px-4 py-2 shrink-0"
         style={{ backgroundColor: accentColor ?? 'hsl(var(--primary))' }}
       >
+        {bundle?.branding?.logoUrl && (
+          <img src={bundle.branding.logoUrl} alt="" className="size-6 rounded object-contain bg-white/10 mr-2" />
+        )}
         <span className="text-white font-semibold text-sm tracking-wide">{companyName}</span>
       </div>
 
@@ -356,9 +353,6 @@ export default function Support() {
             <p className="text-sm text-muted-foreground">
               The support agent is not running or not yet enrolled.
             </p>
-            <Button variant="outline" size="sm" onClick={load}>
-              Retry
-            </Button>
           </div>
         ) : !bundle?.forms?.length ? (
           <div className="flex flex-col items-center justify-center flex-1">
@@ -372,8 +366,9 @@ export default function Support() {
                 key={f.id}
                 onClick={() => setSelectedForm(f)}
                 className="text-left border rounded-lg p-3 hover:bg-accent transition-colors"
+                style={accentColor ? { borderColor: `${accentColor}80` } : undefined}
               >
-                <p className="font-medium text-sm">{f.name}</p>
+                <p className="font-medium text-sm" style={accentColor ? { color: accentColor } : undefined}>{f.name}</p>
                 {f.description && (
                   <p className="text-xs text-muted-foreground mt-0.5">{f.description}</p>
                 )}
@@ -399,6 +394,20 @@ export default function Support() {
           </>
         )}
       </div>
+      {(bundle?.branding?.supportEmail || bundle?.branding?.supportPhone) && (
+        <footer className="border-t px-4 py-2 text-xs text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 shrink-0">
+          {bundle.branding.supportEmail && (
+            <button type="button" onClick={() => openUrl(`mailto:${bundle.branding.supportEmail}`)} className="hover:underline">
+              {bundle.branding.supportEmail}
+            </button>
+          )}
+          {bundle.branding.supportPhone && (
+            <button type="button" onClick={() => openUrl(`tel:${bundle.branding.supportPhone}`)} className="hover:underline">
+              {bundle.branding.supportPhone}
+            </button>
+          )}
+        </footer>
+      )}
     </main>
   );
 }

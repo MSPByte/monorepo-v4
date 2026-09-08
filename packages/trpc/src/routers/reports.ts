@@ -167,6 +167,10 @@ function isLicenseSetFilter(filter: ReportDefinition['filters'][number]) {
   return filter.operator === 'has_any_of' || filter.operator === 'lacks_any_of';
 }
 
+function isFirewallLicenseSetFilter(filter: ReportDefinition['filters'][number]) {
+  return filter.column === 'licenses' && isLicenseSetFilter(filter);
+}
+
 function isFirewallHasLicensesFilter(filter: ReportDefinition['filters'][number]) {
   return filter.column === 'hasLicenses';
 }
@@ -214,6 +218,19 @@ function validateDefinition(shape: PolicyTableShape, def: ReportDefinition): voi
         message: `Unknown filter column "${filter.column}" for source "${shape.table}"`
       });
     }
+    if (isFirewallLicenseSetFilter(filter)) {
+      if (
+        shape.table !== 'sophosFirewalls' ||
+        !Array.isArray(filter.value) ||
+        filter.value.length === 0
+      ) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Choose one or more Sophos firewall licenses for this filter'
+        });
+      }
+      continue;
+    }
     if (isFirewallHasLicensesFilter(filter)) {
       if (
         shape.table !== 'sophosFirewalls' ||
@@ -222,7 +239,7 @@ function validateDefinition(shape: PolicyTableShape, def: ReportDefinition): voi
       ) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: 'Sophos Firewall Has Licenses filters must compare to true or false'
+          message: 'Sophos Firewall Has Any License filters must compare to true or false'
         });
       }
       continue;
@@ -290,22 +307,31 @@ function buildLicenseWhere(filters: ReportDefinition['filters']): SQL | undefine
       )`;
       conditions.push(filter.operator === 'has_requirement' ? covered : sql`not (${covered})`);
     }
-    if (isLicenseSetFilter(filter)) {
+    if (isLicenseSetFilter(filter) && filter.column === 'assignedLicenses') {
       const matches = sql`coalesce(${sql.identifier('assigned_licenses')}, array[]::text[]) && ${sqlTextArray(filter.value as string[])}`;
       conditions.push(filter.operator === 'has_any_of' ? matches : sql`not (${matches})`);
+    }
+    if (isFirewallLicenseSetFilter(filter)) {
+      const matches = sql`exists (
+        select 1
+        from vendors.sophos_firewall_licenses as firewall_licenses
+        where firewall_licenses.serial_number = ${sophosFirewallsWithSite.serialNumber}
+          and firewall_licenses.product_name = any(${sqlTextArray(filter.value as string[])})
+      )`;
+      conditions.push(
+        filter.operator === 'has_any_of' ? matches : sql`not (${matches})`
+      );
     }
     if (isFirewallHasLicensesFilter(filter)) {
       const hasLicenses = sql`exists (
         select 1
         from vendors.sophos_firewall_licenses as firewall_licenses
         where firewall_licenses.serial_number = ${sophosFirewallsWithSite.serialNumber}
-          and jsonb_array_length(firewall_licenses.licenses) > 0
       )`;
-      const matches = filter.value === true;
       conditions.push(
         filter.operator === 'eq'
-          ? (matches ? hasLicenses : sql`not (${hasLicenses})`)
-          : (matches ? sql`not (${hasLicenses})` : hasLicenses)
+          ? (filter.value === true ? hasLicenses : sql`not (${hasLicenses})`)
+          : (filter.value === true ? sql`not (${hasLicenses})` : hasLicenses)
       );
     }
   }
@@ -334,34 +360,26 @@ async function decorateFirewallRows(
   const licenseRows = await ctx.db
     .select({
       serialNumber: sophosFirewallLicenses.serialNumber,
-      ownerType: sophosFirewallLicenses.ownerType,
-      licenses: sophosFirewallLicenses.licenses,
-      lastCheckedAt: sophosFirewallLicenses.lastCheckedAt
+      productName: sophosFirewallLicenses.productName
     })
     .from(sophosFirewallLicenses)
     .where(inArray(sophosFirewallLicenses.serialNumber, serialNumbers));
 
   // Sophos firewall licenses can be stored on a different integration link
   // than the firewall itself. A serial number is the licensing identity.
-  const licenseMap = new Map<string, (typeof licenseRows)[number]>();
+  const licenseMap = new Map<string, string[]>();
   for (const license of licenseRows) {
-    const existing = licenseMap.get(license.serialNumber);
-    if (
-      !existing ||
-      (Array.isArray(license.licenses) && license.licenses.length > 0 &&
-        (!Array.isArray(existing.licenses) || existing.licenses.length === 0))
-    ) {
-      licenseMap.set(license.serialNumber, license);
-    }
+    const names = licenseMap.get(license.serialNumber) ?? [];
+    if (!names.includes(license.productName)) names.push(license.productName);
+    licenseMap.set(license.serialNumber, names);
   }
 
   return rows.map((row) => {
-    const lic = typeof row.serialNumber === 'string' ? licenseMap.get(row.serialNumber) : undefined;
+    const licenses = typeof row.serialNumber === 'string' ? licenseMap.get(row.serialNumber) : undefined;
     return {
       ...row,
-      licenseOwnerType: lic?.ownerType ?? null,
-      hasLicenses: lic ? Array.isArray(lic.licenses) && lic.licenses.length > 0 : null,
-      licenseLastCheckedAt: lic?.lastCheckedAt ?? null
+      licenses: licenses ?? [],
+      hasLicenses: (licenses?.length ?? 0) > 0
     };
   });
 }
@@ -751,6 +769,7 @@ async function prepareReportRun(
           (filter) =>
             !isRequirementFilter(filter) &&
             !isLicenseSetFilter(filter) &&
+            !isFirewallLicenseSetFilter(filter) &&
             !isFirewallHasLicensesFilter(filter)
         )
         .map((filter) => ({
@@ -809,8 +828,13 @@ export const reportsRouter = t.router({
   }),
 
   listFilterValues: authProcedure
-    .input(z.object({ source: z.literal('m365Identities'), column: z.literal('assignedLicenses') }))
-    .query(async ({ ctx }) => {
+    .input(
+      z.union([
+        z.object({ source: z.literal('m365Identities'), column: z.literal('assignedLicenses') }),
+        z.object({ source: z.literal('sophosFirewalls'), column: z.literal('licenses') })
+      ])
+    )
+    .query(async ({ ctx, input }) => {
       requireReportsRead(ctx);
       const prefs = await loadPrefs(ctx);
       const scope = await resolveScope(
@@ -818,8 +842,21 @@ export const reportsRouter = t.router({
         prefs ? { scopeKind: prefs.scopeKind, scopeIds: prefs.scopeIds ?? [] } : null
       );
       if (scope.kind === 'empty') return [];
-      const entry = getSourceEntry('m365Identities')!;
+      const entry = getSourceEntry(input.source)!;
       const scopeWhere = await buildScopeWhere(ctx, entry.shape, scope);
+      if (input.source === 'sophosFirewalls') {
+        const rows = await ctx.db
+          .select({
+            value: sophosFirewallLicenses.productName,
+            label: sophosFirewallLicenses.productName,
+            subLabel: sophosFirewallLicenses.productCode
+          })
+          .from(sophosFirewallLicenses)
+          .where(scopeWhere);
+        return [...new Map(rows.map((row) => [row.value, row])).values()].sort((a, b) =>
+          a.label.localeCompare(b.label)
+        );
+      }
       const rows = await ctx.db
         .select({
           value: m365Licenses.externalId,

@@ -20,6 +20,7 @@ pub async fn check_and_stage(cfg: &Config, root: &Path, state: &mut State) -> Re
     let resp = client
         .get(&url)
         .header("X-Device-ID", &device_id)
+        .header("X-Org-ID", &cfg.agent.org_id)
         .send()
         .await
         .context("update check request failed")?;

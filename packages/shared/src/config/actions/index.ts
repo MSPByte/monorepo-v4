@@ -78,6 +78,10 @@ export enum ActionLabels {
   MspAgentDelete = 'mspagent.agent.delete',
   MspAgentRevoke = 'mspagent.agent.revoke',
   MspAgentEnrollmentTokenRegenerate = 'mspagent.enrollment_token.regenerate',
+  MspAgentEnrollmentTokenReveal = 'mspagent.enrollment_token.reveal',
+  MspAgentConfigCreate = 'mspagent.config.create',
+  MspAgentConfigUpdate = 'mspagent.config.update',
+  MspAgentConfigDelete = 'mspagent.config.delete',
   M365IdentityRevokeSessions = 'm365.identity.revoke_sessions',
   M365IdentityDisable = 'm365.identity.disable',
   M365IdentityEnable = 'm365.identity.enable',
@@ -434,6 +438,22 @@ export const ActionResources = {
   [ActionLabels.MspAgentEnrollmentTokenRegenerate]: {
     label: ActionLabels.MspAgentEnrollmentTokenRegenerate,
     name: 'MSPAgent enrollment token regenerate'
+  },
+  [ActionLabels.MspAgentEnrollmentTokenReveal]: {
+    label: ActionLabels.MspAgentEnrollmentTokenReveal,
+    name: 'MSPAgent enrollment token reveal'
+  },
+  [ActionLabels.MspAgentConfigCreate]: {
+    label: ActionLabels.MspAgentConfigCreate,
+    name: 'MSPAgent config create'
+  },
+  [ActionLabels.MspAgentConfigUpdate]: {
+    label: ActionLabels.MspAgentConfigUpdate,
+    name: 'MSPAgent config update'
+  },
+  [ActionLabels.MspAgentConfigDelete]: {
+    label: ActionLabels.MspAgentConfigDelete,
+    name: 'MSPAgent config delete'
   },
   [ActionLabels.M365IdentityRevokeSessions]: {
     label: ActionLabels.M365IdentityRevokeSessions,

@@ -19,6 +19,8 @@
   import BoolBadgeCell from '$lib/components/data-table/cells/bool-badge-cell.svelte';
   import NullableTextCell from '$lib/components/data-table/cells/nullable-text-cell.svelte';
   import RelativeDateCell from '$lib/components/data-table/cells/relative-date-cell.svelte';
+  import RecordDetailSheet from '$lib/components/domain/record-detail-sheet.svelte';
+  import SophosFirewallDetailSheet from '$lib/components/domain/sophos-firewall-detail-sheet.svelte';
   import ScopeBar from '../_components/scope-bar.svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
@@ -26,6 +28,7 @@
 
   const reportId = $derived(page.params.id ?? '');
   let refreshKey = $state(0);
+  let drawerRecord = $state<ReportRow | null>(null);
 
   type SourceMeta = {
     table: string;
@@ -137,6 +140,15 @@
       : undefined,
   );
 
+  const isSophosFirewallReport = $derived(report?.source === 'sophosFirewalls');
+
+  function recordTitle(row: ReportRow): string {
+    for (const key of ['name', 'hostname', 'displayName', 'email', 'serialNumber', 'id']) {
+      if (typeof row[key] === 'string' && row[key]) return row[key] as string;
+    }
+    return sourceMeta?.label ?? 'Record';
+  }
+
   async function fetchData(input: PaginationInput): Promise<{ rows: ReportRow[]; total: number }> {
     if (!report || !definition) return { rows: [], total: 0 };
 
@@ -230,6 +242,7 @@
         enableExport={true}
         enableURLState={true}
         defaultPageSize={25}
+        onrowclick={(row) => (drawerRecord = row)}
       />
     {:else}
       <div class="flex flex-1 items-center justify-center">
@@ -237,4 +250,25 @@
       </div>
     {/if}
   </div>
+{/if}
+
+{#if isSophosFirewallReport}
+  <SophosFirewallDetailSheet
+    open={!!drawerRecord}
+    firewall={drawerRecord}
+    onOpenChange={(open) => {
+      if (!open) drawerRecord = null;
+    }}
+  />
+{:else}
+  <RecordDetailSheet
+    open={!!drawerRecord}
+    row={drawerRecord}
+    {columns}
+    title={drawerRecord ? recordTitle(drawerRecord) : 'Record'}
+    description={sourceMeta ? `${sourceMeta.label} report record` : undefined}
+    onOpenChange={(open) => {
+      if (!open) drawerRecord = null;
+    }}
+  />
 {/if}

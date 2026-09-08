@@ -1,17 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { Logger, type APIResponse } from '@/lib/logger';
 
-export type AgentSettings = {
-  site_id: string;
-  api_host: string;
-  installed_at: string;
-
-  guid?: string;
-  device_id?: string;
-  hostname?: string;
-  registered_at?: string;
-};
-
 export type SystemInfo = {
   hostname: string;
   ip_address?: string;
@@ -21,23 +10,6 @@ export type SystemInfo = {
   version?: string;
   username?: string;
 };
-
-export async function getSettings(): Promise<APIResponse<AgentSettings>> {
-  try {
-    const content = await invoke<AgentSettings>('get_settings_info');
-    if (!content) throw `No file found`;
-
-    return {
-      data: content,
-    };
-  } catch (err) {
-    return Logger.error({
-      module: 'Agent',
-      context: 'getSettings',
-      message: `Failed to get agent settings: ${err}`,
-    });
-  }
-}
 
 export async function getSystemInfo(): Promise<APIResponse<SystemInfo>> {
   try {
@@ -51,22 +23,7 @@ export async function getSystemInfo(): Promise<APIResponse<SystemInfo>> {
     return Logger.error({
       module: 'Agent',
       context: 'getSystemInfo',
-      message: `Failed to get system info`,
-    });
-  }
-}
-
-export async function getRmmId(): Promise<APIResponse<string>> {
-  try {
-    const content = await invoke<string>('get_rmm_id');
-    if (!content) throw 'Failed to get Windows key';
-
-    return { data: content };
-  } catch {
-    return Logger.error({
-      module: 'Agent',
-      context: 'getRmmId',
-      message: 'Failed to get RMM ID',
+      message: `Failed to get system info: ${err}`,
     });
   }
 }

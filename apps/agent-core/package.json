@@ -1,0 +1,10 @@
+{
+  "name": "agent-core",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "sh -c 'until curl --fail --silent http://localhost:3003/health >/dev/null; do echo \"Waiting for agents server at http://localhost:3003...\"; sleep 1; done; exec env MSPAGENT_DEV=1 cargo run -p agent-core'",
+    "build": "cargo build --release -p agent-core",
+    "check-types": "echo 'agent-core: Rust, no TS check'"
+  }
+}

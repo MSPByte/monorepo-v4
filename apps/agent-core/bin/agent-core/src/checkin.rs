@@ -11,6 +11,7 @@ use crate::{
 
 #[derive(Debug, Serialize)]
 struct EnrollBody {
+    org_id: String,
     enrollment_token: String,
     hostname: String,
     platform: String,
@@ -47,6 +48,7 @@ async fn enroll(cfg: &Config) -> anyhow::Result<String> {
     let username = Some(whoami::username());
 
     let body = EnrollBody {
+        org_id: cfg.agent.org_id.clone(),
         enrollment_token: cfg.agent.enrollment_token.clone(),
         hostname,
         platform,
@@ -88,6 +90,7 @@ async fn checkin(cfg: &Config, device_id: &str) -> anyhow::Result<()> {
     let resp = client
         .post(format!("{}/v2.0/checkin", cfg.agent.server_url))
         .header("X-Device-ID", device_id)
+        .header("X-Org-ID", &cfg.agent.org_id)
         .json(&body)
         .send()
         .await
@@ -149,6 +152,10 @@ pub async fn run_checkin_loop(
     state: Arc<RwLock<State>>,
     interval: Duration,
 ) {
+    // Enrollment backoff: 5s, 10s, 30s, then 60s for all subsequent retries.
+    const ENROLL_BACKOFF: &[u64] = &[5, 10, 30];
+    let mut enroll_attempt: usize = 0;
+
     loop {
         // Ensure we have a device_id.
         let device_id = {
@@ -157,12 +164,16 @@ pub async fn run_checkin_loop(
         };
 
         let device_id = match device_id {
-            Some(id) => id,
+            Some(id) => {
+                enroll_attempt = 0; // reset on success
+                id
+            }
             None => {
-                info!("No device_id; enrolling...");
+                info!("No device_id; enrolling... (attempt {})", enroll_attempt + 1);
                 match enroll(&cfg).await {
                     Ok(id) => {
                         info!("Enrolled as {}", id);
+                        enroll_attempt = 0;
                         let mut s = state.write().await;
                         s.device_id = Some(id.clone());
                         if let Err(e) = save(&root, &s) {
@@ -171,8 +182,15 @@ pub async fn run_checkin_loop(
                         id
                     }
                     Err(e) => {
-                        logerr!("Enrollment failed: {}", e);
-                        tokio::time::sleep(Duration::from_secs(60)).await;
+                        // {:#} walks the full anyhow error chain so the root cause is visible.
+                        logerr!("Enrollment failed: {:#}", e);
+                        let wait = ENROLL_BACKOFF
+                            .get(enroll_attempt)
+                            .copied()
+                            .unwrap_or(60);
+                        enroll_attempt = enroll_attempt.saturating_add(1);
+                        info!("Retrying enrollment in {}s", wait);
+                        tokio::time::sleep(Duration::from_secs(wait)).await;
                         continue;
                     }
                 }
@@ -184,7 +202,7 @@ pub async fn run_checkin_loop(
                 info!("Checkin OK");
             }
             Err(e) => {
-                logwarn!("Checkin failed: {}", e);
+                logwarn!("Checkin failed: {:#}", e);
             }
         }
 
@@ -196,7 +214,7 @@ pub async fn run_checkin_loop(
                     let _ = save(&root, &s);
                 }
                 Err(e) => {
-                    logwarn!("Bundle fetch failed: {}", e);
+                    logwarn!("Bundle fetch failed: {:#}", e);
                 }
             }
         }

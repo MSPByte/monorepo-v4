@@ -29,7 +29,8 @@ pub async fn fetch(cfg: &Config, root: &Path, state: &mut State) -> anyhow::Resu
     let client = reqwest::Client::new();
     let mut req = client
         .get(format!("{}/v2.0/bundle", cfg.agent.server_url))
-        .header("X-Device-ID", &device_id);
+        .header("X-Device-ID", &device_id)
+        .header("X-Org-ID", &cfg.agent.org_id);
 
     if let Some(etag) = &state.bundle_etag {
         req = req.header("If-None-Match", etag);

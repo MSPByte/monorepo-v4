@@ -102,16 +102,17 @@ export const SophosEndpointsShape: SchemaFields = {
 };
 
 export const SophosFirewallLicenseJoinFields: SchemaFields = {
-  licenseOwnerType: {
-    label: 'License Owner Type',
+  licenses: {
+    label: 'Licenses',
     type: 'string',
-    modality: 'single',
+    modality: 'array',
     trackable: false,
-    ingestPath: 'licenseOwnerType',
+    filterable: true,
+    ingestPath: 'licenses',
     required: false
   },
   hasLicenses: {
-    label: 'Has Licenses',
+    label: 'Has Any License',
     type: 'boolean',
     modality: 'single',
     trackable: false,
@@ -119,14 +120,6 @@ export const SophosFirewallLicenseJoinFields: SchemaFields = {
     ingestPath: 'hasLicenses',
     required: false
   },
-  licenseLastCheckedAt: {
-    label: 'License Last Checked',
-    type: 'string',
-    modality: 'single',
-    trackable: false,
-    ingestPath: 'licenseLastCheckedAt',
-    required: false
-  }
 };
 
 export const SophosFirewallsShape: SchemaFields = {
@@ -246,41 +239,37 @@ export const SophosFirewallLicensesShape: SchemaFields = {
     ingestPath: 'serialNumber',
     required: true
   },
-  ownerType: {
-    label: 'Owner Type',
+  licenseIdentifier: {
+    label: 'License Identifier',
     type: 'string',
     modality: 'single',
     trackable: true,
-    ingestPath: 'ownerType',
+    ingestPath: 'licenseIdentifier',
     required: true
   },
-  model: {
-    label: 'Model',
+  productName: {
+    label: 'Product Name',
     type: 'string',
     modality: 'single',
     trackable: true,
-    ingestPath: 'model',
+    ingestPath: 'productName',
     required: true
   },
-  modelType: {
-    label: 'Model Type',
-    type: 'enum',
-    modality: 'single',
-    trackable: true,
-    ingestPath: 'modelType',
-    required: true,
-    options: [
-      { value: 'virtual', label: 'Virtual' },
-      { value: 'hardware', label: 'Hardware' }
-    ]
-  },
-  lastCheckedAt: {
-    label: 'Last License Check',
+  productCode: {
+    label: 'Product Code',
     type: 'string',
     modality: 'single',
     trackable: true,
-    ingestPath: 'lastCheckedAt',
-    required: false
+    ingestPath: 'productCode',
+    required: true
+  },
+  type: {
+    label: 'License Type',
+    type: 'string',
+    modality: 'single',
+    trackable: true,
+    ingestPath: 'type',
+    required: true
   }
 };
 

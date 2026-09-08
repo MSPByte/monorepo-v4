@@ -9,6 +9,7 @@ pub struct Config {
 #[derive(Debug, Deserialize, Clone)]
 pub struct AgentSection {
     pub server_url: String,
+    pub org_id: String,
     pub enrollment_token: String,
 }
 

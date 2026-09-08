@@ -26,6 +26,14 @@
         "label": "about",
         "url": "about.html",
         "visible": false
+      },
+      {
+        "title": "My Tickets",
+        "width": 1000,
+        "height": 800,
+        "label": "tickets",
+        "url": "tickets.html",
+        "visible": false
       }
     ],
     "security": {

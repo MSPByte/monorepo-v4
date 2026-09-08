@@ -6,15 +6,34 @@ import { t, authProcedure } from '../trpc.js';
 
 const FieldSchema = z.object({
   id: z.string(),
-  type: z.enum(['text', 'textarea', 'select', 'email', 'phone', 'checkbox', 'number', 'image']),
-  label: z.string(),
+  // 'image' and 'screenshot' kept for backward compat — normalised to 'attachment' on read by the frontend.
+  type: z.enum(['spacer', 'title', 'text', 'textarea', 'select', 'email', 'phone', 'checkbox', 'number', 'attachment', 'image', 'screenshot']),
+  label: z.string().default(''),
   required: z.boolean().default(false),
   col_span: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
   placeholder: z.string().optional(),
+  helpText: z.string().optional(),
+  subtitle: z.string().optional(),
+  // hydration: slug referenced as {{hydrationKey}} in ticket templates
+  hydrationKey: z.string().optional(),
+  // psa: which PSA ticket field this field drives
+  psaMetric: z.string().optional(),
+  // select: per-option PSA value map { optionValue → psaValue }
+  optionMappings: z.record(z.string(), z.string()).optional(),
+  // select: manual or PSA-sourced options
+  selectOptions: z.array(z.object({ label: z.string(), value: z.string() })).optional(),
+  psaSource: z.string().optional(),
+  // legacy string options (backward compat)
   options: z.array(z.string()).optional(),
+  // attachment
+  allowUpload: z.boolean().optional(),
+  allowScreenshot: z.boolean().optional(),
+  maxSizeMb: z.number().optional(),
 });
 
 const RowSchema = z.object({
+  id: z.string().optional(),
+  cols_max: z.union([z.literal(2), z.literal(3)]).default(3),
   cols: z.array(FieldSchema),
 });
 
@@ -63,6 +82,8 @@ export const formsRouter = t.router({
       name: z.string().min(1),
       description: z.string().optional(),
       rows: z.array(RowSchema).default([]),
+      ticketTitle: z.string().optional(),
+      ticketBody: z.string().optional(),
       psaMappings: z.record(z.string(), PsaMappingEntrySchema).default({}),
     }))
     .mutation(async ({ ctx, input }) => {
@@ -76,6 +97,8 @@ export const formsRouter = t.router({
           name: input.name,
           description: input.description ?? null,
           rows: input.rows,
+          ticketTitle: input.ticketTitle ?? null,
+          ticketBody: input.ticketBody ?? null,
           psaMappings: input.psaMappings,
           createdBy: ctx.user.id,
         })
@@ -90,6 +113,8 @@ export const formsRouter = t.router({
       name: z.string().min(1).optional(),
       description: z.string().nullable().optional(),
       rows: z.array(RowSchema).optional(),
+      ticketTitle: z.string().nullable().optional(),
+      ticketBody: z.string().nullable().optional(),
       psaMappings: z.record(z.string(), PsaMappingEntrySchema).optional(),
     }))
     .mutation(async ({ ctx, input }) => {

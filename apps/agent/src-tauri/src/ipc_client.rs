@@ -1,6 +1,7 @@
 use agent_ipc::{
-    AddTicketNotePayload, ConfigBundlePayload, Envelope, GetTicketsPayload, Message, OsUserPayload,
-    StatusPayload, SubmitFormAckPayload, SubmitFormPayload, TicketListPayload, TicketNoteAckPayload,
+    AddTicketNotePayload, ConfigBundlePayload, Envelope, GetTicketDetailPayload, GetTicketsPayload,
+    Message, NoteAttachmentPayload, OsUserPayload, PendingEventsPayload, StatusPayload,
+    SubmitFormAckPayload, SubmitFormPayload, TicketDetailPayload, TicketListPayload, TicketNoteAckPayload,
 };
 use agent_platform::socket_path;
 
@@ -26,21 +27,9 @@ pub async fn get_status() -> Result<StatusPayload, String> {
     }
 }
 
-pub async fn is_enrolled() -> bool {
-    get_status().await.map(|s| s.enrolled).unwrap_or(false)
-}
-
 pub async fn get_config_bundle() -> Result<ConfigBundlePayload, String> {
     match call(Message::GetConfigBundle).await? {
         Message::ConfigBundle(p) => Ok(p),
-        Message::Error(e) => Err(e.message),
-        _ => Err("unexpected IPC response".into()),
-    }
-}
-
-pub async fn get_os_user() -> Result<OsUserPayload, String> {
-    match call(Message::GetOsUser).await? {
-        Message::OsUser(p) => Ok(p),
         Message::Error(e) => Err(e.message),
         _ => Err("unexpected IPC response".into()),
     }
@@ -66,9 +55,26 @@ pub async fn add_ticket_note(
     ticket_id: String,
     note: String,
     os_user: OsUserPayload,
+    attachments: Vec<NoteAttachmentPayload>,
 ) -> Result<TicketNoteAckPayload, String> {
-    match call(Message::AddTicketNote(AddTicketNotePayload { ticket_id, note, os_user })).await? {
+    match call(Message::AddTicketNote(AddTicketNotePayload { ticket_id, note, os_user, attachments })).await? {
         Message::TicketNoteAck(p) => Ok(p),
+        Message::Error(e) => Err(e.message),
+        _ => Err("unexpected IPC response".into()),
+    }
+}
+
+pub async fn get_ticket_detail(ticket_id: String) -> Result<TicketDetailPayload, String> {
+    match call(Message::GetTicketDetail(GetTicketDetailPayload { ticket_id })).await? {
+        Message::TicketDetail(p) => Ok(p),
+        Message::Error(e) => Err(e.message),
+        _ => Err("unexpected IPC response".into()),
+    }
+}
+
+pub async fn get_pending_events() -> Result<PendingEventsPayload, String> {
+    match call(Message::GetPendingEvents).await? {
+        Message::PendingEvents(p) => Ok(p),
         Message::Error(e) => Err(e.message),
         _ => Err("unexpected IPC response".into()),
     }

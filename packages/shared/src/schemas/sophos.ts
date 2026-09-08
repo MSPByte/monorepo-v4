@@ -67,14 +67,31 @@ export const SophosLicenseSchema = z.looseObject({
 
 export const SophosFirewallLicenseSchema = z.looseObject({
   serialNumber: z.string(),
-  owner: z.looseObject({
-    id: z.string(),
-    type: z.string(),
+  id: z.string(),
+  licenseIdentifier: z.string(),
+  type: z.string(),
+  perpetual: z.boolean(),
+  quantity: z.number().nullable().optional(),
+  startDate: z.string().nullable().optional(),
+  endDate: z.string().nullable().optional(),
+  product: z.looseObject({
+    code: z.string(),
+    name: z.string().nullable().optional(),
+    genericCode: z.string().nullable().optional(),
   }),
-  model: z.string(),
-  modelType: z.string(),
-  lastSeenAt: z.string().nullable().optional(),
-  licenses: z.array(z.looseObject({})).default([]),
+  usage: z
+    .looseObject({
+      current: z
+        .looseObject({
+          count: z.number().nullable().optional(),
+          date: z.string().nullable().optional(),
+          collectedAt: z.string().nullable().optional(),
+        })
+        .nullable()
+        .optional(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export const SophosTamperProtectionSchema = z.looseObject({
