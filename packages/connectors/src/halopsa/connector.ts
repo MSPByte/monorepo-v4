@@ -197,6 +197,22 @@ export class HaloPSAConnector {
     list: () => Promise<HaloPSALookupOption[]>;
   };
 
+  readonly urgencies: {
+    list: () => Promise<HaloPSALookupOption[]>;
+  };
+
+  readonly statuses: {
+    list: () => Promise<HaloPSALookupOption[]>;
+  };
+
+  readonly teams: {
+    list: () => Promise<HaloPSALookupOption[]>;
+  };
+
+  readonly technicians: {
+    list: () => Promise<HaloPSALookupOption[]>;
+  };
+
   readonly attachment: {
     uploadImage: (file: Blob) => Promise<string>;
   };
@@ -341,8 +357,9 @@ export class HaloPSAConnector {
     // `name` or `value` (categories use `value`).
     this.priorities = {
       list: async () => {
-        const data = await this.client.get<unknown>('/api/priority');
-        return normalizeHaloLookupList(data, ['priorities']);
+        // Some HaloPSA instances require pagination params to return results.
+        const data = await this.client.get<unknown>('/api/priority?paginate=true&page_size=100&page_no=1&includeactive=true');
+        return normalizeHaloLookupList(data, ['priorities', 'priority']);
       }
     };
 
@@ -359,6 +376,34 @@ export class HaloPSAConnector {
         // is the field the create-ticket capability writes to.
         const data = await this.client.get<unknown>('/api/category?type_id=1');
         return normalizeHaloLookupList(data, ['categories']);
+      }
+    };
+
+    this.urgencies = {
+      list: async () => {
+        const data = await this.client.get<unknown>('/api/urgency');
+        return normalizeHaloLookupList(data, ['urgencies', 'urgency']);
+      }
+    };
+
+    this.statuses = {
+      list: async () => {
+        const data = await this.client.get<unknown>('/api/status?ticket=true');
+        return normalizeHaloLookupList(data, ['statuses', 'status']);
+      }
+    };
+
+    this.teams = {
+      list: async () => {
+        const data = await this.client.get<unknown>('/api/team');
+        return normalizeHaloLookupList(data, ['teams', 'team']);
+      }
+    };
+
+    this.technicians = {
+      list: async () => {
+        const data = await this.client.get<unknown>('/api/agent');
+        return normalizeHaloLookupList(data, ['agents', 'agent']);
       }
     };
 

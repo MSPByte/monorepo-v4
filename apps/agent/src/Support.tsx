@@ -61,20 +61,29 @@ function FieldInput({
     onImageChange({ path, name, b64 });
   };
 
-  if (field.type === 'image') {
+  if (field.type === 'image' || field.type === 'attachment') {
+    const showUpload = field.type === 'image' || field.allowUpload !== false;
+    const showScreenshot = field.type === 'image' || field.allowScreenshot !== false;
+    const label = showUpload ? (imageBlob ? imageBlob.name : 'Choose file') : (imageBlob ? imageBlob.name : 'Take screenshot');
+
     return (
       <div className="flex flex-col gap-1">
         <div className="flex gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleChooseImage}
-            disabled={disabled}
-            className="flex-1 truncate"
-          >
-            {imageBlob ? imageBlob.name : 'Choose image'}
-          </Button>
+          {showUpload && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleChooseImage}
+              disabled={disabled}
+              className="flex-1 truncate"
+            >
+              {imageBlob ? imageBlob.name : 'Choose file'}
+            </Button>
+          )}
+          {!showUpload && imageBlob && (
+            <span className="flex-1 truncate text-sm py-1">{label}</span>
+          )}
           {imageBlob ? (
             <Button
               type="button"
@@ -85,11 +94,11 @@ function FieldInput({
             >
               Clear
             </Button>
-          ) : (
+          ) : showScreenshot ? (
             <Button type="button" variant="outline" size="sm" onClick={handleScreenshot} disabled={disabled}>
               Screenshot
             </Button>
-          )}
+          ) : null}
         </div>
         {imageBlob && (
           <img
@@ -117,16 +126,19 @@ function FieldInput({
     );
   }
 
-  if (field.type === 'select' && field.options?.length) {
+  if (field.type === 'select' && (field.selectOptions?.length || field.options?.length)) {
+    const opts: { label: string; value: string }[] = field.selectOptions?.length
+      ? field.selectOptions
+      : (field.options ?? []).map((o) => ({ label: o, value: o }));
     return (
       <Select value={value} onValueChange={onChange} disabled={disabled}>
-        <SelectTrigger>
+        <SelectTrigger className="w-full">
           <SelectValue placeholder={field.placeholder ?? `Select ${field.label}`} />
         </SelectTrigger>
         <SelectContent>
-          {field.options.map((opt) => (
-            <SelectItem key={opt} value={opt}>
-              {opt}
+          {opts.map((opt) => (
+            <SelectItem key={opt.value} value={opt.value}>
+              {opt.label}
             </SelectItem>
           ))}
         </SelectContent>
@@ -171,7 +183,20 @@ function DynamicForm({
   osUser: OsUser | null;
   onSuccess: () => void;
 }) {
-  const [values, setValues] = useState<FieldValues>({});
+  const defaultValues = (): FieldValues => {
+    const defaults: FieldValues = {};
+    for (const row of form.rows) {
+      for (const field of row.cols) {
+        if (field.type === 'select') {
+          const first = field.selectOptions?.[0]?.value ?? field.options?.[0];
+          if (first !== undefined) defaults[field.id] = first;
+        }
+      }
+    }
+    return defaults;
+  };
+
+  const [values, setValues] = useState<FieldValues>(defaultValues);
   const [images, setImages] = useState<ImageBlobs>({});
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -190,11 +215,17 @@ function DynamicForm({
     const errs: Record<string, string> = {};
     for (const row of form.rows) {
       for (const field of row.cols) {
-        if (!field.required) continue;
-        if (field.type === 'image') {
-          if (!images[field.id]) errs[field.id] = `${field.label} is required`;
+        if (field.type === 'image' || field.type === 'attachment') {
+          if (field.required && !images[field.id]) errs[field.id] = `${field.label} is required`;
+        } else if (field.type === 'phone') {
+          const digits = (values[field.id] ?? '').replace(/\D/g, '');
+          if (field.required && !digits) {
+            errs[field.id] = `${field.label} is required`;
+          } else if (digits && digits.length !== 10) {
+            errs[field.id] = `${field.label} must be a 10-digit phone number`;
+          }
         } else {
-          if (!values[field.id]?.trim()) errs[field.id] = `${field.label} is required`;
+          if (field.required && !values[field.id]?.trim()) errs[field.id] = `${field.label} is required`;
         }
       }
     }
@@ -224,7 +255,7 @@ function DynamicForm({
 
       if (ack.accepted) {
         toast.success('Ticket submitted' + (ack.submission_id ? ` (#${ack.submission_id})` : ''));
-        setValues({});
+        setValues(defaultValues);
         setImages({});
         onSuccess();
       } else {
@@ -294,9 +325,9 @@ export default function Support({
     ipc.getOsUser().then(setOsUser).catch(() => null);
   }, []);
 
-  // Auto-select when bundle delivers exactly one form
+  // Auto-select first form whenever bundle arrives or changes
   useEffect(() => {
-    if (bundle?.forms?.length === 1) setSelectedForm(bundle.forms[0]);
+    if (bundle?.forms?.length) setSelectedForm(bundle.forms[0]);
   }, [bundle]);
 
   // Open a specific form requested from the tray
@@ -308,9 +339,8 @@ export default function Support({
   // Reset state when the window is hidden
   useEffect(() => {
     const p = listen('on_hide', () => {
-      setSelectedForm(null);
       setSuccess(false);
-      if (bundle?.forms?.length === 1) setSelectedForm(bundle.forms[0]);
+      if (bundle?.forms?.length) setSelectedForm(bundle.forms[0]);
     });
     return () => { p.then((u) => u()); };
   }, [bundle]);
@@ -341,7 +371,7 @@ export default function Support({
               variant="outline"
               onClick={() => {
                 setSuccess(false);
-                if (bundle?.forms && bundle.forms.length > 1) setSelectedForm(null);
+                if (bundle?.forms?.length) setSelectedForm(bundle.forms[0]);
               }}
             >
               Submit another
@@ -358,41 +388,17 @@ export default function Support({
           <div className="flex flex-col items-center justify-center flex-1">
             <p className="text-sm text-muted-foreground">No support forms configured.</p>
           </div>
-        ) : !selectedForm ? (
-          <div className="flex flex-col gap-2">
-            <p className="text-sm font-medium">How can we help?</p>
-            {bundle!.forms.map((f: FormDef) => (
-              <button
-                key={f.id}
-                onClick={() => setSelectedForm(f)}
-                className="text-left border rounded-lg p-3 hover:bg-accent transition-colors"
-                style={accentColor ? { borderColor: `${accentColor}80` } : undefined}
-              >
-                <p className="font-medium text-sm" style={accentColor ? { color: accentColor } : undefined}>{f.name}</p>
-                {f.description && (
-                  <p className="text-xs text-muted-foreground mt-0.5">{f.description}</p>
-                )}
-              </button>
-            ))}
-          </div>
-        ) : (
+        ) : selectedForm ? (
           <>
-            {bundle.forms.length > 1 && (
-              <button
-                onClick={() => setSelectedForm(null)}
-                className="text-xs text-muted-foreground hover:text-foreground self-start"
-              >
-                ← Back
-              </button>
-            )}
             <p className="font-semibold">{selectedForm.name}</p>
             <DynamicForm
+              key={selectedForm.id}
               form={selectedForm}
               osUser={osUser}
               onSuccess={() => setSuccess(true)}
             />
           </>
-        )}
+        ) : null}
       </div>
       {(bundle?.branding?.supportEmail || bundle?.branding?.supportPhone) && (
         <footer className="border-t px-4 py-2 text-xs text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 shrink-0">

@@ -262,13 +262,13 @@ fn create_bundle_tray(
                         .and_then(|actions| actions.get(idx).cloned())
                         .unwrap_or_default();
                     match action.as_str() {
-                        "open_support" => handle_support_window(app, false),
+                        "open_support" => handle_support_window(app, false, None),
                         "open_tickets" => {
                             handle_tickets_window(app);
                         }
                         _ if action.starts_with("open_form:") => {
-                            handle_support_window(app, false);
-                            let _ = app.emit("open_form", action.trim_start_matches("open_form:"));
+                            let form_id = action.trim_start_matches("open_form:").to_string();
+                            handle_support_window(app, false, Some(form_id));
                         }
                         _ => {}
                     }
@@ -366,7 +366,7 @@ fn create_support_window(app: &AppHandle) {
         .expect("Failed to create support window");
 }
 
-fn handle_support_window(app: &AppHandle, screenshot: bool) {
+fn handle_support_window(app: &AppHandle, screenshot: bool, form_id: Option<String>) {
     let app_handle = app.clone();
 
     log_to_file(String::from("INFO"), format!("Opening support window with screenshot set to {}", screenshot));
@@ -380,8 +380,11 @@ fn handle_support_window(app: &AppHandle, screenshot: bool) {
             }
         }
 
-        // Step 2: Ensure window exists (create if needed)
-        let window = if let Some(window) = app_handle.get_webview_window("support") {
+        // Step 2: Ensure window exists (create if needed). Track whether we just
+        // created it so we can give React a moment to boot before emitting events.
+        let freshly_created = app_handle.get_webview_window("support").is_none();
+        let window = if !freshly_created {
+            let window = app_handle.get_webview_window("support").unwrap();
             let _ = window.show();
             let _ = window.set_focus();
             window
@@ -392,7 +395,18 @@ fn handle_support_window(app: &AppHandle, screenshot: bool) {
                 .expect("support window should exist after creation")
         };
 
-        // Step 3: If screenshot was taken, notify window
+        // Step 3: If the window was freshly created, wait for React to mount and
+        // register its event listeners before emitting form/screenshot events.
+        if freshly_created {
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+
+        // Step 4: If a specific form was requested, tell the UI to open it.
+        if let Some(id) = form_id {
+            let _ = app_handle.emit("open_form", id);
+        }
+
+        // Step 5: If screenshot was taken, notify window
         if let Some(path) = screenshot_path {
             let _ = window.emit_to(EventTarget::Any, "use_screenshot", path);
         }

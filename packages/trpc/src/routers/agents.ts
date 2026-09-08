@@ -15,19 +15,35 @@ import {
   siteGroups,
   siteGroupMembers,
 } from '@mspbyte/drizzle';
-import { ActionLabels, Encryption } from '@mspbyte/shared';
+import { ActionLabels, Encryption, HaloPSAConnector } from '@mspbyte/shared';
+import { integrations } from '@mspbyte/drizzle';
 import { t, authProcedure } from '../trpc.js';
+import type { Context } from '../context.js';
 import { loadGroupTargets } from './group-targets.js';
 
-function deriveOrgWebhookSecret(orgId: string): string | null {
-  const master = process.env.AGENTS_INTERNAL_SECRET;
+function deriveOrgWebhookSecret(orgId: string, master: string | null): string | null {
   if (!master) return null;
   return crypto.createHmac('sha256', master).update(orgId).digest('hex').slice(0, 32);
 }
 
-async function notifyBundleUpdated(orgId: string): Promise<void> {
-  const url = process.env.AGENTS_INTERNAL_URL;
-  const secret = process.env.AGENTS_INTERNAL_SECRET;
+async function loadHaloPSAConnector(ctx: Context): Promise<HaloPSAConnector | null> {
+  const [integration] = await ctx.db
+    .select()
+    .from(integrations)
+    .where(eq(integrations.id, 'halopsa'))
+    .limit(1);
+  if (!integration || integration.deletedAt) return null;
+  const config = z.object({ url: z.string(), clientId: z.string(), clientSecret: z.string() })
+    .safeParse(integration.config);
+  if (!config.success) return null;
+  const key = ctx.encryptionKey;
+  if (!key) return null;
+  const decrypted = Encryption.decrypt(config.data.clientSecret, key);
+  if (!decrypted) return null;
+  return new HaloPSAConnector(config.data.url, config.data.clientId, decrypted);
+}
+
+async function notifyBundleUpdated(orgId: string, url: string | null, secret: string | null): Promise<void> {
   if (!url || !secret) return;
   try {
     await fetch(`${url}/internal/bundle-updated`, {
@@ -74,6 +90,7 @@ const BundleDataSchema = z.object({
   }).optional(),
   enabledFormIds: z.array(z.string().uuid()).default([]),
   primaryPsa: z.enum(['halopsa', 'connectwise', '']).optional(),
+  ticketReplyStatusId: z.number().int().optional(),
 });
 
 const ConfigInputSchema = z.object({
@@ -440,7 +457,7 @@ export const agentsRouter = t.router({
           userAgent: ctx.userAgent,
         });
 
-        void notifyBundleUpdated(ctx.orgId);
+        void notifyBundleUpdated(ctx.orgId, ctx.agentsInternalUrl, ctx.agentsInternalSecret);
         return row;
       }),
 
@@ -480,7 +497,7 @@ export const agentsRouter = t.router({
           userAgent: ctx.userAgent,
         });
 
-        void notifyBundleUpdated(ctx.orgId);
+        void notifyBundleUpdated(ctx.orgId, ctx.agentsInternalUrl, ctx.agentsInternalSecret);
         return { ok: true };
       }),
 
@@ -605,7 +622,7 @@ export const agentsRouter = t.router({
           metadata: { setAsDefault: true },
         });
 
-        void notifyBundleUpdated(ctx.orgId);
+        void notifyBundleUpdated(ctx.orgId, ctx.agentsInternalUrl, ctx.agentsInternalSecret);
         return { ok: true };
       }),
 
@@ -754,12 +771,47 @@ export const agentsRouter = t.router({
         return defaultBundle ? { ...defaultBundle, source: 'default' as const } : null;
       }),
 
+    psaMetricOptions: authProcedure
+      .input(z.object({ metric: z.string() }))
+      .query(async ({ ctx, input }) => {
+        if (!ctx.can('Agents.Read')) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Agents.Read permission required' });
+        }
+        // Urgency and Impact (mapped as "priority") are fixed HaloPSA ITIL enums — no lookup endpoint exists.
+        if (input.metric === 'urgency') {
+          return [
+            { id: 1, name: 'Critical' },
+            { id: 2, name: 'High' },
+            { id: 3, name: 'Medium' },
+            { id: 4, name: 'Low' },
+            { id: 5, name: 'Planning' },
+          ];
+        }
+        if (input.metric === 'priority') {
+          return [
+            { id: 1, name: 'High' },
+            { id: 2, name: 'Medium' },
+            { id: 3, name: 'Low' },
+          ];
+        }
+        const connector = await loadHaloPSAConnector(ctx);
+        if (!connector) return [];
+        switch (input.metric) {
+          case 'ticket_type': return connector.ticketTypes.list();
+          case 'category':    return connector.categories.list();
+          case 'status':      return connector.statuses.list();
+          case 'team':        return connector.teams.list();
+          case 'agent':       return connector.technicians.list();
+          default:            return [];
+        }
+      }),
+
     webhookSecret: authProcedure.query(({ ctx }) => {
       if (!ctx.can('Agents.Read')) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Agents.Read permission required' });
       }
-      const agentsUrl = process.env.AGENTS_INTERNAL_URL;
-      const secret = deriveOrgWebhookSecret(ctx.orgId);
+      const agentsUrl = ctx.agentsInternalUrl;
+      const secret = deriveOrgWebhookSecret(ctx.orgId, ctx.agentsInternalSecret);
       if (!agentsUrl || !secret) return null;
       return {
         secret,

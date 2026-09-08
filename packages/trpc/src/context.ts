@@ -182,6 +182,8 @@ export async function createContext({ req, redis }: { req: IncomingRequest; redi
       linkScopeFor(grants, permission, { groupSiteIdsByGroup, groupLinkIdsByGroup, linkIdsBySite }),
     connectionString: org.serviceConnectionString,
     encryptionKey: process.env.ENCRYPTION_KEY,
+    agentsInternalUrl: process.env.AGENTS_INTERNAL_URL ?? null,
+    agentsInternalSecret: process.env.AGENTS_INTERNAL_SECRET ?? null,
     ipAddress:
       headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? headers.get('x-real-ip') ?? null,
     userAgent: headers.get('user-agent') ?? null,

@@ -1,19 +1,20 @@
 <script lang="ts">
   import { getContext, onMount } from 'svelte';
   import type { Component } from 'svelte';
-  import { createMutation, useQueryClient } from '@tanstack/svelte-query';
+  import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
   import type { createTrpcClient } from '$lib/trpc';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { get } from 'svelte/store';
   import type { AgentFieldType, AgentFormField, AgentFormRow } from '@mspbyte/shared';
-  import { AGENT_PSA_SOURCES, AGENT_PSA_METRICS, AGENT_SYSTEM_VARS } from '@mspbyte/shared';
+  import { AGENT_PSA_METRICS, AGENT_SYSTEM_VARS, isOpenPsaMetric } from '@mspbyte/shared';
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import Button from '$lib/components/ui/button/button.svelte';
   import Input from '$lib/components/ui/input/input.svelte';
   import Label from '$lib/components/ui/label/label.svelte';
   import { Switch } from '$lib/components/ui/switch';
   import AgentFormPreview from '$lib/components/agent-form-preview.svelte';
+  import SingleSelect from '$lib/components/single-select.svelte';
   import {
     ArrowLeft,
     Plus,
@@ -138,6 +139,15 @@
       .filter(f => f.hydrationKey && f.type !== 'spacer' && f.type !== 'title')
       .map(f => ({ key: f.hydrationKey!, label: f.label || f.type }))
   );
+
+  // Live PSA options for the currently-selected field's closed metric.
+  const psaMetric = $derived(selectedField?.psaMetric ?? '');
+  const psaMetricOptionsQuery = createQuery(() => ({
+    queryKey: ['agents', 'psaMetricOptions', psaMetric],
+    queryFn: () => trpc.agents.configs.psaMetricOptions.query({ metric: psaMetric }),
+    enabled: !!psaMetric && !isOpenPsaMetric(psaMetric),
+    staleTime: 5 * 60 * 1000,
+  }));
 
   // ── Delete dialog ─────────────────────────────────────────────────────────────
 
@@ -395,21 +405,30 @@
 
   function addOption() {
     if (!selectedField || selectedField.type !== 'select') return;
-    const opts = [...(selectedField.selectOptions ?? []), { label: '', value: '' }];
+    // Value is a stable UUID fragment — never shown to the user, never changes after creation.
+    const opts = [...(selectedField.selectOptions ?? []), { label: '', value: crypto.randomUUID().slice(0, 8) }];
     updateSelected({ selectOptions: opts });
   }
 
-  function updateOption(idx: number, patch: { label?: string; value?: string }) {
+  function updateOption(idx: number, label: string) {
     if (!selectedField || selectedField.type !== 'select') return;
     const opts = (selectedField.selectOptions ?? []).map((o, i) =>
-      i !== idx ? o : { ...o, ...patch }
+      i !== idx ? o : { ...o, label }
     );
     updateSelected({ selectOptions: opts });
   }
 
   function removeOption(idx: number) {
     if (!selectedField || selectedField.type !== 'select') return;
-    updateSelected({ selectOptions: (selectedField.selectOptions ?? []).filter((_, i) => i !== idx) });
+    // Also clean up any PSA mapping for the removed option's value.
+    const removed = selectedField.selectOptions?.[idx];
+    const next: AgentFormField = { ...selectedField, selectOptions: (selectedField.selectOptions ?? []).filter((_, i) => i !== idx) };
+    if (removed && next.optionMappings) {
+      const mappings = { ...next.optionMappings };
+      delete mappings[removed.value];
+      next.optionMappings = mappings;
+    }
+    updateSelected(next);
   }
 </script>
 
@@ -829,76 +848,30 @@
             <!-- Type-specific: Select -->
             {#if selectedField.type === 'select'}
               <div class="flex flex-col gap-3 p-3 border-b">
-                <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Options source</p>
-                <div class="flex flex-col gap-2">
-                  <label class="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="optionSource"
-                      checked={!selectedField.psaSource}
-                      onchange={() => updateSelected({ psaSource: undefined })}
-                      class="accent-primary"
-                    />
-                    <span class="text-xs">Manual options</span>
-                  </label>
-                  <label class="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="optionSource"
-                      checked={!!selectedField.psaSource}
-                      onchange={() => updateSelected({ psaSource: 'urgency' })}
-                      class="accent-primary"
-                    />
-                    <span class="text-xs">From PSA</span>
-                  </label>
+                <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Options</p>
+                <div class="flex flex-col gap-1.5">
+                  {#each selectedField.selectOptions ?? [] as opt, i}
+                    <div class="flex items-center gap-1">
+                      <Input
+                        value={opt.label}
+                        oninput={(e) => updateOption(i, (e.currentTarget as HTMLInputElement).value)}
+                        placeholder="Label"
+                        class="h-7 text-xs flex-1"
+                      />
+                      <button
+                        type="button"
+                        onclick={() => removeOption(i)}
+                        class="text-muted-foreground hover:text-destructive shrink-0"
+                      >
+                        <X class="size-3" />
+                      </button>
+                    </div>
+                  {/each}
+                  <Button type="button" variant="outline" size="sm" class="gap-1.5 h-7 text-xs" onclick={addOption}>
+                    <Plus class="size-3" />
+                    Add option
+                  </Button>
                 </div>
-
-                {#if selectedField.psaSource}
-                  <div class="flex flex-col gap-1.5">
-                    <Label class="text-xs">PSA field</Label>
-                    <select
-                      value={selectedField.psaSource}
-                      onchange={(e) => updateSelected({ psaSource: (e.currentTarget as HTMLSelectElement).value })}
-                      class="text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
-                    >
-                      {#each AGENT_PSA_SOURCES as src}
-                        <option value={src.value}>{src.label}</option>
-                      {/each}
-                    </select>
-                    <p class="text-[10px] text-muted-foreground">Options are loaded from the configured PSA at runtime.</p>
-                  </div>
-                {:else}
-                  <!-- Manual options -->
-                  <div class="flex flex-col gap-1.5">
-                    {#each selectedField.selectOptions ?? [] as opt, i}
-                      <div class="flex items-center gap-1">
-                        <Input
-                          value={opt.label}
-                          oninput={(e) => updateOption(i, { label: (e.currentTarget as HTMLInputElement).value })}
-                          placeholder="Label"
-                          class="h-7 text-xs flex-1"
-                        />
-                        <Input
-                          value={opt.value}
-                          oninput={(e) => updateOption(i, { value: (e.currentTarget as HTMLInputElement).value })}
-                          placeholder="Value"
-                          class="h-7 text-xs flex-1"
-                        />
-                        <button
-                          type="button"
-                          onclick={() => removeOption(i)}
-                          class="text-muted-foreground hover:text-destructive shrink-0"
-                        >
-                          <X class="size-3" />
-                        </button>
-                      </div>
-                    {/each}
-                    <Button type="button" variant="outline" size="sm" class="gap-1.5 h-7 text-xs" onclick={addOption}>
-                      <Plus class="size-3" />
-                      Add option
-                    </Button>
-                  </div>
-                {/if}
               </div>
             {/if}
 
@@ -952,40 +925,47 @@
               <!-- PSA metric this field drives -->
               <div class="flex flex-col gap-2 p-3 border-b">
                 <div>
-                  <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">PSA metric</p>
+                  <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">PSA field</p>
                   <p class="text-[10px] text-muted-foreground mt-0.5">Optionally map this value to a PSA ticket field</p>
                 </div>
-                <select
-                  value={selectedField.psaMetric ?? ''}
-                  onchange={(e) => updateSelected({ psaMetric: (e.currentTarget as HTMLSelectElement).value || undefined })}
-                  class="text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  <option value="">— none —</option>
-                  {#each AGENT_PSA_METRICS as m}
-                    <option value={m.value}>{m.label}</option>
-                  {/each}
-                </select>
+                <SingleSelect
+                  options={AGENT_PSA_METRICS.map(m => ({ value: m.value, label: m.label }))}
+                  selected={selectedField.psaMetric}
+                  placeholder="— none —"
+                  onchange={(v) => updateSelected({ psaMetric: v || undefined, optionMappings: undefined })}
+                  class="text-xs h-8"
+                />
 
-                <!-- Per-option PSA value mappings (only for manual-option select fields) -->
-                {#if selectedField.type === 'select' && selectedField.psaMetric && !selectedField.psaSource && (selectedField.selectOptions?.length ?? 0) > 0}
+                <!-- Per-option PSA value mapping — only for closed select fields with options defined -->
+                {#if selectedField.type === 'select' && selectedField.psaMetric && !isOpenPsaMetric(selectedField.psaMetric) && (selectedField.selectOptions?.length ?? 0) > 0}
                   <div class="flex flex-col gap-1.5 mt-1">
-                    <p class="text-[10px] text-muted-foreground">Map each option to the value your PSA expects:</p>
-                    {#each selectedField.selectOptions ?? [] as opt}
-                      <div class="flex items-center gap-1.5">
-                        <span class="text-xs text-muted-foreground flex-1 truncate">{opt.label || opt.value || '(empty)'}</span>
-                        <Input
-                          value={selectedField.optionMappings?.[opt.value] ?? ''}
-                          oninput={(e) => {
-                            const val = (e.currentTarget as HTMLInputElement).value;
-                            const next = { ...(selectedField!.optionMappings ?? {}) };
-                            if (val) next[opt.value] = val; else delete next[opt.value];
-                            updateSelected({ optionMappings: next });
-                          }}
-                          placeholder="PSA value"
-                          class="h-6 text-xs w-24 font-mono shrink-0"
-                        />
-                      </div>
-                    {/each}
+                    {#if psaMetricOptionsQuery.isLoading}
+                      <p class="text-[10px] text-muted-foreground">Loading PSA options…</p>
+                    {:else if psaMetricOptionsQuery.isError}
+                      <p class="text-[10px] text-destructive">Failed to load PSA options — check that HaloPSA is connected.</p>
+                    {:else if (psaMetricOptionsQuery.data?.length ?? 0) > 0}
+                      <p class="text-[10px] text-muted-foreground">Map each option to its PSA value:</p>
+                      {#each selectedField.selectOptions ?? [] as opt}
+                        <div class="flex items-center gap-1.5">
+                          <span class="text-xs text-muted-foreground flex-1 truncate">{opt.label || '(empty)'}</span>
+                          <SingleSelect
+                            options={(psaMetricOptionsQuery.data ?? []).map(psaOpt => ({ value: String(psaOpt.id), label: psaOpt.name }))}
+                            selected={selectedField.optionMappings?.[opt.value]}
+                            placeholder="— unset —"
+                            onchange={(v) => {
+                              const next = { ...(selectedField!.optionMappings ?? {}) };
+                              if (v) next[opt.value] = v; else delete next[opt.value];
+                              updateSelected({ optionMappings: next });
+                            }}
+                            class="w-36 shrink-0 text-xs"
+                          />
+                        </div>
+                      {/each}
+                    {:else}
+                      <p class="text-[10px] text-muted-foreground">
+                        No PSA options found — ensure HaloPSA is connected and the integration is active.
+                      </p>
+                    {/if}
                   </div>
                 {/if}
               </div>

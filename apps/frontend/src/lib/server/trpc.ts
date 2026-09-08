@@ -2,6 +2,7 @@ import { appRouter, type EffectiveScope } from '@mspbyte/trpc';
 import { createTenantDb, getCatalogDb, type organization } from '@mspbyte/drizzle-catalog';
 import type { db } from '$lib/db';
 import { ENCRYPTION_KEY, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 import {
   hasPermission,
   hasAnyPermissionUnder,
@@ -39,6 +40,8 @@ export function createServerCaller(locals: {
     linkScopeFor: (_p: Permission): EffectiveScope => [],
     connectionString: locals.connectionString,
     encryptionKey: ENCRYPTION_KEY,
+    agentsInternalUrl: env.AGENTS_INTERNAL_URL ?? null,
+    agentsInternalSecret: env.AGENTS_INTERNAL_SECRET ?? null,
     ipAddress: null,
     userAgent: null,
     microsoftCredentials:

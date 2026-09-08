@@ -262,7 +262,8 @@ export function submitRoute(fastify: FastifyInstance) {
     }
 
     // Map PSA metrics → HaloPSA ticket fields
-    const priority_id = psaMetrics['priority']   ? Number(psaMetrics['priority'])     : 4;
+    // "priority" maps to HaloPSA's impact field (ITIL enum 1=High, 2=Medium, 3=Low).
+    const impact      = psaMetrics['priority']   ? String(psaMetrics['priority'])     : undefined;
     const urgency_id  = psaMetrics['urgency']    ? Number(psaMetrics['urgency'])      : undefined;
     const tickettype_id = psaMetrics['ticket_type'] ? Number(psaMetrics['ticket_type']) : 3;
     const category_1  = psaMetrics['category']   ?? 'Standard - Incident';
@@ -275,7 +276,7 @@ export function submitRoute(fastify: FastifyInstance) {
     try {
       ticketId = await connector.tickets.create({
         site_id: psaSiteId ? Number(psaSiteId) : undefined,
-        priority_id,
+        ...(impact !== undefined ? { impact } : {}),
         ...(urgency_id !== undefined ? { urgency_id } : {}),
         files: null,
         usertype: 1,

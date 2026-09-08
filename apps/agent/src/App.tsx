@@ -52,8 +52,12 @@ export default function App() {
     const unlistenForm = listen<string>('open_form', ({ payload }) => {
       setRequestedFormId(payload);
     });
+    const unlistenHide = listen('on_hide', () => {
+      setRequestedFormId(null);
+    });
     return () => {
       void unlistenForm.then((fn) => fn());
+      void unlistenHide.then((fn) => fn());
     };
   }, []);
 

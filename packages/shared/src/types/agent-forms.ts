@@ -41,17 +41,25 @@ export type AgentFieldType =
   | 'attachment';
 
 // PSA metrics — what a field's submitted value can SET on the created ticket.
-// The backend maps these to PSA-specific API parameters based on primaryPsa.
-export const AGENT_PSA_METRICS: { value: string; label: string; description: string }[] = [
-  { value: 'urgency',       label: 'Urgency',       description: 'Sets the ticket urgency level' },
-  { value: 'ticket_type',   label: 'Ticket Type',   description: 'Sets the ticket type' },
-  { value: 'priority',      label: 'Priority',      description: 'Sets the ticket priority' },
-  { value: 'category',      label: 'Category',      description: 'Sets the issue category' },
-  { value: 'subcategory',   label: 'Subcategory',   description: 'Sets the issue subcategory' },
-  { value: 'contact_email', label: 'Contact Email', description: 'Looks up the PSA contact by email' },
-  { value: 'contact_name',  label: 'Contact Name',  description: 'Contact display name' },
-  { value: 'contact_phone', label: 'Contact Phone', description: 'Contact phone number' },
+// isOpen=true means the value flows through directly (no enumerated PSA options to map against).
+// isOpen=false means the PSA has a fixed set of valid IDs the MSP must map to.
+export const AGENT_PSA_METRICS: { value: string; label: string; description: string; isOpen: boolean }[] = [
+  { value: 'urgency',       label: 'Urgency',       description: 'Sets the ticket urgency level',     isOpen: false },
+  { value: 'ticket_type',   label: 'Ticket Type',   description: 'Sets the ticket type',              isOpen: false },
+  { value: 'priority',      label: 'Priority',      description: 'Sets the ticket priority',          isOpen: false },
+  { value: 'category',      label: 'Category',      description: 'Sets the issue category',           isOpen: false },
+  { value: 'subcategory',   label: 'Subcategory',   description: 'Sets the issue subcategory',        isOpen: false },
+  { value: 'status',        label: 'Status',        description: 'Sets the ticket status',            isOpen: false },
+  { value: 'team',          label: 'Team',          description: 'Assigns the ticket to a team',      isOpen: false },
+  { value: 'agent',         label: 'Assigned Agent',description: 'Assigns the ticket to a technician',isOpen: false },
+  { value: 'contact_email', label: 'Contact Email', description: 'Looks up the PSA contact by email', isOpen: true  },
+  { value: 'contact_name',  label: 'Contact Name',  description: 'Contact display name',              isOpen: true  },
+  { value: 'contact_phone', label: 'Contact Phone', description: 'Contact phone number',              isOpen: true  },
 ];
+
+export function isOpenPsaMetric(metric: string): boolean {
+  return AGENT_PSA_METRICS.find(m => m.value === metric)?.isOpen ?? true;
+}
 
 // System-provided hydration variables always available in ticket templates.
 export const AGENT_SYSTEM_VARS: { key: string; label: string }[] = [

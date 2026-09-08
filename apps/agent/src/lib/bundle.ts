@@ -1,4 +1,4 @@
-export type FieldType = 'text' | 'textarea' | 'select' | 'email' | 'phone' | 'checkbox' | 'number' | 'image';
+export type FieldType = 'text' | 'textarea' | 'select' | 'email' | 'phone' | 'checkbox' | 'number' | 'image' | 'attachment';
 
 export type FieldDef = {
   id: string;
@@ -8,6 +8,9 @@ export type FieldDef = {
   col_span: 1 | 2 | 3;
   placeholder?: string;
   options?: string[];
+  selectOptions?: { label: string; value: string }[];
+  allowUpload?: boolean;
+  allowScreenshot?: boolean;
 };
 
 export type FormRow = { cols: FieldDef[] };

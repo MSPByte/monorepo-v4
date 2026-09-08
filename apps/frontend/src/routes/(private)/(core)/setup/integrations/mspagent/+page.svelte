@@ -57,6 +57,7 @@
   import { toUserMessage, logError } from '$lib/utils/errors';
   import { authStore } from '$lib/stores/auth.store.svelte';
   import Loader from '$lib/components/transition/loader.svelte';
+  import SingleSelect from '$lib/components/single-select.svelte';
 
   type MSPAgentConfig = { primaryPsa?: string; siteVariableName?: string };
   type MSPAgentLinkMeta = {
@@ -200,6 +201,7 @@
     branding: { appName: string; primaryColor: string; supportEmail: string; supportPhone: string; logoUrl: string };
     tray: { show: boolean; label: string; showMyTickets: boolean };
     enabledFormIds: string[];
+    ticketReplyStatusId: number | null;
   };
 
   function emptyConfigForm(): ConfigFormData {
@@ -209,10 +211,19 @@
       branding: { appName: '', primaryColor: '#3b82f6', supportEmail: '', supportPhone: '', logoUrl: '' },
       tray: { show: true, label: '', showMyTickets: true },
       enabledFormIds: [],
+      ticketReplyStatusId: null,
     };
   }
 
   let configEditOpen = $state(false);
+
+  const psaStatusesQuery = createQuery(() => ({
+    queryKey: ['agents.configs.psaMetricOptions', 'status'],
+    queryFn: () => trpc.agents.configs.psaMetricOptions.query({ metric: 'status' }),
+    enabled: configEditOpen,
+    staleTime: 5 * 60 * 1000,
+  }));
+
   let configEditId = $state<string | null>(null);
   let configDialogTab = $state<'details' | 'forms' | 'assignments'>('details');
   let configForm = $state<ConfigFormData>(emptyConfigForm());
@@ -246,6 +257,7 @@
       branding?: { appName?: string; primaryColor?: string; supportEmail?: string; supportPhone?: string; logoUrl?: string };
       tray?: { show?: boolean; label?: string; showMyTickets?: boolean };
       enabledFormIds?: string[];
+      ticketReplyStatusId?: number;
     };
     configForm = {
       name: config.name,
@@ -259,6 +271,7 @@
       },
       tray: { show: d?.tray?.show ?? true, label: d?.tray?.label ?? '', showMyTickets: d?.tray?.showMyTickets ?? true },
       enabledFormIds: d?.enabledFormIds ?? [],
+      ticketReplyStatusId: d?.ticketReplyStatusId ?? null,
     };
     configDialogTab = 'details';
     configEditOpen = true;
@@ -311,6 +324,7 @@
         showMyTickets: form.tray.showMyTickets,
       },
       enabledFormIds: form.enabledFormIds,
+      ...(form.ticketReplyStatusId != null ? { ticketReplyStatusId: form.ticketReplyStatusId } : {}),
     };
   }
 
@@ -1122,6 +1136,26 @@
                       <Switch bind:checked={configForm.tray.showMyTickets} />
                     </div>
                   {/if}
+                </section>
+
+                <!-- PSA Behaviour section -->
+                <section class="flex flex-col gap-4">
+                  <header class="flex flex-col gap-0.5">
+                    <p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">PSA behaviour</p>
+                    <p class="text-xs text-muted-foreground/80">How the agent app interacts with your PSA after end-user actions.</p>
+                  </header>
+
+                  <div class="flex flex-col gap-1.5 max-w-sm">
+                    <Label for="cfg-reply-status">Ticket status after reply <span class="text-muted-foreground font-normal">(optional)</span></Label>
+                    <SingleSelect
+                      options={(psaStatusesQuery.data ?? []).map(s => ({ value: String(s.id), label: s.name }))}
+                      selected={configForm.ticketReplyStatusId != null ? String(configForm.ticketReplyStatusId) : undefined}
+                      placeholder="— no change —"
+                      loading={psaStatusesQuery.isLoading}
+                      onchange={(v) => { configForm.ticketReplyStatusId = v ? Number(v) : null; }}
+                    />
+                    <p class="text-[11px] text-muted-foreground">When an end user sends a reply on a ticket, the ticket is moved to this status in the PSA.</p>
+                  </div>
                 </section>
               </div>
             </Tabs.Content>

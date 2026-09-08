@@ -2,6 +2,7 @@ import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { appRouter, type EffectiveScope } from '@mspbyte/trpc';
 import { createTenantDb, getCatalogDb } from '@mspbyte/drizzle-catalog';
 import { ENCRYPTION_KEY, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 import { getRedis } from '$lib/server/redis';
 import {
   hasPermission,
@@ -34,6 +35,8 @@ const handler: RequestHandler = async (event) => {
       linkScopeFor: (_p: Permission): EffectiveScope => [],
       connectionString: event.locals.connectionString,
       encryptionKey: ENCRYPTION_KEY,
+      agentsInternalUrl: env.AGENTS_INTERNAL_URL ?? null,
+      agentsInternalSecret: env.AGENTS_INTERNAL_SECRET ?? null,
       ipAddress: event.getClientAddress(),
       userAgent: event.request.headers.get('user-agent'),
       microsoftCredentials:
