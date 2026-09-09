@@ -1,9 +1,11 @@
 import crypto from 'node:crypto';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { agents, agentBundles, agentBundleAssignments, agentForms, siteGroupMembers } from '@mspbyte/drizzle';
+import { formWantsEntraIdentity, type AgentFormPackageBindings } from '@mspbyte/shared';
 import { getTenantDbForOrg } from '../db.js';
 import { requireOrgId } from '../require-device.js';
 import { logger } from '../logger.js';
+import { env } from '../env.js';
 import type { FastifyInstance } from 'fastify';
 
 export function bundleRoute(fastify: FastifyInstance) {
@@ -39,13 +41,28 @@ export function bundleRoute(fastify: FastifyInstance) {
       ?.enabledFormIds as string[] | undefined;
 
     // Empty array = no forms (explicit opt-in); absent/non-array = no forms
-    const fetchedForms =
+    const fetchedRows =
       Array.isArray(enabledFormIds) && enabledFormIds.length > 0
         ? await db
-            .select({ id: agentForms.id, name: agentForms.name, description: agentForms.description, rows: agentForms.rows })
+            .select({
+              id: agentForms.id,
+              name: agentForms.name,
+              description: agentForms.description,
+              rows: agentForms.rows,
+              packageId: agentForms.packageId,
+              packageBindings: agentForms.packageBindings,
+            })
             .from(agentForms)
             .where(and(isNull(agentForms.deletedAt), inArray(agentForms.id, enabledFormIds)))
         : [];
+
+    // Devices only learn whether to offer the optional Microsoft sign-in —
+    // the linked package and its bindings never leave the server.
+    const fetchedForms = fetchedRows.map(({ packageId, packageBindings, ...form }) => ({
+      ...form,
+      wantsEntraIdentity:
+        !!packageId && formWantsEntraIdentity((packageBindings ?? {}) as AgentFormPackageBindings),
+    }));
 
     // The builder's enabled form order is also the order shown in the tray.
     const forms = Array.isArray(enabledFormIds)
@@ -54,7 +71,13 @@ export function bundleRoute(fastify: FastifyInstance) {
           .filter((form): form is (typeof fetchedForms)[number] => Boolean(form))
       : fetchedForms;
 
-    const merged = { ...(bundle?.data ?? {}), forms };
+    // Inject server-side SSO config. entraClientId stays server-side only;
+    // entraAuthEnabled is the public flag the agent UI reads to show the sign-in button.
+    const ssoFields = env.MICROSOFT_AUTH_CLIENT_ID
+      ? { entraAuthEnabled: true, entraClientId: env.MICROSOFT_AUTH_CLIENT_ID }
+      : {};
+
+    const merged = { ...(bundle?.data ?? {}), forms, ...ssoFields };
     const etag = crypto.createHash('sha256').update(JSON.stringify(merged)).digest('hex');
 
     const clientEtag = (req.headers['if-none-match'] as string | undefined)?.trim();

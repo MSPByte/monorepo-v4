@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { crudPolicy, authenticatedRole } from 'drizzle-orm/neon';
 import { agentSchema } from '../schemas.js';
 import { sites, siteGroups } from '../public/index.js';
+import { packages } from '../packages/index.js';
 
 export const agents = agentSchema.table(
   'agents',
@@ -110,6 +111,11 @@ export const agentForms = agentSchema.table(
     ticketTitle: text('ticket_title'),
     ticketBody: text('ticket_body'),
     psaMappings: jsonb('psa_mappings').notNull().default({}),
+    // Optional automation trigger: package launched after the ticket is
+    // created, with runtime inputs resolved from packageBindings
+    // (promptKey → AgentFormInputSource in @mspbyte/shared).
+    packageId: uuid('package_id').references(() => packages.id, { onDelete: 'set null' }),
+    packageBindings: jsonb('package_bindings').notNull().default({}),
     createdBy: uuid('created_by'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .notNull()

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, or } from 'drizzle-orm';
 import {
   agents,
   agentForms,
@@ -7,6 +7,7 @@ import {
   agentLogs,
   integrations,
   integrationLinks,
+  integrationLinkSiteAssignments,
 } from '@mspbyte/drizzle';
 import { Encryption } from '@mspbyte/encryption';
 import { HaloPSAConnector } from '@mspbyte/connectors';
@@ -15,6 +16,15 @@ import { getTenantDbForOrg } from '../db.js';
 import { requireOrgId } from '../require-device.js';
 import { logger } from '../logger.js';
 import { env } from '../env.js';
+import { verifyEntraToken } from '../entra.js';
+import { isRateLimited } from '../redis.js';
+import {
+  prepareFormAutomation,
+  launchFormPackageRun,
+  type PreparedFormAutomation,
+  type FormAutomationSkipReason,
+} from '../form-automation.js';
+import type { AgentFormPackageBindings } from '@mspbyte/shared';
 import type { FastifyInstance } from 'fastify';
 
 const AttachmentSchema = z.object({
@@ -35,6 +45,7 @@ const BodySchema = z.object({
   answers: z.record(z.string(), z.unknown()),
   os_user: OsUserSchema,
   attachments: z.array(AttachmentSchema).default([]),
+  entra_token: z.string().optional(),
 });
 
 const PSAConfigSchema = z
@@ -74,7 +85,7 @@ export function submitRoute(fastify: FastifyInstance) {
     if (!body.success) {
       return reply.status(400).send({ error: 'Invalid request body' });
     }
-    const { form_id, answers, os_user, attachments } = body.data;
+    const { form_id, answers, os_user, attachments, entra_token } = body.data;
 
     const [device] = await db
       .select({ id: agents.id, siteId: agents.siteId, hostname: agents.hostname })
@@ -86,13 +97,63 @@ export function submitRoute(fastify: FastifyInstance) {
       return reply.status(401).send({ error: 'Unknown or revoked device' });
     }
 
+    // A valid Microsoft token is not enough by itself: its tenant must be the
+    // active M365 tenant assigned to this device's site. This prevents users
+    // from authenticating with an unrelated organizational account.
+    let entraIdentity: Awaited<ReturnType<typeof verifyEntraToken>> = null;
+    if (entra_token) {
+      const verified = await verifyEntraToken(entra_token);
+      if (verified) {
+        const [siteTenant] = await db
+          .select({ id: integrationLinks.id })
+          .from(integrationLinks)
+          .leftJoin(
+            integrationLinkSiteAssignments,
+            eq(integrationLinkSiteAssignments.linkId, integrationLinks.id),
+          )
+          .where(and(
+            eq(integrationLinks.integrationId, 'microsoft-365'),
+            eq(integrationLinks.externalId, verified.tenantId),
+            eq(integrationLinks.status, 'active'),
+            or(
+              eq(integrationLinks.siteId, device.siteId),
+              eq(integrationLinkSiteAssignments.siteId, device.siteId),
+            ),
+          ))
+          .limit(1);
+        if (siteTenant) {
+          entraIdentity = verified;
+          logger.info('Entra SSO identity verified for site', {
+            upn: verified.upn,
+            oid: verified.oid,
+            tenantId: verified.tenantId,
+            siteId: device.siteId,
+          });
+        } else {
+          logger.warn('Entra token tenant is not assigned to device site', {
+            tenantId: verified.tenantId,
+            siteId: device.siteId,
+          });
+        }
+      } else {
+        logger.warn('Entra SSO token present but verification failed — proceeding without identity');
+      }
+    }
+
+    if (await isRateLimited(orgId, device.id, form_id)) {
+      return reply.status(429).send({ error: 'Please wait a moment before submitting again' });
+    }
+
     // Load form — psa_mappings kept for backward compat with old forms.
     const [form] = await db
       .select({
+        name: agentForms.name,
         rows: agentForms.rows,
         psaMappings: agentForms.psaMappings,
         ticketTitle: agentForms.ticketTitle,
         ticketBody: agentForms.ticketBody,
+        packageId: agentForms.packageId,
+        packageBindings: agentForms.packageBindings,
       })
       .from(agentForms)
       .where(and(eq(agentForms.id, form_id), isNull(agentForms.deletedAt)))
@@ -238,6 +299,42 @@ export function submitRoute(fastify: FastifyInstance) {
       .map((src) => `<img src="${src}" class="fr-fil fr-dib" width="720" height="374">`)
       .join('<br>');
 
+    // Prepare the linked package run (if any) before the ticket is built, so
+    // a skipped automation can be called out inside the ticket itself.
+    let prepared: PreparedFormAutomation | null = null;
+    if (form.packageId) {
+      prepared = await prepareFormAutomation(db, {
+        packageId: form.packageId,
+        bindings: (form.packageBindings ?? {}) as AgentFormPackageBindings,
+        siteId: device.siteId,
+        answers,
+        system: {
+          device_hostname: device.hostname ?? undefined,
+          os_user: os_user.username,
+          site_id: device.siteId,
+          ...(entraIdentity
+            ? {
+                entra_upn: entraIdentity.upn,
+                entra_oid: entraIdentity.oid,
+                entra_display_name: entraIdentity.displayName ?? entraIdentity.upn,
+              }
+            : {}),
+        },
+      });
+    }
+
+    const SKIP_NOTES: Record<FormAutomationSkipReason, string> = {
+      no_verified_identity: 'the user did not sign in with Microsoft',
+      missing_inputs: 'required automation inputs were missing',
+      package_missing: 'the linked automation no longer exists',
+      package_inactive: 'the linked automation is not active',
+      site_not_allowed: 'the linked automation is not permitted for this site',
+    };
+    const automationSkipNote =
+      prepared && !prepared.willRun
+        ? `[Automation skipped — ${SKIP_NOTES[prepared.reason]}. Please handle this request manually.]`
+        : null;
+
     // Build ticket body HTML. If the MSP defined a body template, hydrate it;
     // otherwise fall back to the legacy detail-line format.
     let details_html: string;
@@ -246,6 +343,7 @@ export function submitRoute(fastify: FastifyInstance) {
       const bodyText = hydrate(form.ticketBody);
       details_html = `<p>${bodyText.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}</p>`;
       if (imageHtml) details_html += `<p>${imageHtml}</p>`;
+      if (automationSkipNote) details_html += `<p>${automationSkipNote}</p>`;
     } else {
       const detailLines = [
         `[Agent Form Submission]`,
@@ -257,6 +355,7 @@ export function submitRoute(fastify: FastifyInstance) {
         `Device: ${device.hostname}`,
         `OS User: ${os_user.username}`,
         os_user.sid ? `SID: ${os_user.sid}` : '',
+        automationSkipNote ?? '',
       ].filter(Boolean);
       details_html = `<p>${detailLines.join('<br>')}<br>${imageHtml}</p>`;
     }
@@ -314,18 +413,54 @@ export function submitRoute(fastify: FastifyInstance) {
 
     logger.info('HaloPSA ticket created via v2.0/submit', { ticketId, hostname: device.hostname, clientId: psaParentCompanyId });
 
+    // Launch the linked package run now that the ticket ID exists. A trigger
+    // failure never fails the submission — the ticket is the fallback.
+    let automation: { status: 'triggered' | 'skipped' | 'failed_to_trigger'; reason?: string; packageRunId?: string } | null = null;
+    if (prepared) {
+      if (!prepared.willRun) {
+        automation = { status: 'skipped', reason: prepared.reason };
+      } else {
+        const run = await launchFormPackageRun(db, prepared, {
+          ticketId,
+          formId: form_id,
+          formName: form.name,
+          agentId: device.id,
+          siteId: device.siteId,
+          submitterLabel: entraIdentity?.upn ?? os_user.display_name ?? os_user.username,
+          entraOid: entraIdentity?.oid,
+        });
+        automation = run
+          ? { status: 'triggered', packageRunId: run.packageRunId }
+          : { status: 'failed_to_trigger' };
+      }
+      logger.info('Form automation outcome', { formId: form_id, ticketId, ...automation });
+    }
+
     try {
       await db.insert(agentTickets).values({
         agentId: device.id,
         siteId: device.siteId,
         ticketId,
         summary,
-        meta: { formId: form_id, osUser: os_user, answers, imageUrls, assetIds },
+        meta: {
+          formId: form_id,
+          osUser: os_user,
+          answers,
+          imageUrls,
+          assetIds,
+          ...(automation ? { automation } : {}),
+        },
       });
     } catch (err) {
       logger.warn('Failed to insert agentTickets record', { err });
     }
 
-    return reply.status(200).send({ data: { ticket_id: ticketId } });
+    return reply.status(200).send({
+      data: {
+        ticket_id: ticketId,
+        ...(entraIdentity ? { entra_upn: entraIdentity.upn, entra_oid: entraIdentity.oid } : {}),
+        ...(automation ? { automation: automation.status } : {}),
+      },
+    });
   });
 }

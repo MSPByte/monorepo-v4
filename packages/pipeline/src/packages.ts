@@ -115,7 +115,7 @@ export type CreatePendingPackageRunParams = {
   packageSnapshot: unknown;
   linkId?: string | null;
   siteId?: string | null;
-  triggerType: "manual" | "finding" | "scheduled" | "api";
+  triggerType: "manual" | "finding" | "scheduled" | "api" | "form";
   triggerRef?: unknown;
   triggeredByUserId?: string;
   triggerSourceLabel?: string;

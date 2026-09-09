@@ -36,6 +36,7 @@ export type AgentFieldType =
   | 'phone'
   | 'email'
   | 'number'
+  | 'date'
   | 'checkbox'
   | 'select'
   | 'attachment';
@@ -99,6 +100,50 @@ export interface AgentFormRow {
   id: string;
   cols_max: 2 | 3;
   cols: AgentFormField[];
+}
+
+// ---- Form → package automation ----
+
+// System values the platform can supply to a package input at submit time.
+// entra_* keys are only present when the submitter completed the optional
+// Microsoft sign-in and the token verified server-side.
+export type AgentFormSystemSourceKey =
+  | 'ticket_id'
+  | 'entra_upn'
+  | 'entra_oid'
+  | 'entra_display_name'
+  | 'device_hostname'
+  | 'os_user'
+  | 'site_id';
+
+export const AGENT_FORM_SYSTEM_SOURCES: { key: AgentFormSystemSourceKey; label: string; description: string }[] = [
+  { key: 'ticket_id',          label: 'Created ticket ID',      description: 'The PSA ticket created by this submission' },
+  { key: 'entra_upn',          label: 'Signed-in user (UPN)',   description: 'Verified Microsoft sign-in — user principal name' },
+  { key: 'entra_oid',          label: 'Signed-in user (object ID)', description: 'Verified Microsoft sign-in — Entra object ID' },
+  { key: 'entra_display_name', label: 'Signed-in user (name)',  description: 'Verified Microsoft sign-in — display name' },
+  { key: 'device_hostname',    label: 'Device hostname',        description: 'The device the form was submitted from' },
+  { key: 'os_user',            label: 'OS username',            description: 'The local user account on the device' },
+  { key: 'site_id',            label: 'Site',                   description: 'The site the device belongs to' },
+];
+
+// Where a package runtime input gets its value from on submission.
+export type AgentFormInputSource =
+  | { kind: 'formField'; fieldId: string }
+  | { kind: 'system'; key: AgentFormSystemSourceKey }
+  | { kind: 'literal'; value: unknown };
+
+// promptKey → source. Stored in agent.forms.package_bindings.
+export type AgentFormPackageBindings = Record<string, AgentFormInputSource>;
+
+const ENTRA_SOURCE_KEYS: AgentFormSystemSourceKey[] = ['entra_upn', 'entra_oid', 'entra_display_name'];
+
+// Derived, never configured: a form asks the end user for the optional
+// Microsoft sign-in exactly when its automation consumes a verified identity.
+export function formWantsEntraIdentity(bindings: AgentFormPackageBindings | null | undefined): boolean {
+  if (!bindings) return false;
+  return Object.values(bindings).some(
+    (s) => s.kind === 'system' && ENTRA_SOURCE_KEYS.includes(s.key)
+  );
 }
 
 // Kept for backward-compat with forms that were saved under the old system.

@@ -140,7 +140,7 @@ export const packageRuns = packagesSchema.table(
       onDelete: 'set null',
     }),
     triggerType: text('trigger_type', {
-      enum: ['manual', 'finding', 'scheduled', 'api'],
+      enum: ['manual', 'finding', 'scheduled', 'api', 'form'],
     }).notNull(),
     triggerRef: jsonb('trigger_ref'),
     startStepIndex: integer('start_step_index').notNull().default(0),

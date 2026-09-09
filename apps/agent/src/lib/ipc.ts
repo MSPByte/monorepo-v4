@@ -9,6 +9,14 @@ export type AgentStatus = {
   bundle_offline: boolean;
 };
 
+export type EntraSsoStatus = {
+  device_aad_joined: boolean;
+  user_prt_present: boolean;
+  upn: string | null;
+  tenant_id: string | null;
+  source: 'dsregcmd' | 'az_cli' | 'cached' | 'unavailable';
+};
+
 export type OsUser = {
   username: string;
   sid: string | null;
@@ -38,12 +46,16 @@ export type SubmitFormPayload = {
   answers: Record<string, string>;
   os_user: OsUser;
   attachments: Attachment[];
+  // Verified-identity token for automation-linked forms; omitted when the
+  // user skips the optional Microsoft sign-in.
+  entra_token?: string;
 };
 
 export type SubmitFormAck = {
   accepted: boolean;
   message: string;
   submission_id: string | null;
+  automation?: 'triggered' | 'skipped' | 'failed_to_trigger';
 };
 
 export type TicketNoteAck = {
@@ -105,4 +117,16 @@ export const ipc = {
 
   getPendingEvents: () =>
     wrapInvoke<void>('get_pending_events'),
+
+  getEntraSsoStatus: () =>
+    wrapInvoke<EntraSsoStatus>('get_entra_sso_status'),
+
+  startEntraAuth: () =>
+    wrapInvoke<void>('start_entra_auth'),
+
+  getCachedSsoToken: () =>
+    wrapInvoke<string | null>('get_cached_sso_token'),
+
+  clearEntraAuth: () =>
+    wrapInvoke<void>('clear_entra_auth'),
 };

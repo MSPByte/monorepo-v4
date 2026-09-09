@@ -9,6 +9,7 @@ export * from "./schemas/cove.js";
 export * from "./schemas/datto.js";
 export * from "./schemas/halopsa.js";
 export * from "./lib/auth.js";
+export * from "./lib/form-bindings.js";
 export * from "./lib/m365-inbox-rules.js";
 export {
   CoveConnector,

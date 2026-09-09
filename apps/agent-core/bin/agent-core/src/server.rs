@@ -113,17 +113,26 @@ async fn dispatch(req: Envelope, root: PathBuf, cfg: Config, state: Arc<RwLock<S
                 Ok(resp) if resp.status().is_success() => {
                     let body: serde_json::Value = resp.json().await.unwrap_or_default();
                     let ticket_id = body["data"]["ticket_id"].as_str().map(str::to_string);
+                    let automation = body["data"]["automation"].as_str().map(str::to_string);
                     req.reply(Message::SubmitFormAck(SubmitFormAckPayload {
                         accepted: true,
                         message: "Ticket created".into(),
                         submission_id: ticket_id,
+                        automation,
                     }))
                 }
                 Ok(resp) => {
                     let status = resp.status().as_u16();
+                    // Prefer the server's user-facing error text (e.g. the
+                    // rate-limit cooldown message) over a bare status code.
+                    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                    let message = body["error"]
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("Server returned {}", status));
                     req.reply(Message::Error(ErrorPayload {
                         code: "submit_error".into(),
-                        message: format!("Server returned {}", status),
+                        message,
                     }))
                 }
                 Err(e) => req.reply(Message::Error(ErrorPayload {

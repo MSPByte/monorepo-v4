@@ -81,6 +81,10 @@ pub struct SubmitFormPayload {
     pub answers: serde_json::Value,
     pub os_user: OsUserPayload,
     pub attachments: Vec<AttachmentPayload>,
+    // Optional verified-identity token for automation-linked forms. Omitted
+    // from the wire entirely when absent so older servers accept the body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entra_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +100,8 @@ pub struct SubmitFormAckPayload {
     pub accepted: bool,
     pub message: String,
     pub submission_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

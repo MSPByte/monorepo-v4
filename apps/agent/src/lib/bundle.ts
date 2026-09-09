@@ -1,4 +1,4 @@
-export type FieldType = 'text' | 'textarea' | 'select' | 'email' | 'phone' | 'checkbox' | 'number' | 'image' | 'attachment';
+export type FieldType = 'text' | 'textarea' | 'select' | 'email' | 'phone' | 'checkbox' | 'number' | 'date' | 'image' | 'attachment';
 
 export type FieldDef = {
   id: string;
@@ -20,6 +20,9 @@ export type FormDef = {
   name: string;
   description?: string;
   rows: FormRow[];
+  // Server-derived: this form's automation uses the submitter's verified
+  // identity, so the UI offers an optional Microsoft sign-in before submit.
+  wantsEntraIdentity?: boolean;
 };
 
 export type Branding = {
@@ -38,4 +41,5 @@ export type Bundle = {
     showMyTickets?: boolean;
   };
   forms: FormDef[];
+  entraAuthEnabled?: boolean;
 };

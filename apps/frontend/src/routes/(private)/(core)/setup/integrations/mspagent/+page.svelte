@@ -50,8 +50,9 @@
     Palette,
     LayoutList,
     UserPlus,
+    Zap,
   } from '@lucide/svelte';
-  import { goto } from '$app/navigation';
+  import { goto, replaceState } from '$app/navigation';
   import { enhance } from '$app/forms';
   import { toast } from 'svelte-sonner';
   import { toUserMessage, logError } from '$lib/utils/errors';
@@ -690,14 +691,31 @@
 
   // ── Tab state (URL-driven) ────────────────────────────────────────────────
 
-  let activeTab = $state('configs');
+  const agentTabs = ['configs', 'sites', 'forms', 'webhooks'] as const;
+  type AgentTab = (typeof agentTabs)[number];
+
+  function tabFromUrl(): AgentTab {
+    const tab = get(page).url.searchParams.get('tab');
+    return agentTabs.includes(tab as AgentTab) ? (tab as AgentTab) : 'configs';
+  }
+
+  let activeTab = $state<AgentTab>('configs');
 
   onMount(() => {
-    const tab = get(page).url.searchParams.get('tab');
-    if (tab === 'forms' || tab === 'sites' || tab === 'configs' || tab === 'webhooks') {
-      activeTab = tab;
-    }
+    activeTab = tabFromUrl();
   });
+
+  function selectTab(value: string) {
+    if (!agentTabs.includes(value as AgentTab)) return;
+    activeTab = value as AgentTab;
+
+    const currentPage = get(page);
+    if (currentPage.url.searchParams.get('tab') === value) return;
+
+    const url = new URL(currentPage.url);
+    url.searchParams.set('tab', value);
+    replaceState(url, currentPage.state);
+  }
 
   // ── Webhook secret copy state ─────────────────────────────────────────────
 
@@ -1448,7 +1466,7 @@
   {#if isLoading}
     <Loader />
   {:else if isConfigured}
-    <Tabs.Root bind:value={activeTab} class="flex flex-col flex-1 min-h-0 gap-0">
+    <Tabs.Root value={activeTab} onValueChange={selectTab} class="flex flex-col flex-1 min-h-0 gap-0">
       <Tabs.List class="shrink-0 w-fit">
         <Tabs.Trigger value="configs">App Configs</Tabs.Trigger>
         <Tabs.Trigger value="sites">Sites</Tabs.Trigger>
@@ -1837,7 +1855,7 @@
       <Tabs.Content value="forms" class="flex flex-col flex-1 min-h-0 mt-4 gap-3">
         <div class="flex items-center justify-between shrink-0">
           <p class="text-sm text-muted-foreground">
-            Forms let agents submit support tickets. Enable individual forms per config under App Configs.
+            Forms collect support requests and can securely launch packages. Enable individual forms per config under App Configs.
           </p>
           {#if canManage}
             <Button size="sm" onclick={() => goto('/setup/integrations/mspagent/forms')} class="gap-2 shrink-0">
@@ -1876,6 +1894,12 @@
                     </div>
                     <div class="flex flex-col gap-0.5 min-w-0">
                       <span class="text-sm font-medium truncate">{form.name}</span>
+                      {#if form.packageId}
+                        <span class="inline-flex w-fit items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                          <Zap class="size-2.5" />
+                          {form.packageName ?? 'Automation linked'}
+                        </span>
+                      {/if}
                       {#if form.description}
                         <span class="text-xs text-muted-foreground truncate">{form.description}</span>
                       {/if}

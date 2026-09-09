@@ -16,6 +16,10 @@ const schema = z.object({
   AGENTS_INTERNAL_SECRET: z.string().optional(),
   // Set to true in local dev to enable /internal/dev/trigger without auth. Never set in production.
   DEV_TRIGGER_ENABLED: z.coerce.boolean().default(false),
+  // Entra app client ID — used to verify end-user SSO tokens on form submission.
+  MICROSOFT_AUTH_CLIENT_ID: z.string().optional(),
+  // Submission rate limiting. When unset, rate limiting is disabled (fail-open).
+  REDIS_URL: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

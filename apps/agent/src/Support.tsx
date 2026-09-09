@@ -6,6 +6,7 @@ import type { Bundle, FieldDef, FormDef } from '@/lib/bundle';
 import { ipc, type Attachment, type OsUser } from '@/lib/ipc';
 import { readFileBase64, chooseImageDialog, takeScreenshot, logToFile } from '@/lib/file';
 import { showWindow } from '@/lib/window';
+import type { EntraSsoStatus } from '@/lib/ipc';
 import { Input } from '@/ui/components/input';
 import { Textarea } from '@/ui/components/textarea';
 import {
@@ -164,6 +165,7 @@ function FieldInput({
         field.type === 'email' ? 'email'
         : field.type === 'phone' ? 'tel'
         : field.type === 'number' ? 'number'
+        : field.type === 'date' ? 'date'
         : 'text'
       }
       placeholder={field.placeholder}
@@ -174,13 +176,56 @@ function FieldInput({
   );
 }
 
+// Shown above automation-linked forms. Sign-in is always optional — skipping
+// it means the request is handled by the support team instead of automatically.
+function IdentityPrompt({
+  sso,
+  pending,
+  error,
+  onSignIn,
+}: {
+  sso: EntraSsoStatus | null;
+  pending: boolean;
+  error: string | null;
+  onSignIn: () => void;
+}) {
+  // Only the PKCE cache can supply the token attached to a submission.
+  // Device/CLI discovery is useful context, but is not proof available to
+  // this process and must not suppress the sign-in action.
+  if (sso?.source === 'cached' && sso.user_prt_present && sso.upn) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Signed in as <span className="font-medium text-foreground">{sso.upn}</span> — this request
+        can be completed automatically.
+      </p>
+    );
+  }
+  return (
+    <div className="rounded-md border bg-muted/40 p-3 flex flex-col gap-2">
+      <p className="text-sm">Sign in with Microsoft to have this request completed automatically.</p>
+      <div className="flex items-center gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={onSignIn} disabled={pending}>
+          {pending ? 'Waiting for sign-in…' : 'Sign in with Microsoft'}
+        </Button>
+        <span className="text-xs text-muted-foreground">
+          Or submit without signing in and the support team will handle it.
+        </span>
+      </div>
+      {error && <span className="text-xs text-destructive">{error}</span>}
+    </div>
+  );
+}
+
 function DynamicForm({
   form,
   osUser,
+  withIdentity,
   onSuccess,
 }: {
   form: FormDef;
   osUser: OsUser | null;
+  // When true, attach the cached Microsoft sign-in token (if any) on submit.
+  withIdentity: boolean;
   onSuccess: () => void;
 }) {
   const defaultValues = (): FieldValues => {
@@ -245,16 +290,30 @@ function DynamicForm({
         data_b64: blob.b64,
       }));
 
+      // Optional identity: a missing or expired token never blocks submission.
+      let entraToken: string | null = null;
+      if (withIdentity) {
+        entraToken = await ipc.getCachedSsoToken().catch(() => null);
+      }
+
       const ack = await ipc.submitForm({
         form_id: form.id,
         form_version_id: form.id,
         answers: values,
         os_user: osUser ?? { username: 'unknown', sid: null, display_name: null },
         attachments,
+        ...(entraToken ? { entra_token: entraToken } : {}),
       });
 
       if (ack.accepted) {
-        toast.success('Ticket submitted' + (ack.submission_id ? ` (#${ack.submission_id})` : ''));
+        const ticketLabel = ack.submission_id ? ` (#${ack.submission_id})` : '';
+        if (ack.automation === 'triggered') {
+          toast.success(`Request received${ticketLabel} — automation started`);
+        } else if (ack.automation === 'skipped' || ack.automation === 'failed_to_trigger') {
+          toast.success(`Request received${ticketLabel} — support will handle it`);
+        } else {
+          toast.success(`Ticket submitted${ticketLabel}`);
+        }
         await emit('ticket-submitted');
         setValues(defaultValues);
         setImages({});
@@ -320,11 +379,40 @@ export default function Support({
   const [osUser, setOsUser] = useState<OsUser | null>(null);
   const [selectedForm, setSelectedForm] = useState<FormDef | null>(null);
   const [success, setSuccess] = useState(false);
+  const [sso, setSso] = useState<EntraSsoStatus | null>(null);
+  const [authPending, setAuthPending] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // Load OS user once — not on every bundle refresh
   useEffect(() => {
     ipc.getOsUser().then(setOsUser).catch(() => null);
+    ipc.getEntraSsoStatus().then(setSso).catch(() => null);
+
+    const unlistenComplete = listen('entra-auth-complete', () => {
+      setAuthPending(false);
+      setAuthError(null);
+      ipc.getEntraSsoStatus().then(setSso).catch(() => null);
+    });
+    const unlistenError = listen<string>('entra-auth-error', (event) => {
+      setAuthPending(false);
+      setAuthError(event.payload ?? 'Sign-in failed');
+    });
+    return () => {
+      unlistenComplete.then((f) => f());
+      unlistenError.then((f) => f());
+    };
   }, []);
+
+  const handleSignIn = async () => {
+    setAuthPending(true);
+    setAuthError(null);
+    try {
+      await ipc.startEntraAuth();
+    } catch (e) {
+      setAuthPending(false);
+      setAuthError(typeof e === 'string' ? e : 'Sign-in failed');
+    }
+  };
 
   // Auto-select first form whenever bundle arrives or changes
   useEffect(() => {
@@ -392,10 +480,19 @@ export default function Support({
         ) : selectedForm ? (
           <>
             <p className="font-semibold">{selectedForm.name}</p>
+            {selectedForm.wantsEntraIdentity && bundle?.entraAuthEnabled && (
+              <IdentityPrompt
+                sso={sso}
+                pending={authPending}
+                error={authError}
+                onSignIn={handleSignIn}
+              />
+            )}
             <DynamicForm
               key={selectedForm.id}
               form={selectedForm}
               osUser={osUser}
+              withIdentity={!!selectedForm.wantsEntraIdentity && !!bundle?.entraAuthEnabled}
               onSuccess={() => setSuccess(true)}
             />
           </>

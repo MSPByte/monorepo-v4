@@ -5,6 +5,7 @@ mod logger;
 
 use base64::engine::general_purpose;
 use base64::Engine;
+use sha2::{Digest, Sha256};
 use std::{path::PathBuf, sync::{Arc, Mutex}};
 use tauri::{
     AppHandle, Emitter, EventTarget, Manager, WebviewUrl, WebviewWindowBuilder,
@@ -206,7 +207,11 @@ pub fn run() {
             log_to_file,
             get_os_info,
             get_rmm_id,
-            get_pending_events
+            get_pending_events,
+            get_entra_sso_status,
+            start_entra_auth,
+            get_cached_sso_token,
+            clear_entra_auth
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -339,7 +344,7 @@ fn handle_about_window(app: &AppHandle) {
     } else {
         WebviewWindowBuilder::new(app, "about", WebviewUrl::App("about.html".into()))
             .title("About")
-            .inner_size(300.0, 300.0)
+            .inner_size(300.0, 540.0)
             .build()
             .expect("Failed to create about window");
     }
@@ -769,4 +774,465 @@ async fn get_rmm_id() -> Result<String, String> {
         Some(id) => Ok(id),
         None => Err("Failed to get key".into()),
     }
+}
+
+// ── SSO cache ────────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct SsoCache {
+    provider: String,
+    client_id: String,
+    upn: String,
+    oid: Option<String>,
+    tenant_id: Option<String>,
+    display_name: Option<String>,
+    id_token: String,
+    access_token: String,
+    refresh_token: Option<String>,
+    /// Unix timestamp after which the tokens should be refreshed.
+    expires_at: i64,
+}
+
+fn sso_cache_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("sso_cache.json"))
+}
+
+fn read_sso_cache(app: &AppHandle) -> Option<SsoCache> {
+    let bytes = std::fs::read(sso_cache_path(app)?).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn write_sso_cache(app: &AppHandle, cache: &SsoCache) {
+    if let Some(path) = sso_cache_path(app) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_vec_pretty(cache) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                use std::io::Write;
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(path)
+                {
+                    let _ = file.write_all(&json);
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                // Windows app-data inherits the current user's ACL. A future
+                // broker-backed flow can move refresh tokens into WAM itself.
+                let _ = std::fs::write(path, json);
+            }
+        }
+    }
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn generate_code_verifier() -> String {
+    use rand::Rng;
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    let mut rng = rand::thread_rng();
+    (0..64).map(|_| CHARSET[rng.gen_range(0..CHARSET.len())] as char).collect()
+}
+
+fn generate_code_challenge(verifier: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(verifier.as_bytes());
+    general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize())
+}
+
+fn decode_jwt_claims(token: &str) -> Result<serde_json::Value, String> {
+    let payload = token.split('.').nth(1).ok_or("Invalid JWT")?;
+    let decoded = general_purpose::URL_SAFE_NO_PAD.decode(payload)
+        .or_else(|_| general_purpose::STANDARD.decode(payload))
+        .map_err(|e| format!("JWT decode error: {}", e))?;
+    serde_json::from_slice(&decoded).map_err(|e| format!("JWT parse error: {}", e))
+}
+
+async fn exchange_code_for_tokens(
+    client_id: &str,
+    code: &str,
+    verifier: &str,
+    redirect_uri: &str,
+) -> Result<SsoCache, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://login.microsoftonline.com/common/oauth2/v2.0/token")
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("client_id", client_id),
+            ("redirect_uri", redirect_uri),
+            ("code_verifier", verifier),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Token exchange failed: {}", e))?
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Token response parse failed: {}", e))?;
+
+    if let Some(err) = resp.get("error") {
+        let desc = resp.get("error_description").and_then(|v| v.as_str()).unwrap_or("unknown");
+        return Err(format!("Entra error {}: {}", err, desc));
+    }
+
+    let id_token = resp["id_token"].as_str().ok_or("No id_token")?.to_string();
+    let access_token = resp["access_token"].as_str().ok_or("No access_token")?.to_string();
+    let refresh_token = resp["refresh_token"].as_str().map(|s| s.to_string());
+    let expires_in = resp["expires_in"].as_i64().unwrap_or(3600);
+
+    let claims = decode_jwt_claims(&id_token)?;
+    let upn = claims.get("preferred_username")
+        .or_else(|| claims.get("upn"))
+        .or_else(|| claims.get("email"))
+        .and_then(|v| v.as_str())
+        .ok_or("No UPN/email in ID token")?
+        .to_string();
+
+    Ok(SsoCache {
+        provider: "entra".into(),
+        client_id: client_id.to_string(),
+        upn,
+        oid: claims.get("oid").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        tenant_id: claims.get("tid").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        display_name: claims.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        id_token,
+        access_token,
+        refresh_token,
+        expires_at: unix_now() + expires_in,
+    })
+}
+
+async fn try_refresh_token(cache: &SsoCache) -> Result<SsoCache, String> {
+    let refresh_token = cache.refresh_token.as_deref().ok_or("No refresh token")?;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://login.microsoftonline.com/common/oauth2/v2.0/token")
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", cache.client_id.as_str()),
+            ("scope", "openid profile email offline_access"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Refresh request failed: {}", e))?
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Refresh parse failed: {}", e))?;
+
+    if resp.get("error").is_some() {
+        return Err("Refresh token rejected".into());
+    }
+
+    let id_token = resp["id_token"].as_str().ok_or("No id_token in refresh response")?.to_string();
+    let access_token = resp["access_token"].as_str().ok_or("No access_token in refresh response")?.to_string();
+    let new_refresh = resp["refresh_token"].as_str().map(|s| s.to_string()).or_else(|| cache.refresh_token.clone());
+    let expires_in = resp["expires_in"].as_i64().unwrap_or(3600);
+
+    Ok(SsoCache {
+        id_token,
+        access_token,
+        refresh_token: new_refresh,
+        expires_at: unix_now() + expires_in,
+        ..cache.clone()
+    })
+}
+
+async fn handle_oauth_callback(
+    listener: tokio::net::TcpListener,
+    verifier: String,
+    redirect_uri: String,
+    client_id: String,
+    expected_state: String,
+) -> Result<SsoCache, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (mut stream, _) = listener.accept().await
+        .map_err(|e| format!("Callback accept failed: {}", e))?;
+
+    let mut buf = vec![0u8; 4096];
+    let n = stream.read(&mut buf).await
+        .map_err(|e| format!("Callback read failed: {}", e))?;
+    let request = String::from_utf8_lossy(&buf[..n]);
+
+    // Always send a response so the browser tab closes cleanly.
+    let body = "<html><body style='font-family:sans-serif;padding:2rem'><h2>Authentication complete.</h2><p>You can close this tab.</p></body></html>";
+    let _ = stream.write_all(
+        format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()
+    ).await;
+    drop(stream);
+
+    // Parse the request line: "GET /callback?... HTTP/1.1"
+    let path_and_query = request.lines().next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .unwrap_or("");
+    let query = path_and_query.split('?').nth(1).unwrap_or("");
+
+    let mut code: Option<String> = None;
+    let mut returned_state: Option<String> = None;
+    let mut auth_error: Option<String> = None;
+
+    for param in query.split('&') {
+        if let Some(v) = param.strip_prefix("code=") {
+            code = Some(v.replace('+', " ").replace("%3D", "=").replace("%2B", "+"));
+        } else if let Some(v) = param.strip_prefix("state=") {
+            returned_state = Some(v.to_string());
+        } else if let Some(v) = param.strip_prefix("error_description=") {
+            auth_error = Some(v.replace('+', " ").replace("%20", " "));
+        } else if param.starts_with("error=") && auth_error.is_none() {
+            auth_error = Some(param.to_string());
+        }
+    }
+
+    if let Some(e) = auth_error {
+        return Err(format!("Provider returned error: {}", e));
+    }
+    if returned_state.as_deref() != Some(&expected_state) {
+        return Err("State mismatch — possible CSRF".into());
+    }
+    let code = code.ok_or("No authorization code in callback")?;
+
+    exchange_code_for_tokens(&client_id, &code, &verifier, &redirect_uri).await
+}
+
+#[tauri::command]
+async fn start_entra_auth(app: AppHandle) -> Result<(), String> {
+    // Client ID comes from the server-side bundle, not the frontend.
+    let client_id = ipc_client::get_config_bundle()
+        .await
+        .ok()
+        .and_then(|p| p.bundle)
+        .and_then(|b| b.get("entraClientId").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .ok_or("Entra SSO is not configured on this server")?;
+
+    let std_listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("Failed to bind callback server: {}", e))?;
+    let port = std_listener.local_addr()
+        .map_err(|e| format!("Failed to get callback port: {}", e))?.port();
+    std_listener.set_nonblocking(true)
+        .map_err(|e| format!("Failed to set nonblocking: {}", e))?;
+    let tokio_listener = tokio::net::TcpListener::from_std(std_listener)
+        .map_err(|e| format!("Failed to create async listener: {}", e))?;
+
+    let verifier = generate_code_verifier();
+    let challenge = generate_code_challenge(&verifier);
+    let state: String = {
+        use rand::Rng;
+        rand::thread_rng().sample_iter(&rand::distributions::Alphanumeric).take(16).map(char::from).collect()
+    };
+
+    let redirect_uri = format!("http://127.0.0.1:{}/callback", port);
+    // Percent-encode the redirect_uri for use as a query parameter value.
+    let redirect_uri_enc = format!("http%3A%2F%2F127.0.0.1%3A{}%2Fcallback", port);
+
+    let auth_url = format!(
+        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize\
+?client_id={client_id}&response_type=code&redirect_uri={redir}\
+&scope=openid%20profile%20email%20offline_access\
+&code_challenge={challenge}&code_challenge_method=S256\
+&state={state}&response_mode=query",
+        client_id = client_id,
+        redir = redirect_uri_enc,
+        challenge = challenge,
+        state = state,
+    );
+
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(&auth_url, None::<&str>)
+        .map_err(|e| format!("Failed to open browser: {}", e))?;
+
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = tokio::time::timeout(
+            tokio::time::Duration::from_secs(300),
+            handle_oauth_callback(tokio_listener, verifier, redirect_uri, client_id, state),
+        ).await;
+
+        match result {
+            Ok(Ok(cache)) => {
+                write_sso_cache(&app_clone, &cache);
+                let payload = serde_json::json!({
+                    "upn": cache.upn,
+                    "tenant_id": cache.tenant_id,
+                    "display_name": cache.display_name,
+                });
+                // Prefer the about window directly — app.emit() can be missed
+                // when the webview is hidden/throttled behind the browser.
+                if let Some(win) = app_clone.get_webview_window("about") {
+                    let _ = win.emit("entra-auth-complete", &payload);
+                }
+                let _ = app_clone.emit("entra-auth-complete", &payload);
+            }
+            Ok(Err(e)) => {
+                log_to_file("ERROR".into(), format!("Entra auth failed: {}", e));
+                if let Some(win) = app_clone.get_webview_window("about") {
+                    let _ = win.emit("entra-auth-error", &e);
+                }
+                let _ = app_clone.emit("entra-auth-error", &e);
+            }
+            Err(_) => {
+                let msg = "Authentication timed out";
+                if let Some(win) = app_clone.get_webview_window("about") {
+                    let _ = win.emit("entra-auth-error", msg);
+                }
+                let _ = app_clone.emit("entra-auth-error", msg);
+            }
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_cached_sso_token(app: AppHandle) -> Result<Option<String>, String> {
+    let cache = match read_sso_cache(&app) {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+
+    // Token valid with 60s buffer
+    if cache.expires_at > unix_now() + 60 {
+        return Ok(Some(cache.id_token));
+    }
+
+    // Attempt silent refresh
+    match try_refresh_token(&cache).await {
+        Ok(refreshed) => {
+            write_sso_cache(&app, &refreshed);
+            Ok(Some(refreshed.id_token))
+        }
+        Err(e) => {
+            log_to_file("WARN".into(), format!("Token refresh failed, re-auth required: {}", e));
+            let _ = app.emit("entra-auth-required", "Token expired and could not be refreshed");
+            Ok(None)
+        }
+    }
+}
+
+#[tauri::command]
+async fn clear_entra_auth(app: AppHandle) -> Result<(), String> {
+    if let Some(path) = sso_cache_path(&app) {
+        if path.exists() {
+            std::fs::remove_file(&path)
+                .map_err(|e| format!("Failed to clear SSO cache: {}", e))?;
+        }
+    }
+    Ok(())
+}
+
+// ── Entra SSO status ─────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+pub struct EntraSsoStatus {
+    pub device_aad_joined: bool,
+    pub user_prt_present: bool,
+    pub upn: Option<String>,
+    pub tenant_id: Option<String>,
+    /// How the status was obtained — informs UI context messages.
+    pub source: String,
+}
+
+#[tauri::command]
+async fn get_entra_sso_status(app: AppHandle) -> Result<EntraSsoStatus, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+
+        let output = Command::new("dsregcmd")
+            .arg("/status")
+            .output()
+            .map_err(|e| format!("dsregcmd failed: {}", e))?;
+
+        let text = String::from_utf8_lossy(&output.stdout).to_string();
+
+        fn find_val(text: &str, key: &str) -> Option<String> {
+            text.lines()
+                .find(|l| l.trim_start().starts_with(key))
+                .and_then(|l| l.splitn(2, ':').nth(1))
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        }
+
+        let user_prt = find_val(&text, "AzureAdPrt").as_deref() == Some("YES");
+
+        // If device has no active PRT, also check the PKCE cache (BYOD scenario).
+        if !user_prt {
+            if let Some(status) = cached_sso_status(&app) {
+                return Ok(status);
+            }
+        }
+
+        return Ok(EntraSsoStatus {
+            device_aad_joined: find_val(&text, "AzureAdJoined").as_deref() == Some("YES"),
+            user_prt_present: user_prt,
+            upn: find_val(&text, "UserEmail"),
+            tenant_id: find_val(&text, "TenantId"),
+            source: "dsregcmd".into(),
+        });
+    }
+
+    // On macOS / Linux, try Azure CLI then fall back to PKCE cache.
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::process::Command;
+
+        if let Ok(out) = Command::new("az").args(["account", "show", "--output", "json"]).output() {
+            if out.status.success() {
+                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+                    let upn = json.get("user")
+                        .and_then(|u| u.get("name"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let tenant_id = json.get("tenantId")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let authenticated = upn.is_some();
+                    return Ok(EntraSsoStatus {
+                        device_aad_joined: false,
+                        user_prt_present: authenticated,
+                        upn,
+                        tenant_id,
+                        source: "az_cli".into(),
+                    });
+                }
+            }
+        }
+
+        if let Some(status) = cached_sso_status(&app) {
+            return Ok(status);
+        }
+
+        Ok(EntraSsoStatus {
+            device_aad_joined: false,
+            user_prt_present: false,
+            upn: None,
+            tenant_id: None,
+            source: "unavailable".into(),
+        })
+    }
+}
+
+fn cached_sso_status(app: &AppHandle) -> Option<EntraSsoStatus> {
+    let cache = read_sso_cache(app)?;
+    let valid = cache.expires_at > unix_now();
+    Some(EntraSsoStatus {
+        device_aad_joined: false,
+        user_prt_present: valid,
+        upn: Some(cache.upn),
+        tenant_id: cache.tenant_id,
+        source: "cached".into(),
+    })
 }

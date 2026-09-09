@@ -631,6 +631,100 @@ async function block9() {
   }
 }
 
+// ─── Block 10: Entra SSO token verification ───────────────────────────────────
+
+async function block10() {
+  print.header('Block 10 — Entra SSO token verification');
+
+  if (!state.deviceId) { skip('SSO tests', 'no device_id — run block 2 first'); return; }
+
+  const ENTRA_TOKEN = process.env.ENTRA_TEST_TOKEN ?? '';
+  const fid = arg('--form-id') ?? '';
+
+  // 10.1 Submit without token — identity should be absent from response
+  if (fid) {
+    const { status, body } = await http('/v2.0/submit', {
+      method: 'POST',
+      headers: deviceHeaders(),
+      body: {
+        form_id: fid,
+        answers: {},
+        os_user: { username: 'e2e-user', sid: null, display_name: null },
+        attachments: [],
+        // No entra_token
+      },
+    });
+    const data = ((body as Record<string, unknown>)?.data) as Record<string, unknown> | undefined;
+    if (status === 200 && !data?.entra_upn) {
+      ok('POST /v2.0/submit (no token) → no entra_upn in response');
+    } else if (status === 200 && data?.error) {
+      skip('POST /v2.0/submit (no token)', `PSA not configured for site: ${data.error}`);
+    } else {
+      fail('POST /v2.0/submit (no token)', `${status} ${JSON.stringify(body).slice(0, 120)}`);
+    }
+  } else {
+    skip('submit without token', 'no --form-id');
+  }
+
+  // 10.2 Submit with invalid token — server should log warning, still submit
+  if (fid) {
+    const { status, body } = await http('/v2.0/submit', {
+      method: 'POST',
+      headers: deviceHeaders(),
+      body: {
+        form_id: fid,
+        answers: {},
+        os_user: { username: 'e2e-user', sid: null, display_name: null },
+        attachments: [],
+        entra_token: 'not.a.real.jwt',
+      },
+    });
+    const data = ((body as Record<string, unknown>)?.data) as Record<string, unknown> | undefined;
+    if (status === 200 && !data?.entra_upn) {
+      ok('POST /v2.0/submit (bad token) → verification failed gracefully, no entra_upn');
+    } else if (status === 200 && data?.error) {
+      skip('POST /v2.0/submit (bad token)', `PSA not configured: ${data.error}`);
+    } else {
+      fail('POST /v2.0/submit (bad token)', `${status} ${JSON.stringify(body).slice(0, 120)}`);
+    }
+  } else {
+    skip('submit with invalid token', 'no --form-id');
+  }
+
+  // 10.3 Submit with real Entra token — requires ENTRA_TEST_TOKEN env var
+  if (!ENTRA_TOKEN) {
+    skip('POST /v2.0/submit (real Entra token)', 'set ENTRA_TEST_TOKEN=<id_token> to run this block');
+    return;
+  }
+  if (!fid) {
+    skip('POST /v2.0/submit (real Entra token)', 'no --form-id');
+    return;
+  }
+
+  {
+    const { status, body } = await http('/v2.0/submit', {
+      method: 'POST',
+      headers: deviceHeaders(),
+      body: {
+        form_id: fid,
+        answers: {},
+        os_user: { username: 'e2e-user', sid: null, display_name: null },
+        attachments: [],
+        entra_token: ENTRA_TOKEN,
+      },
+    });
+    const b = body as Record<string, unknown>;
+    const data = b?.data as Record<string, unknown> | undefined;
+    if (status === 200 && typeof data?.entra_upn === 'string') {
+      ok('POST /v2.0/submit (real token) → identity verified', `upn=${data.entra_upn} oid=${data.entra_oid}`);
+    } else if (status === 200 && b?.error) {
+      skip('POST /v2.0/submit (real token)', `PSA not configured — but check server logs for Entra identity: ${b.error}`);
+    } else {
+      fail('POST /v2.0/submit (real token)', `${status} ${JSON.stringify(body).slice(0, 180)}`);
+    }
+  }
+}
+
 // ─── Block 13: V1.0 backward compat ──────────────────────────────────────────
 
 async function block13() {
@@ -759,6 +853,7 @@ if (runBlock(6))  await block6();
 if (runBlock(7))  await block7();
 if (runBlock(8))  await block8();
 if (WITH_WH && runBlock(9)) await block9();
+if (runBlock(10)) await block10();
 if (!SKIP_V1 && runBlock(13)) await block13();
 
 saveState();

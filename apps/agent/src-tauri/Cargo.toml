@@ -38,6 +38,7 @@ tauri-plugin-notification = "2"
 tauri-plugin-http = "2"
 local-ip-address = "0.6.5"
 rand = "0.8"
+sha2 = "0.10"
 whoami = "1.6.1"
 log = "0.4"
 

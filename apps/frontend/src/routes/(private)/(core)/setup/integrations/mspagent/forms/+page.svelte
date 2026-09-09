@@ -6,8 +6,8 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { get } from 'svelte/store';
-  import type { AgentFieldType, AgentFormField, AgentFormRow } from '@mspbyte/shared';
-  import { AGENT_PSA_METRICS, AGENT_SYSTEM_VARS, isOpenPsaMetric } from '@mspbyte/shared';
+  import type { AgentFieldType, AgentFormField, AgentFormRow, AgentFormInputSource, AgentFormPackageBindings, PackageRuntimeInput, ResolvedInputMeta } from '@mspbyte/shared';
+  import { AGENT_PSA_METRICS, AGENT_SYSTEM_VARS, AGENT_FORM_SYSTEM_SOURCES, collectPackageRuntimeInputs, formFieldTypesForInput, formWantsEntraIdentity, isOpenPsaMetric } from '@mspbyte/shared';
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import Button from '$lib/components/ui/button/button.svelte';
   import Input from '$lib/components/ui/input/input.svelte';
@@ -31,6 +31,7 @@
     Phone,
     Mail,
     Hash,
+    CalendarDays,
     CheckSquare,
     ListFilter,
     Paperclip,
@@ -40,6 +41,10 @@
     GripVertical,
     LayoutGrid,
     Variable,
+    Zap,
+    TicketCheck,
+    ShieldCheck,
+    ArrowRight,
   } from '@lucide/svelte';
   import { toast } from 'svelte-sonner';
   import { toUserMessage } from '$lib/utils/errors';
@@ -66,13 +71,14 @@
     phone:      { label: 'Phone number', shortLabel: 'Phone',  icon: Phone,       defaultColSpan: 2, hasLabel: true,  hasRequired: true,  hasPlaceholder: true  },
     email:      { label: 'Email',        shortLabel: 'Email',  icon: Mail,        defaultColSpan: 2, hasLabel: true,  hasRequired: true,  hasPlaceholder: true  },
     number:     { label: 'Number',       shortLabel: 'Num',    icon: Hash,        defaultColSpan: 1, hasLabel: true,  hasRequired: true,  hasPlaceholder: true  },
+    date:       { label: 'Date',         shortLabel: 'Date',   icon: CalendarDays,defaultColSpan: 1, hasLabel: true,  hasRequired: true,  hasPlaceholder: false },
     checkbox:   { label: 'Checkbox',     shortLabel: 'Check',  icon: CheckSquare, defaultColSpan: 3, hasLabel: true,  hasRequired: false, hasPlaceholder: false },
     select:     { label: 'Dropdown',     shortLabel: 'Select', icon: ListFilter,  defaultColSpan: 2, hasLabel: true,  hasRequired: true,  hasPlaceholder: true  },
     attachment: { label: 'Attachment',   shortLabel: 'File',   icon: Paperclip,   defaultColSpan: 3, hasLabel: true,  hasRequired: false, hasPlaceholder: false },
   };
 
   const FIELD_TYPES_ORDERED: AgentFieldType[] = [
-    'text', 'textarea', 'email', 'phone', 'number',
+    'text', 'textarea', 'email', 'phone', 'number', 'date',
     'checkbox', 'select', 'attachment', 'title', 'spacer',
   ];
 
@@ -87,6 +93,7 @@
 
   const canWrite = $derived(authStore.isAllowed('Agents.Write'));
   const canDelete = $derived(authStore.isAllowed('Agents.Delete'));
+  const canReadPackages = $derived(authStore.isAllowed('Packages.Read'));
 
   // ── Editor state ─────────────────────────────────────────────────────────────
 
@@ -96,13 +103,15 @@
   let ticketTitle = $state('');
   let ticketBody = $state('');
   let formRows = $state<AgentFormRow[]>([]);
+  let packageId = $state<string | null>(null);
+  let packageBindings = $state<AgentFormPackageBindings>({});
   let saving = $state(false);
 
   // Selection
   let selectedRowId = $state<string | null>(null);
   let selectedColIdx = $state<number | null>(null);
   let addingToRowId = $state<string | null>(null);
-  let rightPanelTab = $state<'preview' | 'template'>('preview');
+  let rightPanelTab = $state<'preview' | 'template' | 'automation'>('preview');
   let templateFocus = $state<'title' | 'body' | null>(null);
   let titleInputEl = $state<HTMLInputElement | null>(null);
   let bodyTextareaEl = $state<HTMLTextAreaElement | null>(null);
@@ -148,6 +157,86 @@
     enabled: !!psaMetric && !isOpenPsaMetric(psaMetric),
     staleTime: 5 * 60 * 1000,
   }));
+
+  const packagesQuery = createQuery(() => ({
+    queryKey: ['forms', 'automationPackages'],
+    queryFn: () => trpc.packages.list.query({}),
+    enabled: canReadPackages,
+    staleTime: 60_000,
+  }));
+  const capabilitiesQuery = createQuery(() => ({
+    queryKey: ['forms', 'automationCapabilities'],
+    queryFn: () => trpc.packages.capabilities.query(),
+    enabled: canReadPackages,
+    staleTime: 60_000,
+  }));
+  const activePackages = $derived((packagesQuery.data ?? []).filter(p => p.status === 'active'));
+  const selectedPackage = $derived((packagesQuery.data ?? []).find(p => p.id === packageId));
+  const capabilityMeta = $derived(new Map((capabilitiesQuery.data ?? []).map(c => [c.id, c.inputMeta])));
+  const packageInputs = $derived.by((): PackageRuntimeInput[] => {
+    if (!selectedPackage) return [];
+    return collectPackageRuntimeInputs({
+      steps: selectedPackage.steps ?? [],
+      prompts: selectedPackage.prompts ?? [],
+      outcomeSteps: selectedPackage.outcomeSteps ?? { onSuccess: [], onFailure: [] },
+    }, id => (capabilityMeta.get(id) as ResolvedInputMeta | null | undefined) ?? null).inputs;
+  });
+  const requiresEntra = $derived(formWantsEntraIdentity(packageBindings));
+  const mappedInputCount = $derived(packageInputs.filter(input => {
+    const source = packageBindings[input.promptKey];
+    if (!source) return false;
+    return source.kind !== 'literal' || typeof source.value !== 'string' || source.value.trim() !== '';
+  }).length);
+  const unmappedRequired = $derived(packageInputs.filter(input => {
+    if (!input.required) return false;
+    const source = packageBindings[input.promptKey];
+    if (!source) return true;
+    return source.kind === 'literal' && typeof source.value === 'string' && source.value.trim() === '';
+  }));
+
+  const dataFields = $derived(formRows.flatMap(row => row.cols).filter(field => !['spacer', 'title', 'attachment'].includes(field.type)));
+
+  function sourceValue(input: PackageRuntimeInput): string {
+    const source = packageBindings[input.promptKey];
+    if (!source) return '';
+    if (source.kind === 'formField') return `field:${source.fieldId}`;
+    if (source.kind === 'system') return `system:${source.key}`;
+    return 'literal';
+  }
+
+  function sourceOptions(input: PackageRuntimeInput) {
+    const compatible = formFieldTypesForInput(input);
+    return [
+      ...dataFields
+        .filter(field => compatible.includes(field.type))
+        .map(field => ({ value: `field:${field.id}`, label: field.label || 'Untitled field', group: 'Form answers' })),
+      ...AGENT_FORM_SYSTEM_SOURCES.map(source => ({
+        value: `system:${source.key}`,
+        label: source.label,
+        subLabel: source.description,
+        group: source.key.startsWith('entra_') ? 'Verified identity' : 'Submission context',
+      })),
+      { value: 'literal', label: 'Fixed value', subLabel: 'Set by the MSP and hidden from the end user', group: 'Configuration' },
+    ];
+  }
+
+  function setInputSource(input: PackageRuntimeInput, value: string) {
+    const next = { ...packageBindings };
+    if (!value) delete next[input.promptKey];
+    else if (value.startsWith('field:')) next[input.promptKey] = { kind: 'formField', fieldId: value.slice(6) };
+    else if (value.startsWith('system:')) next[input.promptKey] = { kind: 'system', key: value.slice(7) as Extract<AgentFormInputSource, { kind: 'system' }>['key'] };
+    else next[input.promptKey] = { kind: 'literal', value: '' };
+    packageBindings = next;
+  }
+
+  function setLiteral(input: PackageRuntimeInput, value: string) {
+    packageBindings = { ...packageBindings, [input.promptKey]: { kind: 'literal', value } };
+  }
+
+  function selectPackage(value: string) {
+    packageId = value || null;
+    packageBindings = {};
+  }
 
   // ── Delete dialog ─────────────────────────────────────────────────────────────
 
@@ -213,6 +302,8 @@
         formDescription = row.description ?? '';
         ticketTitle = (row as Record<string, unknown>).ticketTitle as string ?? '';
         ticketBody = (row as Record<string, unknown>).ticketBody as string ?? '';
+        packageId = row.packageId ?? null;
+        packageBindings = (row.packageBindings ?? {}) as AgentFormPackageBindings;
         formRows = normalizeRows(row.rows);
       } catch (err) {
         toast.error(toUserMessage(err, 'Failed to load form'));
@@ -224,6 +315,8 @@
       formDescription = '';
       ticketTitle = '';
       ticketBody = '';
+      packageId = null;
+      packageBindings = {};
       formRows = [];
     }
   });
@@ -231,6 +324,11 @@
   async function handleSave() {
     if (!formName.trim()) {
       toast.error('Form name is required');
+      return;
+    }
+    if (packageId && unmappedRequired.length > 0) {
+      rightPanelTab = 'automation';
+      toast.error(`Map ${unmappedRequired.length} required automation input${unmappedRequired.length === 1 ? '' : 's'} before saving`);
       return;
     }
     saving = true;
@@ -241,6 +339,8 @@
         rows: formRows,
         ticketTitle: ticketTitle || undefined,
         ticketBody: ticketBody || undefined,
+        packageId,
+        packageBindings,
       };
       if (editingFormId) {
         await updateMut.mutateAsync({ id: editingFormId, ...payload });
@@ -993,6 +1093,18 @@
               <FileText class="size-3.5" />
               Ticket Template
             </button>
+            <button
+              type="button"
+              onclick={() => (rightPanelTab = 'automation')}
+              class="flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 transition-colors
+                {rightPanelTab === 'automation' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}"
+            >
+              <Zap class="size-3.5" />
+              Automation
+              {#if packageId}
+                <span class="size-1.5 rounded-full {unmappedRequired.length ? 'bg-amber-500' : 'bg-emerald-500'}"></span>
+              {/if}
+            </button>
           </div>
 
           {#if rightPanelTab === 'preview'}
@@ -1003,7 +1115,7 @@
                 formDescription={formDescription}
               />
             </div>
-          {:else}
+          {:else if rightPanelTab === 'template'}
             <!-- Ticket template editor -->
             <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-3">
               <div class="flex flex-col gap-1.5">
@@ -1061,6 +1173,115 @@
                   {/if}
                 </div>
               </div>
+            </div>
+          {:else}
+            <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-3">
+              <div class="rounded-lg border bg-background p-3">
+                <p class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">When this form is sent</p>
+                <div class="mt-3 flex items-center gap-2 text-xs font-medium">
+                  <span class="inline-flex items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1.5">
+                    <FileText class="size-3.5" /> Form
+                  </span>
+                  <ArrowRight class="size-3 text-muted-foreground" />
+                  <span class="inline-flex items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1.5">
+                    <TicketCheck class="size-3.5" /> Ticket
+                  </span>
+                  <ArrowRight class="size-3 text-muted-foreground" />
+                  <span class="inline-flex min-w-0 items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2 py-1.5 text-primary">
+                    <Zap class="size-3.5 shrink-0" />
+                    <span class="truncate">{selectedPackage?.name ?? 'No package'}</span>
+                  </span>
+                </div>
+                <p class="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+                  The ticket is always created first. If automation cannot run, the ticket remains open for manual handling.
+                </p>
+              </div>
+
+              {#if !canReadPackages}
+                <div class="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-800 dark:text-amber-300">
+                  Packages.Read permission is required to connect automation.
+                </div>
+              {:else}
+                <div class="flex flex-col gap-1.5">
+                  <Label class="text-xs font-medium">Package to run</Label>
+                  <SingleSelect
+                    options={activePackages.map(pkg => ({ value: pkg.id, label: pkg.name, subLabel: pkg.description ?? undefined }))}
+                    selected={packageId ?? undefined}
+                    placeholder={packagesQuery.isLoading ? 'Loading packages…' : 'No automation'}
+                    loading={packagesQuery.isLoading}
+                    onchange={selectPackage}
+                  />
+                  {#if packageId && !selectedPackage && !packagesQuery.isLoading}
+                    <p class="text-[10px] text-destructive">The linked package is unavailable or no longer exists. Select another package.</p>
+                  {/if}
+                </div>
+
+                {#if selectedPackage}
+                  {#if requiresEntra}
+                    <div class="flex gap-2.5 rounded-md border border-blue-500/30 bg-blue-500/5 p-3">
+                      <ShieldCheck class="mt-0.5 size-4 shrink-0 text-blue-600 dark:text-blue-400" />
+                      <div>
+                        <p class="text-xs font-medium">Microsoft identity required for automation</p>
+                        <p class="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+                          End users are prompted to sign in with Microsoft. They may still send the form without signing in; the ticket is created and automation is skipped.
+                        </p>
+                      </div>
+                    </div>
+                  {/if}
+
+                  <div class="flex items-center justify-between pt-1">
+                    <div>
+                      <p class="text-xs font-medium">Package inputs</p>
+                      <p class="text-[10px] text-muted-foreground">Choose where each value comes from.</p>
+                    </div>
+                    <span class="text-[10px] tabular-nums text-muted-foreground">
+                      {mappedInputCount}/{packageInputs.length} mapped
+                    </span>
+                  </div>
+
+                  {#if capabilitiesQuery.isLoading}
+                    <div class="rounded-md border p-3 text-xs text-muted-foreground">Loading package inputs…</div>
+                  {:else if packageInputs.length === 0}
+                    <div class="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                      This package has no end-user inputs. It will run from the ticket and site context already configured in the package.
+                    </div>
+                  {:else}
+                    <div class="flex flex-col overflow-hidden rounded-lg border bg-background">
+                      {#each packageInputs as input, index (input.promptKey)}
+                        <div class="flex flex-col gap-2 p-3 {index > 0 ? 'border-t' : ''}">
+                          <div class="flex items-start justify-between gap-2">
+                            <div class="min-w-0">
+                              <p class="truncate text-xs font-medium">{input.label}</p>
+                              <p class="truncate font-mono text-[9px] text-muted-foreground">{input.promptKey}</p>
+                            </div>
+                            <span class="rounded px-1.5 py-0.5 text-[9px] font-medium {input.required ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300' : 'bg-muted text-muted-foreground'}">
+                              {input.required ? 'Required' : 'Optional'}
+                            </span>
+                          </div>
+                          <SingleSelect
+                            options={sourceOptions(input)}
+                            selected={sourceValue(input)}
+                            placeholder="Choose a value source…"
+                            onchange={(value) => setInputSource(input, value)}
+                            class="h-8 text-xs"
+                          />
+                          {#if packageBindings[input.promptKey]?.kind === 'literal'}
+                            <Input
+                              value={String((packageBindings[input.promptKey] as Extract<AgentFormInputSource, { kind: 'literal' }>).value ?? '')}
+                              oninput={(event) => setLiteral(input, (event.currentTarget as HTMLInputElement).value)}
+                              placeholder="Fixed value"
+                              class="h-8 text-xs font-mono"
+                            />
+                          {/if}
+                          {#if input.description}
+                            <p class="text-[10px] leading-relaxed text-muted-foreground">{input.description}</p>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                {/if}
+              {/if}
             </div>
           {/if}
         {/if}
