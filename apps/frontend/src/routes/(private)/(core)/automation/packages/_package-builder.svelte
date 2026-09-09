@@ -101,12 +101,14 @@
 </script>
 
 <script lang="ts">
+  import './workspace.css';
+  import RunPackageDialog from '$lib/components/domain/run-package-dialog.svelte';
+  import { authStore } from '$lib/stores/auth.store.svelte';
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
   import { createQuery } from '@tanstack/svelte-query';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
-  import * as Select from '$lib/components/ui/select/index.js';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
   import Button from '$lib/components/ui/button/button.svelte';
   import { Input } from '$lib/components/ui/input';
@@ -132,6 +134,9 @@
   import { STALE } from '$lib/query';
   import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
   import {
+    Play,
+    Layers,
+    Workflow,
     ArrowLeft,
     ArrowUp,
     ArrowDown,
@@ -173,6 +178,9 @@
   let { initial, currentPackageId, saving, onSave }: Props = $props();
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
+  const canWrite = $derived(authStore.isAllowed('Packages.Write'));
+  const canRun = $derived(authStore.isAllowed('Packages.Run'));
+  let runDialogOpen = $state(false);
 
   const capabilitiesQuery = createQuery(() => ({
     queryKey: ['packages.metadata.capabilities'],
@@ -1231,26 +1239,27 @@
   let showPromptKeyEditor = $state<Record<string, boolean>>({});
 </script>
 
-<div class="flex size-full flex-col overflow-hidden">
+<div class="pk-workspace pk-builder">
   <!-- Header bar -->
-  <header class="border-b bg-background">
-    <div class="flex flex-wrap items-center gap-3 px-6 py-3">
+  <header class="pk-builder-header">
+    <div class="flex flex-wrap items-center gap-3 px-6 py-4">
       <button
         type="button"
         class="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
         onclick={() => goto('/automation/packages')}
       >
         <ArrowLeft class="size-3.5" />
-        All packages
+        Packages
       </button>
 
       <div class="mx-2 h-5 w-px bg-border"></div>
 
       <Input
-        placeholder="Untitled package"
+        aria-label="Package name"
+        placeholder="Name your package"
         value={draft.name}
         oninput={(e) => (draft.name = (e.target as HTMLInputElement).value)}
-        class="h-9 w-full max-w-md text-base font-semibold"
+        class="pk-title-input h-9 w-full max-w-sm text-base font-semibold"
       />
 
       <div
@@ -1272,41 +1281,38 @@
         {packageExecutionScope.batchReady ? 'Batch-ready' : 'Single run'}
       </button>
 
-      <div class="ml-auto flex items-center gap-2">
-        <Select.Root type="single" bind:value={draft.status}>
-          <Select.Trigger class="h-9 w-32 capitalize">{draft.status}</Select.Trigger>
-          <Select.Content>
-            <Select.Item value="draft">Draft</Select.Item>
-            <Select.Item value="active">Active</Select.Item>
-            <Select.Item value="archived">Archived</Select.Item>
-          </Select.Content>
-        </Select.Root>
+      <div class="ml-auto flex flex-wrap items-center gap-2">
+        {#if currentPackageId && initial.status === 'active' && canRun}<Button variant="outline" class="gap-1.5" disabled={saving} onclick={() => runDialogOpen = true} title="Runs the saved version. Unsaved edits are not included."><Play size={14} /> Run saved version</Button>{/if}
+        {#if canWrite}
+        <div class="w-36"><SingleSelect allowClear={false} aria-label="Package status" options={[{value:'draft',label:'Draft',subLabel:'Not available to run'},{value:'active',label:'Active',subLabel:'Available to run and schedule'},{value:'archived',label:'Archived',subLabel:'Retained for reference'}]} selected={draft.status} onchange={(value) => { if (value === 'draft' || value === 'active' || value === 'archived') draft.status = value; }} class="h-9" disableSort /></div>
         <Button
           onclick={() => onSave({ ...draft, prompts: publishedPrompts })}
           disabled={!canSave() || saving}
         >
-          {saving ? 'Saving…' : 'Save'}
+          {saving ? 'Saving…' : currentPackageId ? 'Save changes' : 'Create package'}
         </Button>
+        {:else}<span class="text-xs text-muted-foreground">View only</span>{/if}
       </div>
     </div>
+    <div class="pk-builder-guide"><span><Workflow size={15} /> Workflow builder</span><p>{draft.status === 'active' ? 'Saving an active package updates what future runs execute.' : draft.status === 'archived' ? 'Archived packages cannot run. Change the status and save to reactivate.' : 'Start as a draft. Switch to Active and save when your workflow is ready.'}</p><span>{draft.steps.length} {draft.steps.length === 1 ? 'step' : 'steps'}</span></div>
     {#if !canSave() && draft.name.trim() && draft.steps.length > 0}
       <div
         class="flex items-center gap-2 border-t bg-amber-500/5 px-6 py-1.5 text-xs text-amber-700 dark:text-amber-500"
       >
         <AlertTriangle class="size-3.5" />
-        Some inputs still need to be filled in.
+        Check your step inputs and run questions before saving. Each step needs a valid capability and input sources.
       </div>
     {/if}
   </header>
 
   <!-- Two-pane body -->
-  <div class="grid min-h-0 flex-1 grid-cols-[320px_1fr] xl:grid-cols-[360px_1fr]">
+  <div class="pk-builder-body">
     <!-- Canvas: node list -->
-    <aside class="flex min-h-0 flex-col border-r bg-muted/20">
+    <aside class="pk-workflow flex min-h-0 flex-col border-r">
       <div class="border-b px-4 py-3">
         <div class="flex items-baseline justify-between">
           <h2 class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            Steps
+            Workflow
           </h2>
           <span class="font-mono text-[11px] tabular-nums text-muted-foreground">
             {String(draft.steps.length).padStart(2, '0')}
@@ -1325,9 +1331,7 @@
         </button>
 
         {#if draft.steps.length === 0}
-          <div class="p-4 text-center text-sm text-muted-foreground">
-            No steps yet. Add one below to begin.
-          </div>
+          <div class="pk-workflow-empty"><span><Layers size={25} strokeWidth={1.5} /></span><h3>What should happen first?</h3><p>Add a capability to start your workflow, or reuse an existing package.</p></div>
         {:else}
           <ol class="p-3">
             {#each draft.steps as step, i (i)}
@@ -1346,6 +1350,7 @@
                 <button
                   type="button"
                   onclick={() => (selected = { kind: 'step', index: i })}
+                  aria-pressed={isSelected}
                   class="group relative mb-1.5 flex w-full items-start gap-3 rounded-md border p-3 text-left transition-all {isSelected
                     ? 'border-primary/50 bg-background shadow-sm ring-1 ring-primary/20'
                     : 'border-transparent hover:border-border hover:bg-background/70'}"
@@ -1648,15 +1653,19 @@
     </aside>
 
     <!-- Inspector -->
-    <section class="flex min-h-0 flex-col overflow-y-auto">
+    <section class="pk-inspector flex min-h-0 flex-col overflow-y-auto">
+      {#if capabilitiesQuery.isError}<div class="pk-load-error" role="alert"><TriangleAlert size={18} /><div><strong>Capabilities couldn’t be loaded</strong><p>Reload the catalog to inspect and configure your steps.</p></div><Button variant="outline" onclick={() => capabilitiesQuery.refetch()}>Retry</Button></div>{/if}
       {#if selected.kind === 'details'}
-        <div class="mx-6 mt-6 border-l-4 px-4 py-3 text-sm {packageExecutionScope.batchReady ? 'border-emerald-500 bg-emerald-500/5' : 'border-amber-500 bg-amber-500/5'}">
+        {#if !currentPackageId && draft.steps.length === 0}<div class="pk-start"><p class="pk-eyebrow">Create your first step</p><h2>Make room for more meaningful work.</h2><p>Name your package, then pick a capability. You’ll choose what it does, which values to use, and what to ask when it runs.</p><Button class="gap-2" onclick={() => openCapabilityPicker()}><Plus size={15} /> Browse capabilities</Button></div>{/if}
+        {#if draft.steps.length > 0}
+        <div class="pk-execution-note mx-6 mt-6 border-l-4 px-4 py-3 text-sm {packageExecutionScope.batchReady ? 'border-emerald-500 bg-emerald-500/5' : 'border-amber-500 bg-amber-500/5'}">
           <p class="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Execution mode</p>
           <p class="mt-1 font-medium {packageExecutionScope.batchReady ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}">
             {packageExecutionScope.title}
           </p>
           <p class="mt-1 text-xs text-muted-foreground">{packageExecutionScope.reason}</p>
         </div>
+        {/if}
         {@const subpackageOutputsByPackageId = new Map(
           [...subpackageDetails.entries()].map(([id, detail]) => [
             id,
@@ -2646,3 +2655,7 @@
   excludeIds={currentPackageId ? [currentPackageId] : []}
   onAdd={addSubpackageStep}
 />
+
+{#if currentPackageId && canRun}
+  <RunPackageDialog bind:open={runDialogOpen} packageId={currentPackageId} onOpenChange={(open) => runDialogOpen = open} />
+{/if}

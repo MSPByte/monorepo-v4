@@ -1,4 +1,5 @@
 <script lang="ts">
+  import './workspace.css';
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
   import { useQueryClient } from '@tanstack/svelte-query';
@@ -24,7 +25,7 @@
   import Button from '$lib/components/ui/button/button.svelte';
   import RunPackageDialog from '$lib/components/domain/run-package-dialog.svelte';
   import { toUserMessage } from '$lib/utils/errors';
-  import { Play, Pencil, Archive, Plus, Copy, Trash2, MoreHorizontal, CalendarClock } from '@lucide/svelte';
+  import { Play, Pencil, Archive, Plus, Copy, Trash2, MoreHorizontal, CalendarClock, Layers, ArrowRight, Workflow, ShieldCheck } from '@lucide/svelte';
   import { prettyText } from '$lib/utils/format';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
@@ -57,6 +58,12 @@
   };
 
   let refreshKey = $state(0);
+  let packageSummary = $state<{ total: number; active: number; draft: number; archived: number } | null>(null);
+  const views = [
+    { id: 'active', label: 'Active', filters: [{ field: 'status', operator: 'eq' as const, value: 'active' }] },
+    { id: 'draft', label: 'Drafts', filters: [{ field: 'status', operator: 'eq' as const, value: 'draft' }] },
+    { id: 'archived', label: 'Archived', filters: [{ field: 'status', operator: 'eq' as const, value: 'archived' }] },
+  ];
   let runDialogOpen = $state(false);
   let runDialogPackageId = $state<string | undefined>(undefined);
   let scheduleDialogTarget = $state<PackageRow | null>(null);
@@ -110,9 +117,11 @@
 
   const columns: DataTableColumn<PackageRow>[] = [
     textColumn<PackageRow>('name', 'Name', 'Search name', undefined, {
-      width: '240px',
+      width: '340px',
+      cell: packageIdentity,
+      cellComponent: undefined,
     }),
-    textColumn<PackageRow>('description', 'Description', 'Search description'),
+    { ...textColumn<PackageRow>('description', 'Description', 'Search description'), defaultHidden: true },
     stateColumn<PackageRow>(
       'status',
       'Status',
@@ -138,9 +147,9 @@
       }
     ),
     numberColumn<PackageRow>('stepCount', 'Steps'),
-    numberColumn<PackageRow>('version', 'Version'),
+    { ...numberColumn<PackageRow>('version', 'Version'), defaultHidden: true },
     textColumn<PackageRow>('vendors', 'Vendors', 'Filter vendor', { pretty: true }),
-    textColumn<PackageRow>('categories', 'Categories', 'Filter category', { pretty: true }),
+    { ...textColumn<PackageRow>('categories', 'Categories', 'Filter category', { pretty: true }), defaultHidden: true },
     textColumn<PackageRow>('scope', 'Scope', 'Search scope'),
     relativeDateColumn<PackageRow>('updatedAt', 'Updated'),
     {
@@ -225,6 +234,7 @@
       }),
     ]);
 
+    packageSummary = { total: raw.length, active: raw.filter(p => p.status === 'active').length, draft: raw.filter(p => p.status === 'draft').length, archived: raw.filter(p => p.status === 'archived').length };
     const capMap = new Map(capabilities.map((c) => [c.id, c]));
     const rows: PackageRow[] = raw.map((p) => {
       const steps = Array.isArray(p.steps)
@@ -384,24 +394,17 @@
   </div>
 {/snippet}
 
-<div class="flex size-full flex-col gap-4 overflow-hidden p-4">
-  <div class="flex items-start justify-between gap-3">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-normal">Packages</h1>
-      <p class="text-sm text-muted-foreground">
-        Compose managed capabilities into runs you can execute against any tenant.
-      </p>
-    </div>
-    <div class="flex items-center gap-2">
-      {#if canWrite}
-        <Button class="gap-2" onclick={() => goto('/automation/packages/new')}>
-          <Plus class="size-4" />
-          New package
-        </Button>
-      {/if}
-    </div>
-  </div>
+{#snippet packageIdentity({ row }: { row: PackageRow })}
+  <div class="pk-identity"><span class="pk-package-icon"><Layers size={18} strokeWidth={1.6} /></span><div><a href={'/automation/packages/' + row.id} onclick={(event) => event.stopPropagation()}>{row.name}</a><p title={row.description}>{row.description || 'No description added'}</p>{#if row.stepPreview}<span class="pk-step-preview" title={row.stepPreview}>{row.stepPreview}</span>{/if}</div></div>
+{/snippet}
 
+<div class="pk-workspace pk-library">
+  <header class="pk-page-heading"><div><p class="pk-eyebrow">Automation / Package library</p><h1>Good work, on repeat.</h1><p>Turn the tasks your team repeats into reliable, reusable workflows.</p></div>{#if canWrite}<Button onclick={() => goto('/automation/packages/new')} class="gap-2"><Plus size={16} /> Create package</Button>{/if}</header>
+  <div class="pk-library-overview">
+    <div class="pk-library-intro"><span class="pk-intro-icon"><Workflow size={23} /></span><div><strong>Build once. Put it to work.</strong><p>Combine capabilities, choose your targets, and run on demand or on a schedule.</p></div><a href="/automation/runs">View run history <ArrowRight size={14} /></a></div>
+    <div class="pk-metrics" aria-label="Package counts"><div><strong>{packageSummary?.active ?? '—'}</strong><span><i class="pk-dot active"></i>Active</span></div><div><strong>{packageSummary?.draft ?? '—'}</strong><span><i class="pk-dot draft"></i>Drafts</span></div><div><strong>{packageSummary?.archived ?? '—'}</strong><span><i class="pk-dot"></i>Archived</span></div></div>
+  </div>
+  <div class="pk-library-label"><h2>Your packages <span>{packageSummary?.total ?? '—'}</span></h2><p><ShieldCheck size={14} /> Only active packages can run or be scheduled.</p></div>
   <RunPackageDialog
     bind:open={runDialogOpen}
     onOpenChange={(o) => (runDialogOpen = o)}
@@ -417,7 +420,9 @@
     onScheduled={() => void queryClient.invalidateQueries({ queryKey: ['packageRuns.schedules'] })}
   />
 
+  <div class="pk-table">
   <DataTable
+    {views}
     {columns}
     {fetchData}
     {refreshKey}
@@ -432,6 +437,7 @@
     defaultSort={{ field: 'updatedAt', dir: 'desc' }}
     onrowclick={(row) => goto(`/automation/packages/${row.id}`)}
   />
+  </div>
 </div>
 
 <AlertDialog.Root

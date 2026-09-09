@@ -48,7 +48,7 @@
 
 <Dialog.Root bind:open>
   <Dialog.Content
-    class="flex h-[min(80vh,720px)] w-[min(92vw,760px)] max-w-[min(92vw,760px)] flex-col overflow-hidden p-0 sm:max-w-[min(92vw,760px)]"
+    class="pk-picker flex h-[min(80vh,720px)] w-[min(92vw,760px)] max-w-[min(92vw,760px)] flex-col overflow-hidden p-0 sm:max-w-[min(92vw,760px)]"
   >
     <Dialog.Header class="border-b bg-muted/20 px-6 py-5">
       <Dialog.Title class="text-xl font-semibold tracking-tight">Add sub-package</Dialog.Title>

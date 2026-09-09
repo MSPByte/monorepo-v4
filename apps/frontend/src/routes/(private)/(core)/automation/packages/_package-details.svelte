@@ -88,7 +88,7 @@
   }
 </script>
 
-<div class="mx-auto w-full max-w-2xl space-y-6 p-6">
+<div class="pk-details mx-auto w-full max-w-3xl space-y-6 p-6">
   <div>
     <h2 class="text-lg font-semibold">Package details</h2>
     <p class="mt-1 text-sm text-muted-foreground">
@@ -119,7 +119,7 @@
       <div>
         <h3 class="text-sm font-medium">Scope</h3>
         <p class="mt-0.5 text-xs text-muted-foreground">
-          Restrict where this package can run. Leave both empty to make it global.
+          Restrict where this package can run. Leave all scope selections empty to make it global.
         </p>
       </div>
       <span
@@ -270,7 +270,8 @@
     </div>
   {/if}
 
-  <div class="space-y-3 rounded-lg border bg-muted/10 p-4">
+  <details class="space-y-3 rounded-lg border bg-muted/10 p-4" open={(draft.exposedOutputs?.length ?? 0) > 0}>
+    <summary class="cursor-pointer text-sm font-medium">Advanced · Reuse package outputs</summary>
     <div class="flex items-baseline justify-between gap-3">
       <div>
         <h3 class="text-sm font-medium">Exposed outputs</h3>
@@ -359,7 +360,7 @@
     <Button variant="outline" size="sm" onclick={addExposedOutput}>
       <Plus class="mr-1 size-3.5" /> Add exposed output
     </Button>
-  </div>
+  </details>
 
   <div class="rounded-lg border bg-muted/10 p-4">
     <div class="flex items-start gap-3">
@@ -374,13 +375,4 @@
       </div>
     </div>
   </div>
-  {#if draft.steps.length === 0}<div class="rounded-lg border border-dashed p-8 text-center">
-      <div class="mx-auto flex size-10 items-center justify-center rounded-full bg-muted">
-        <Sparkles class="size-4 text-muted-foreground" />
-      </div>
-      <p class="mt-3 text-sm font-medium">Add your first step</p>
-      <p class="mx-auto mt-1 max-w-xs text-xs text-muted-foreground">
-        Pick a capability from the left panel to start composing.
-      </p>
-    </div>{/if}
 </div>

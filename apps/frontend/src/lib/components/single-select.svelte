@@ -29,6 +29,8 @@
     onsearch,
     loading = false,
     disableSort = false,
+    allowClear = true,
+    'aria-label': ariaLabel = undefined,
   }: {
     options: Option[];
     selected?: string;
@@ -40,6 +42,8 @@
     onsearch?: (query: string) => void;
     loading?: boolean;
     disableSort?: boolean;
+    allowClear?: boolean;
+    'aria-label'?: string;
   } = $props();
 
   let open = $state(false);
@@ -93,7 +97,7 @@
   });
 
   const selectOption = (value: string) => {
-    if (selected === value) {
+    if (selected === value && allowClear) {
       selected = undefined;
     } else {
       selected = value;
@@ -117,6 +121,7 @@
         variant="outline"
         role="combobox"
         aria-expanded={open}
+        aria-label={ariaLabel}
         class={cn('w-full justify-between overflow-hidden', className)}
         {disabled}
       >

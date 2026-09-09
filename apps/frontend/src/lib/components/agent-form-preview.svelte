@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SingleSelect from '$lib/components/single-select.svelte';
   import type { AgentFormRow, AgentFormField } from '@mspbyte/shared';
   import { AGENT_PSA_SOURCES } from '@mspbyte/shared';
   import { Camera, Upload, Minus, Paperclip } from '@lucide/svelte';
@@ -117,21 +118,14 @@
                       {field.label || 'Dropdown'}
                       {#if field.required}<span class="text-destructive ml-0.5">*</span>{/if}
                     </label>
-                    <select class="text-xs px-2 py-1.5 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary w-full appearance-none">
-                      <option value="">{field.placeholder || 'Select…'}</option>
-                      {#if field.psaSource}
-                        {@const src = AGENT_PSA_SOURCES.find(s => s.value === field.psaSource)}
-                        <option disabled>← {src?.label ?? field.psaSource} from {psaId || 'PSA'}</option>
-                      {:else if field.selectOptions}
-                        {#each field.selectOptions as opt}
-                          <option value={opt.value}>{opt.label}</option>
-                        {/each}
-                      {:else if field.options}
-                        {#each field.options as opt}
-                          <option value={opt}>{opt}</option>
-                        {/each}
-                      {/if}
-                    </select>
+                    <SingleSelect
+                      aria-label={field.label || 'Dropdown'}
+                      options={field.psaSource
+                        ? [{ value: '__psa_preview', label: `${AGENT_PSA_SOURCES.find(source => source.value === field.psaSource)?.label ?? field.psaSource} from ${psaId || 'PSA'}`, disabled: true }]
+                        : field.selectOptions ?? field.options?.map(option => ({ value: option, label: option })) ?? []}
+                      placeholder={field.placeholder || 'Select…'}
+                      class="h-8 text-xs"
+                    />
                     {#if field.helpText}
                       <p class="text-xs text-muted-foreground">{field.helpText}</p>
                     {/if}

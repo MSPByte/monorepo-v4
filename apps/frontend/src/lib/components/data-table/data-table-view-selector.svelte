@@ -1,6 +1,6 @@
 <script lang="ts">
+  import SingleSelect from "$lib/components/single-select.svelte";
   import { Button } from "$lib/components/ui/button";
-  import * as Select from "$lib/components/ui/select";
   import type { TableView } from "./types";
 
   interface Props {
@@ -43,30 +43,5 @@
   </div>
 {:else}
   <!-- For many views, use dropdown -->
-  <Select.Root
-    type="single"
-    value={selectedViewId}
-    onValueChange={(v) => {
-      if (v === "all") {
-        onviewchange(undefined);
-      } else {
-        const view = views.find((view) => view.id === v);
-        onviewchange(view);
-      }
-    }}
-  >
-    <Select.Trigger class="w-[180px]">
-      <span data-slot="select-value">
-        {selectedViewLabel}
-      </span>
-    </Select.Trigger>
-    <Select.Content>
-      <Select.Item value="all" label="All">All</Select.Item>
-      {#each views as view (view.id)}
-        <Select.Item value={view.id} label={view.label}>
-          {view.label}
-        </Select.Item>
-      {/each}
-    </Select.Content>
-  </Select.Root>
+  <div class="w-44"><SingleSelect aria-label="Table view" allowClear={false} options={[{value:'all',label:'All'},...views.map(view => ({value:view.id,label:view.label}))]} selected={selectedViewId} onchange={(value) => onviewchange(views.find(view => view.id === value))} /></div>
 {/if}

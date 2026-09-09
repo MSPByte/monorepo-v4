@@ -1,6 +1,6 @@
 <script lang="ts">
+  import SingleSelect from "$lib/components/single-select.svelte";
   import { Button } from "$lib/components/ui/button";
-  import * as Select from "$lib/components/ui/select";
   import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
   import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
   import ChevronsLeftIcon from "@lucide/svelte/icons/chevrons-left";
@@ -32,7 +32,7 @@
 
 </script>
 
-<div class="flex items-center justify-between px-2">
+<div class="flex flex-wrap items-center justify-between gap-3 px-2">
   <div class="flex gap-2 text-sm">
     <div class="flex w-fit items-center justify-center text-sm font-medium">
       Page {page + 1} of {pageCount} (Total: {total})
@@ -44,28 +44,11 @@
     {/if}
   </div>
 
-  <div class="flex items-center space-x-6 lg:space-x-8">
+  <div class="flex flex-wrap items-center gap-3 lg:gap-8">
     <!-- Rows per page -->
     <div class="flex items-center space-x-2">
       <p class="text-sm font-medium">Rows per page</p>
-      <Select.Root
-        type="single"
-        value={String(pageSize)}
-        onValueChange={(v) => v && onpagesizechange(Number(v))}
-      >
-        <Select.Trigger class="h-8 w-17.5">
-          <span data-slot="select-value">
-            {pageSize}
-          </span>
-        </Select.Trigger>
-        <Select.Content side="top">
-          {#each [25, 50, 100] as size}
-            <Select.Item value={String(size)} label={String(size)}>
-              {size}
-            </Select.Item>
-          {/each}
-        </Select.Content>
-      </Select.Root>
+      <div class="w-20"><SingleSelect aria-label="Rows per page" allowClear={false} options={[25,50,100].map(size => ({value:String(size),label:String(size)}))} selected={String(pageSize)} onchange={(v) => v && onpagesizechange(Number(v))} class="h-8" disableSort /></div>
     </div>
 
     <!-- Navigation -->

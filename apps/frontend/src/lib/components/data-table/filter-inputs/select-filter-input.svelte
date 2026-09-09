@@ -1,6 +1,5 @@
 <script lang="ts">
   import { Label } from "$lib/components/ui/label";
-  import * as Select from "$lib/components/ui/select";
   import type { FilterOperator, FilterConfig } from "../types";
   import { getOperatorLabel } from "../utils/filters";
   import SingleSelect from "$lib/components/single-select.svelte";
@@ -25,24 +24,7 @@
 <div class="space-y-4">
   <div class="space-y-2">
     <Label>Operator</Label>
-    <Select.Root
-      type="single"
-      value={operator}
-      onValueChange={(v) => v && onoperatorchange(v as FilterOperator)}
-    >
-      <Select.Trigger class="w-full">
-        <span data-slot="select-value">
-          {getOperatorLabel(operator)}
-        </span>
-      </Select.Trigger>
-      <Select.Content>
-        {#each config.operators as op}
-          <Select.Item value={op} label={getOperatorLabel(op)}>
-            {getOperatorLabel(op)}
-          </Select.Item>
-        {/each}
-      </Select.Content>
-    </Select.Root>
+    <SingleSelect aria-label="Filter operator" allowClear={false} options={config.operators.map(op => ({value: op, label: getOperatorLabel(op)}))} selected={operator} onchange={(v) => v && onoperatorchange(v as FilterOperator)} />
   </div>
 
   <div class="space-y-2">

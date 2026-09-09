@@ -1,4 +1,5 @@
 <script lang="ts">
+  import './workspace.css';
   import { getContext, onMount } from 'svelte';
   import { page } from '$app/stores';
   import { get } from 'svelte/store';
@@ -19,6 +20,10 @@
   import Label from '$lib/components/ui/label/label.svelte';
   import { Switch } from '$lib/components/ui/switch';
   import {
+    Monitor,
+    ArrowRight,
+    FileText,
+    ArrowUpRight,
     Settings,
     TriangleAlert,
     Building2,
@@ -159,8 +164,18 @@
   const dattoLinks = $derived(dattoLinksQuery.data ?? []);
   const allSites = $derived(sitesQuery.data ?? []);
   const configs = $derived((configsQuery.data ?? []) as AgentConfig[]);
+  let configSearch = $state('');
+  const visibleConfigs = $derived(configs.filter(config => `${config.name} ${config.description ?? ''}`.toLowerCase().includes(configSearch.trim().toLowerCase())).toSorted((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name)));
   const assignments = $derived((assignmentsQuery.data ?? []) as ConfigAssignment[]);
   const forms = $derived(formsQuery.data ?? []);
+  let formSearch = $state('');
+  let formFilter = $state<'all' | 'support' | 'automation'>('all');
+  let formSort = $state('updated');
+  const automatedFormCount = $derived(forms.filter(form => form.packageId).length);
+  const visibleForms = $derived(forms.filter(form => {
+    const matchesSearch = `${form.name} ${form.description ?? ''} ${form.packageName ?? ''}`.toLowerCase().includes(formSearch.trim().toLowerCase());
+    return matchesSearch && (formFilter === 'all' || (formFilter === 'automation' ? !!form.packageId : !form.packageId));
+  }).toSorted((a, b) => formSort === 'name' ? a.name.localeCompare(b.name) : new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()));
   const siteGroups = $derived(siteGroupsQuery.data ?? []);
   const isLoading = $derived(integrationQuery.isLoading || sitesQuery.isLoading);
 
@@ -865,10 +880,10 @@
   <Sheet.Root bind:open={configSheetOpen}>
     <Sheet.Portal>
       <Sheet.Overlay />
-      <Sheet.Content side="right" class="w-105 flex flex-col gap-0 p-0">
+      <Sheet.Content side="right" class="mw-settings-sheet w-full sm:w-105 flex flex-col gap-0 p-0">
         <Sheet.Header class="p-4 border-b">
           <Sheet.Title>Integration Settings</Sheet.Title>
-          <Sheet.Description>PSA and DattoRMM variable configuration.</Sheet.Description>
+          <Sheet.Description>Choose where DattoRMM stores your site enrollment tokens.</Sheet.Description>
         </Sheet.Header>
 
         <form
@@ -974,9 +989,9 @@
 
 {#if canManage}
   <Dialog.Root bind:open={configEditOpen}>
-    <Dialog.Content class="max-w-6xl! max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
+    <Dialog.Content class="mw-config-dialog max-w-6xl! max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
       <!-- Header with identity chip -->
-      <Dialog.Header class="px-6 py-4 border-b shrink-0">
+      <Dialog.Header class="px-6 py-5 border-b bg-muted/25 shrink-0">
         <div class="flex items-start gap-4">
           <div
             class="flex size-11 shrink-0 items-center justify-center rounded-lg border overflow-hidden"
@@ -1454,13 +1469,15 @@
 {/if}
 
 <!-- ── Page layout ────────────────────────────────────────────────────────── -->
-<div class="flex flex-col size-full p-4 gap-4 overflow-hidden">
-  <div class="flex items-start justify-between shrink-0">
-    <IntegrationHeader {integration} active={isConfigured} loading={integrationQuery.isLoading} />
+<div class="fw-integration-page flex flex-col size-full p-4 gap-4 overflow-hidden">
+  <div class="flex items-start justify-between shrink-0 flex-wrap gap-3">
+    <IntegrationHeader {integration} active={isConfigured} loading={integrationQuery.isLoading} workspace />
+    {#if authStore.isAllowed('Integrations.Write')}
     <Button variant="outline" size="sm" onclick={() => (configSheetOpen = true)} class="gap-2">
       <Settings class="size-4" />
-      Integration Settings
+      Integration settings
     </Button>
+    {/if}
   </div>
 
   {#if isLoading}
@@ -1480,23 +1497,19 @@
       </Tabs.List>
 
       <!-- ── App Configs tab ─────────────────────────────────────────────── -->
-      <Tabs.Content value="configs" class="flex flex-col flex-1 min-h-0 mt-4 gap-4">
-        <div class="flex items-start justify-between shrink-0 gap-4">
-          <div class="flex flex-col gap-0.5 min-w-0">
-            <h2 class="text-sm font-semibold">App configs</h2>
-            <p class="text-xs text-muted-foreground">
-              Each config is a branded version of the MSPAgent tray app. Assign one to a site or group; anything unassigned uses the default.
-            </p>
-          </div>
-          {#if canManage && configs.length > 0}
-            <Button size="sm" onclick={openNewConfig} class="gap-2 shrink-0">
-              <Plus class="size-4" />
-              New config
-            </Button>
-          {/if}
+      <Tabs.Content value="configs" class="mw-tab flex flex-col flex-1 min-h-0 mt-4 gap-4 overflow-y-auto">
+        <div class="mw-page-heading">
+          <div><p class="fw-eyebrow">Make it yours</p><h2>Your support. Your identity.</h2><p>Design the agent your users open every day. Choose its branding, enable forms, and decide who sees it.</p></div>
+          {#if canManage}<Button onclick={openNewConfig} class="gap-2"><Plus size={15} /> Create config</Button>{/if}
         </div>
+        <div class="mw-guidance"><span class="fw-icon"><Star size={18} /></span><div><strong>{defaultConfig ? `${defaultConfig.name} is your default` : 'Start with a default experience'}</strong><p>The default covers sites without an assigned config. Create additional configs for customers who need a different experience.</p></div></div>
+        <div class="mw-toolbar"><h3>App configs <span>{configs.length}</span></h3><div class="relative"><Search class="size-4 absolute left-3 top-2.5 text-muted-foreground" /><Input aria-label="Search app configs" bind:value={configSearch} placeholder="Search configs…" class="pl-9 h-9 sm:w-64" /></div></div>
+        {#if !canManage}
+          <div class="fw-empty"><Shield size={28} /><h3>Config management access required</h3><p>You need Agents.Write permission to manage app configs.</p></div>
+        {:else if configsQuery.isError}
+          <div class="fw-empty"><TriangleAlert size={28} /><h3>Couldn’t load app configs</h3><Button variant="outline" onclick={() => configsQuery.refetch()}>Try again</Button></div>
+        {:else if configsQuery.isLoading}
 
-        {#if configsQuery.isLoading}
           <Loader />
         {:else if configs.length === 0}
           <div class="flex flex-col items-center justify-center flex-1 gap-4 rounded-lg border border-dashed bg-muted/10 py-16">
@@ -1514,23 +1527,25 @@
               </Button>
             {/if}
           </div>
+        {:else if visibleConfigs.length === 0}
+          <div class="fw-empty"><Search size={26} /><h3>No matching configs</h3><p>Try a different name or clear your search.</p><Button variant="outline" onclick={() => configSearch = ''}>Clear search</Button></div>
         {:else}
-          <div class="flex-1 overflow-y-auto pr-1">
-            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-              {#each configs as config (config.id)}
+          <div>
+            <div class="mw-config-grid">
+              {#each visibleConfigs as config (config.id)}
                 {@const data = (config.data ?? {}) as { branding?: { appName?: string; primaryColor?: string; logoUrl?: string }; enabledFormIds?: string[] }}
                 {@const color = data.branding?.primaryColor || '#3b82f6'}
                 {@const displayName = data.branding?.appName?.trim() || 'IT Support'}
                 {@const logo = data.branding?.logoUrl}
                 {@const formCount = data.enabledFormIds?.length ?? 0}
-                <div class="group relative flex flex-col rounded-lg border bg-card overflow-hidden hover:border-primary/40 hover:shadow-md transition-all">
+                <div class="mw-config-card group relative flex flex-col rounded-lg border bg-card overflow-hidden hover:border-primary/40 hover:shadow-md transition-all">
                   <!-- Brand accent bar -->
                   <div class="h-1 w-full shrink-0" style="background: {color}"></div>
 
                   <!-- Card body — click surface -->
                   <button
                     type="button"
-                    class="flex items-start gap-3 p-4 text-left w-full min-w-0 focus:outline-none focus-visible:bg-muted/40"
+                    class="flex items-start gap-3 p-5 pr-12 text-left w-full min-w-0 focus:outline-none focus-visible:bg-muted/40"
                     onclick={() => openEditConfig(config)}
                   >
                     <div
@@ -1562,18 +1577,18 @@
                   </button>
 
                   <!-- Footer with counts -->
-                  <div class="flex items-center gap-3 px-4 py-2.5 border-t bg-muted/20 text-[11px] text-muted-foreground">
+                  <div class="flex flex-wrap items-center gap-3 px-5 py-3 border-t bg-muted/20 text-[11px] text-muted-foreground">
                     <span class="flex items-center gap-1.5" title="Direct site assignments">
                       <Building2 class="size-3" />
-                      {config.siteCount}
+                      {config.siteCount} sites
                     </span>
                     <span class="flex items-center gap-1.5" title="Direct group assignments">
                       <Users class="size-3" />
-                      {config.groupCount}
+                      {config.groupCount} groups
                     </span>
                     <span class="flex items-center gap-1.5" title="Enabled tray forms">
                       <LayoutList class="size-3" />
-                      {formCount}
+                      {formCount} forms
                     </span>
                     {#if config.isDefault && config.siteCount === 0 && config.groupCount === 0}
                       <span class="ml-auto text-muted-foreground/70">Applies to everything unassigned</span>
@@ -1593,7 +1608,7 @@
                       <DropdownMenu.Root>
                         <DropdownMenu.Trigger>
                           {#snippet child({ props })}
-                            <Button variant="ghost" size="icon" class="size-7 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 bg-background/80 backdrop-blur-sm hover:bg-background border" {...props}>
+                            <Button variant="ghost" size="icon" class="size-8 bg-card hover:bg-muted border" aria-label={"Actions for " + config.name} {...props}>
                               <MoreHorizontal class="size-3.5" />
                             </Button>
                           {/snippet}
@@ -1631,11 +1646,15 @@
       </Tabs.Content>
 
       <!-- ── Sites tab ───────────────────────────────────────────────────── -->
-      <Tabs.Content value="sites" class="flex flex-col flex-1 min-h-0 mt-4 gap-3">
+      <Tabs.Content value="sites" class="mw-tab flex flex-col flex-1 min-h-0 mt-4 gap-4 overflow-y-auto">
+        <div class="mw-page-heading"><div><p class="fw-eyebrow">Connect your customers</p><h2>Every site, ready for support.</h2><p>Manage enrollment tokens and sync them to DattoRMM so devices can join the right site.</p></div></div>
+        <div class="mw-site-summary"><div><Building2 size={17} /><strong>{allSites.length}</strong><span>Total sites</span></div><div><CircleCheck size={17} /><strong>{allSites.filter(site => linkedSiteIds.has(site.id)).length}</strong><span>Linked to DattoRMM</span></div><div><TriangleAlert size={17} /><strong>{allSites.filter(site => ['missing', 'mismatch'].includes(getVarStatus(site.id)?.status ?? '')).length}</strong><span>Variable issues</span></div></div>
+        <div class="mw-guidance"><span class="fw-icon"><KeyRound size={18} /></span><div><strong>Check first. Sync when needed.</strong><p>Check reads the enrollment variable in DattoRMM. Sync writes the site’s token to that variable. Bulk actions apply to all linked sites, including those hidden by your filters.</p></div></div>
         <div class="flex gap-2 items-center shrink-0 flex-wrap">
           <Input
             type="text"
-            placeholder="Search sites..."
+            aria-label="Search sites"
+            placeholder="Search sites…"
             bind:value={siteSearch}
             class="w-64"
           />
@@ -1654,7 +1673,7 @@
               </button>
             {/each}
           </div>
-          <div class="flex gap-2 ml-auto shrink-0">
+          <div class="flex flex-wrap gap-2 ml-auto">
             {#if canManage}
               <Button
                 size="sm"
@@ -1664,7 +1683,7 @@
                 class="gap-2"
               >
                 <Download class="size-4" />
-                {exportingCsv ? 'Exporting...' : 'Export Tokens'}
+                {exportingCsv ? 'Exporting…' : 'Export tokens'}
               </Button>
             {/if}
             <form method="POST" action="?/checkVars" use:enhance={makeCheckEnhance()}>
@@ -1676,7 +1695,7 @@
                 class="gap-2"
               >
                 <CircleDot class="size-4" />
-                {checkingAll ? 'Checking...' : 'Check All'}
+                {checkingAll ? 'Checking…' : 'Check all linked'}
               </Button>
             </form>
             {#if authStore.isAllowed('Integrations.Write')}
@@ -1689,13 +1708,13 @@
                       disabled={pushingAll || allLinkedSiteIds.length === 0}
                       {...props}
                     >
-                      {pushingAll ? 'Pushing...' : 'Push All'}
+                      {pushingAll ? 'Syncing…' : 'Sync all linked'}
                     </Button>
                   {/snippet}
                 </AlertDialog.Trigger>
                 <AlertDialog.Content>
                   <AlertDialog.Header>
-                    <AlertDialog.Title>Push Variables to All Sites?</AlertDialog.Title>
+                    <AlertDialog.Title>Sync variables to all linked sites?</AlertDialog.Title>
                     <AlertDialog.Description>
                       This will push to all {allLinkedSiteIds.length} linked DattoRMM site{allLinkedSiteIds.length !== 1 ? 's' : ''}.
                     </AlertDialog.Description>
@@ -1703,7 +1722,7 @@
                   <AlertDialog.Footer>
                     <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
                     <form method="POST" action="?/pushVars" use:enhance={makePushEnhance()}>
-                      <AlertDialog.Action type="submit" disabled={pushingAll}>Push All</AlertDialog.Action>
+                      <AlertDialog.Action type="submit" disabled={pushingAll}>Sync all linked</AlertDialog.Action>
                     </form>
                   </AlertDialog.Footer>
                 </AlertDialog.Content>
@@ -1712,11 +1731,15 @@
           </div>
         </div>
 
-        <div class="flex-1 overflow-hidden flex flex-col min-h-0">
-          {#if filteredSites.length === 0}
+        <div class="mw-sites-panel">
+          <div class="mw-table-caption"><span>Site & enrollment</span><span aria-live="polite">{filteredSites.length} of {allSites.length} sites</span></div>
+          {#if dattoLinksQuery.isError || sitesQuery.isError || tokenListQuery.isError}
+            <div class="fw-empty"><TriangleAlert size={26} /><h3>Some site data couldn’t be loaded</h3><p>Reload before checking or syncing enrollment variables.</p><Button variant="outline" onclick={() => { sitesQuery.refetch(); dattoLinksQuery.refetch(); tokenListQuery.refetch(); }}>Try again</Button></div>
+          {:else if filteredSites.length === 0}
             <div class="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
               <Building2 class="size-8 opacity-40" />
-              <span class="text-sm">No sites found</span>
+              <span class="text-sm">{allSites.length ? 'No sites match your filters' : 'No sites yet'}</span>
+              {#if allSites.length}<Button variant="outline" size="sm" onclick={() => { siteSearch = ''; activeFilter = 'All'; }}>Clear filters</Button>{:else}<p class="text-xs">Add sites in Setup before enrolling devices.</p>{/if}
             </div>
           {:else}
             <div class="flex-1 overflow-y-auto">
@@ -1730,17 +1753,17 @@
                   {@const hasToken = tokenBySite.has(site.id)}
                   {@const revealedToken = revealedTokens.get(site.id)}
                   {@const isRevealing = revealingTokens.has(site.id)}
-                  <div class="flex justify-between px-2 py-3 items-start hover:bg-muted/30 gap-4">
+                  <div class="mw-site-row flex justify-between px-5 py-4 items-start hover:bg-muted/30 gap-4">
                     <div class="flex flex-col gap-1.5 min-w-0 flex-1">
                       <div class="flex items-center gap-2 flex-wrap">
                         <span class="font-medium text-sm">{site.name}</span>
                         {#if isLinked}
                           <Badge class="text-xs shrink-0 bg-primary/15 text-primary border-primary/30" variant="outline">
-                            LINKED
+                            Linked
                           </Badge>
                         {:else}
                           <Badge class="text-xs shrink-0 bg-muted-foreground/15 text-muted-foreground border-muted-foreground/30" variant="outline">
-                            NOT LINKED
+                            Not linked
                           </Badge>
                         {/if}
                       </div>
@@ -1794,7 +1817,7 @@
                             <span class="animate-pulse">Checking...</span>
                           {:else if varStatus?.status === 'ok'}
                             <span class="inline-flex items-center gap-1 text-emerald-500 bg-emerald-500/10 border border-emerald-500/30 px-1.5 py-0.5 rounded-full">
-                              <CircleCheck class="size-3" /> OK
+                              <CircleCheck class="size-3" /> In sync
                             </span>
                           {:else if varStatus?.status === 'mismatch'}
                             <span class="inline-flex items-center gap-1 text-amber-500 bg-amber-500/10 border border-amber-500/30 px-1.5 py-0.5 rounded-full">
@@ -1804,10 +1827,12 @@
                             <span class="inline-flex items-center gap-1 text-destructive bg-destructive/10 border border-destructive/30 px-1.5 py-0.5 rounded-full">
                               <CircleX class="size-3" /> Missing
                             </span>
+                          {:else}
+                            <span class="text-muted-foreground">Not checked yet</span>
                           {/if}
                         </div>
                       {:else}
-                        <span class="text-xs text-muted-foreground/40">No DattoRMM link</span>
+                        <span class="text-xs text-muted-foreground">Link this site in DattoRMM setup to sync its variable.</span>
                       {/if}
                     </div>
 
@@ -1825,7 +1850,7 @@
                           <form method="POST" action="?/pushVars" use:enhance={makePushEnhance(site.id)}>
                             <input type="hidden" name="siteId" value={site.id} />
                             <Button type="submit" size="sm" variant="outline" disabled={isPushing || pushingAll}>
-                              {isPushing ? '...' : 'Push'}
+                              {isPushing ? 'Syncing…' : 'Sync variable'}
                             </Button>
                           </form>
                         {/if}
@@ -1839,7 +1864,7 @@
                           title="Regenerate enrollment token"
                         >
                           <KeyRound class="size-3.5" />
-                          Regen
+                          Rotate token
                         </Button>
                       {/if}
                     </div>
@@ -1852,106 +1877,84 @@
       </Tabs.Content>
 
       <!-- ── Forms tab ────────────────────────────────────────────────────── -->
-      <Tabs.Content value="forms" class="flex flex-col flex-1 min-h-0 mt-4 gap-3">
-        <div class="flex items-center justify-between shrink-0">
-          <p class="text-sm text-muted-foreground">
-            Forms collect support requests and can securely launch packages. Enable individual forms per config under App Configs.
-          </p>
-          {#if canManage}
-            <Button size="sm" onclick={() => goto('/setup/integrations/mspagent/forms')} class="gap-2 shrink-0">
-              <Plus class="size-4" />
-              New Form
-            </Button>
-          {/if}
+      <Tabs.Content value="forms" class="forms-workspace forms-library flex-1 min-h-0 mt-4 overflow-y-auto">
+        <div class="fw-heading">
+          <div class="fw-hero-copy">
+            <p class="fw-eyebrow"><span></span> A better end-user experience</p>
+            <h2 class="fw-title">Less back-and-forth.<br /><span>More moving forward.</span></h2>
+            <p class="fw-subtitle">Collect the right details from the first request. Create support forms that connect your users to the help they need.</p>
+            {#if canManage}<Button onclick={() => goto('/setup/integrations/mspagent/forms')} class="fw-hero-button gap-2"><Plus class="size-4" /> Create a form <ArrowRight class="size-4 ml-2" /></Button>{/if}
+          </div>
+          <div class="fw-hero-art" aria-hidden="true">
+            <div class="fw-art-orbit"></div>
+            <div class="fw-art-form"><div class="fw-art-form-header"><span><Monitor size={14} /> IT Support</span><span>•••</span></div><div class="fw-art-form-body"><span class="fw-art-label">HOW CAN WE HELP?</span><strong>A little context goes a long way.</strong><div class="fw-art-input">Tell us what you need <span>⌄</span></div><div class="fw-art-lines"><i></i><i></i></div><div class="fw-art-submit">Send request <ArrowRight size={12} /></div></div></div>
+            <div class="fw-art-result"><span class="fw-art-check"><Check size={15} /></span><div><strong>Right details. Right team.</strong><span>Better support starts here.</span></div></div>
+          </div>
         </div>
 
-        {#if formsQuery.isLoading}
-          <Loader />
-        {:else if forms.length === 0}
-          <div class="flex flex-col items-center justify-center flex-1 gap-3 text-muted-foreground">
-            <div class="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
-              <LayoutGrid class="size-5" />
+        <div class="fw-overview">
+          <div><span class="fw-metric-label"><FileText size={14} /> Form library</span><span class="fw-stat">{forms.length}<small>total forms</small></span></div>
+          <div><span class="fw-metric-label"><LayoutList size={14} /> Human support</span><span class="fw-stat">{forms.length - automatedFormCount}<small>support forms</small></span></div>
+          <div><span class="fw-metric-label"><Zap size={14} /> Automated help</span><span class="fw-stat">{automatedFormCount}<small>linked to packages</small></span></div>
+          <div class="fw-publish-note"><span class="fw-icon"><LayoutList class="size-5" /></span><p>Ready for your users?<br /><button type="button" onclick={() => selectTab('configs')}>Enable forms in App Configs <ArrowUpRight class="size-3.5" /></button></p></div>
+        </div>
+
+        <section class="fw-library-panel" aria-label="Form library">
+          <div class="fw-library-toolbar">
+            <div><h3 class="font-semibold text-sm">Your forms</h3><p class="text-xs text-muted-foreground mt-1">Build once. Reuse across your app configs.</p></div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <div class="relative"><Search class="absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input aria-label="Search forms" bind:value={formSearch} placeholder="Search forms…" class="pl-9 h-9 w-full sm:w-60" /></div>
+              <div class="w-44"><SingleSelect options={[{ value: 'updated', label: 'Recently updated' }, { value: 'name', label: 'Name A–Z' }]} selected={formSort} onchange={(value) => formSort = value || 'updated'} aria-label="Sort forms" placeholder="Sort forms" searchPlaceholder="Find sort order…" disableSort class="h-9 text-xs" /></div>
             </div>
-            <div class="flex flex-col items-center gap-1 text-center">
-              <span class="text-sm font-medium">No forms yet</span>
-              <span class="text-xs">Create forms agents can use to let end users submit support tickets.</span>
-            </div>
-            {#if canManage}
-              <Button size="sm" onclick={() => goto('/setup/integrations/mspagent/forms')} class="gap-2">
-                <Plus class="size-4" />
-                Create your first form
-              </Button>
-            {/if}
           </div>
-        {:else}
-          <div class="flex-1 overflow-y-auto">
-            <div class="flex flex-col divide-y rounded border">
-              {#each forms as form (form.id)}
-                <div class="flex items-center justify-between px-4 py-3 hover:bg-muted/30 transition-colors">
-                  <div class="flex items-center gap-3 min-w-0">
-                    <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-muted">
-                      <LayoutGrid class="size-3.5 text-muted-foreground" />
-                    </div>
-                    <div class="flex flex-col gap-0.5 min-w-0">
-                      <span class="text-sm font-medium truncate">{form.name}</span>
-                      {#if form.packageId}
-                        <span class="inline-flex w-fit items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                          <Zap class="size-2.5" />
-                          {form.packageName ?? 'Automation linked'}
-                        </span>
-                      {/if}
-                      {#if form.description}
-                        <span class="text-xs text-muted-foreground truncate">{form.description}</span>
-                      {/if}
-                    </div>
-                  </div>
-                  <div class="flex items-center gap-2 shrink-0">
-                    <span class="text-xs text-muted-foreground hidden sm:block">
-                      Updated {new Date(form.updatedAt).toLocaleDateString()}
-                    </span>
-                    {#if canManage}
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        class="gap-1.5 h-8"
-                        onclick={() => goto('/setup/integrations/mspagent/forms?id=' + form.id)}
-                      >
-                        <Pencil class="size-3.5" />
-                        Edit
-                      </Button>
-                    {/if}
-                    {#if canDelete}
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        class="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                        onclick={() => (deleteFormId = form.id)}
-                        title="Delete form"
-                      >
-                        <Trash2 class="size-3.5" />
-                      </Button>
-                    {/if}
-                  </div>
-                </div>
+          <div class="fw-filterbar">
+            <div class="fw-filters" aria-label="Filter forms">
+              <button type="button" class:active={formFilter === 'all'} aria-pressed={formFilter === 'all'} onclick={() => formFilter = 'all'}>All forms <span>{forms.length}</span></button>
+              <button type="button" class:active={formFilter === 'support'} aria-pressed={formFilter === 'support'} onclick={() => formFilter = 'support'}>Support</button>
+              <button type="button" class:active={formFilter === 'automation'} aria-pressed={formFilter === 'automation'} onclick={() => formFilter = 'automation'}><Zap class="size-3.5" /> Automated</button>
+            </div>
+            <span class="text-xs text-muted-foreground" aria-live="polite">{visibleForms.length} {visibleForms.length === 1 ? 'form' : 'forms'}</span>
+          </div>
+          {#if !canManage}
+            <div class="fw-empty"><Shield class="size-7 text-muted-foreground" /><h3>Form management access required</h3><p>You need Agents.Write permission to manage forms.</p></div>
+          {:else if formsQuery.isLoading}
+            <div class="p-12"><Loader /></div>
+          {:else if formsQuery.isError}
+            <div class="fw-empty"><TriangleAlert class="size-7" /><h3>We couldn’t load your forms</h3><p>Try again to retrieve your form library.</p><Button variant="outline" onclick={() => formsQuery.refetch()}>Try again</Button></div>
+          {:else if forms.length === 0}
+            <div class="fw-empty"><span class="fw-empty-icon"><FileText class="size-7" /></span><h3>Your next great support experience</h3><p>Create a form for support requests, onboarding, or everyday IT tasks. Start with a template or make it your own.</p><Button onclick={() => goto('/setup/integrations/mspagent/forms')} class="gap-2"><Plus class="size-4" /> Create your first form</Button></div>
+          {:else if visibleForms.length === 0}
+            <div class="fw-empty"><Search class="size-7 text-muted-foreground" /><h3>No matching forms</h3><p>Try another search or show all form types.</p><Button variant="outline" onclick={() => { formSearch = ''; formFilter = 'all'; }}>Clear filters</Button></div>
+          {:else}
+            <div class="fw-form-grid">
+              {#each visibleForms as form (form.id)}
+                <article class="fw-form-card" class:fw-automated-card={!!form.packageId}>
+                  <div class="flex items-center justify-between gap-3"><span class="fw-icon">{#if form.packageId}<Zap class="size-5" />{:else}<FileText class="size-5" />{/if}</span><span class="fw-type" class:automated={!!form.packageId}>{form.packageId ? 'Automated' : 'Support form'}</span></div>
+                  <a class="fw-card-title" href={'/setup/integrations/mspagent/forms?id=' + form.id}>{form.name}</a>
+                  <p class="fw-card-description">{form.description || 'No description added. Open this form to tell users what it’s for.'}</p>
+                  {#if form.packageId}<p class="fw-package"><Zap class="size-3.5 shrink-0" /><span class="truncate">{form.packageName ?? 'Linked automation'}</span></p>{/if}
+                  <div class="fw-card-footer"><span>Updated {new Date(form.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span><div class="flex items-center gap-1">
+                    {#if canDelete}<Button variant="ghost" size="icon" class="size-8 text-muted-foreground hover:text-destructive" onclick={() => deleteFormId = form.id} aria-label={'Delete ' + form.name}><Trash2 class="size-3.5" /></Button>{/if}
+                    <Button variant="ghost" size="sm" class="gap-1.5 h-8" onclick={() => goto('/setup/integrations/mspagent/forms?id=' + form.id)}>Edit form <ArrowUpRight class="size-3.5" /></Button>
+                  </div></div>
+                </article>
               {/each}
             </div>
-          </div>
-        {/if}
+          {/if}
+        </section>
+        <div class="fw-library-footnote"><Shield class="size-3.5" /> Forms appear in the agent only after you enable them in an app config.</div>
       </Tabs.Content>
 
       <!-- ── Webhooks tab ──────────────────────────────────────────────────── -->
-      <Tabs.Content value="webhooks" class="flex flex-col flex-1 min-h-0 mt-4 gap-4 overflow-y-auto">
-        <div class="flex flex-col gap-0.5 shrink-0">
-          <h2 class="text-sm font-semibold">Webhooks</h2>
-          <p class="text-xs text-muted-foreground">
-            Configure your PSA to notify agents when a technician adds a note, so end users see replies instantly.
-          </p>
-        </div>
-
+      <Tabs.Content value="webhooks" class="mw-tab flex flex-col flex-1 min-h-0 mt-4 gap-4 overflow-y-auto">
+        <div class="mw-page-heading"><div><p class="fw-eyebrow">Keep the conversation going</p><h2>Bring technician replies to the desktop.</h2><p>Connect HaloPSA webhooks so users see ticket updates in their agent app.</p></div></div>
+        <ol class="mw-steps"><li><span>1</span><div><strong>Create a webhook</strong><p>Open HaloPSA → Configuration → Integrations → Webhooks.</p></div></li><li><span>2</span><div><strong>Connect the endpoint</strong><p>Choose the Action event and enter the URL and custom header below.</p></div></li><li><span>3</span><div><strong>Check the experience</strong><p>Add a technician reply to a test ticket and confirm it reaches the agent.</p></div></li></ol>
         {#if !canManage}
           <p class="text-sm text-muted-foreground">Agents.Write permission required to view webhook secrets.</p>
         {:else if webhookSecretQuery.isLoading}
           <Loader />
+        {:else if webhookSecretQuery.isError}
+          <div class="fw-empty"><TriangleAlert size={26} /><h3>Couldn’t load webhook settings</h3><Button variant="outline" onclick={() => webhookSecretQuery.refetch()}>Try again</Button></div>
         {:else if !webhookSecretQuery.data}
           <div class="flex items-start gap-3 px-4 py-3 rounded-lg border bg-muted/30 max-w-xl">
             <TriangleAlert class="size-4 text-warning shrink-0 mt-0.5" />
@@ -1961,11 +1964,11 @@
           </div>
         {:else}
           {@const wh = webhookSecretQuery.data}
-          <div class="flex flex-col gap-6 max-w-xl">
+          <div class="mw-webhook-settings flex flex-col gap-6">
             <!-- HaloPSA section -->
-            <section class="flex flex-col gap-4 rounded-lg border p-5">
+            <section class="flex flex-col gap-5 rounded-xl border bg-card p-6 shadow-sm">
               <div class="flex flex-col gap-0.5">
-                <p class="text-sm font-semibold">HaloPSA</p>
+                <p class="text-base font-semibold">HaloPSA connection details</p>
                 <p class="text-xs text-muted-foreground">
                   In HaloPSA, go to <strong>Configuration → Integrations → Webhooks</strong>, create a new webhook on the Action event, and use the values below.
                 </p>
@@ -1975,7 +1978,7 @@
               <div class="flex flex-col gap-1.5">
                 <Label>Webhook URL</Label>
                 <div class="flex items-center gap-2">
-                  <code class="flex-1 text-xs font-mono bg-muted px-3 py-2 rounded-md border truncate select-all">
+                  <code class="flex-1 min-w-0 text-xs font-mono bg-muted px-3 py-2 rounded-md border truncate select-all">
                     {wh.url}
                   </code>
                   <button
@@ -1995,7 +1998,7 @@
               <!-- Secret header -->
               <div class="flex flex-col gap-1.5">
                 <Label>Custom header</Label>
-                <div class="grid grid-cols-[1fr_1.5fr_auto] gap-2 items-center">
+                <div class="mw-secret-grid grid grid-cols-[1fr_1.5fr_auto] gap-2 items-center">
                   <code class="text-xs font-mono bg-muted px-3 py-2 rounded-md border truncate">X-Internal-Secret</code>
                   <div class="flex items-center gap-1 bg-muted px-3 py-2 rounded-md border overflow-hidden">
                     <code class="text-xs font-mono flex-1 truncate select-all">

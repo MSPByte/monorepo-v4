@@ -1,9 +1,10 @@
 <script lang="ts">
+  import '../workspace.css';
   import { getContext, onMount } from 'svelte';
   import type { Component } from 'svelte';
   import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
   import type { createTrpcClient } from '$lib/trpc';
-  import { goto } from '$app/navigation';
+  import { beforeNavigate, goto, replaceState } from '$app/navigation';
   import { page } from '$app/stores';
   import { get } from 'svelte/store';
   import type { AgentFieldType, AgentFormField, AgentFormRow, AgentFormInputSource, AgentFormPackageBindings, PackageRuntimeInput, ResolvedInputMeta } from '@mspbyte/shared';
@@ -106,6 +107,39 @@
   let packageId = $state<string | null>(null);
   let packageBindings = $state<AgentFormPackageBindings>({});
   let saving = $state(false);
+  let loading = $state(true);
+  let savedSnapshot = $state('');
+  const snapshot = $derived(JSON.stringify({ formName, formDescription, ticketTitle, ticketBody, formRows, packageId, packageBindings }));
+  const hasChanges = $derived(!loading && savedSnapshot !== snapshot);
+  const fieldCount = $derived(formRows.flatMap(row => row.cols).filter(field => !['title', 'spacer'].includes(field.type)).length);
+
+  beforeNavigate(({ cancel }) => {
+    if (hasChanges && !window.confirm('Leave this form? Your unsaved changes will be lost.')) cancel();
+  });
+
+  function addPaletteField(type: AgentFieldType) {
+    const target = formRows.find(row => row.id === addingToRowId && rowSpanUsed(row) < row.cols_max);
+    if (target) addFieldToRow(target.id, type);
+    else {
+      const id = crypto.randomUUID();
+      formRows = [...formRows, { id, cols_max: 3, cols: [] }];
+      addFieldToRow(id, type);
+    }
+  }
+
+  function startSupportForm() {
+    formName = 'Support request';
+    formDescription = 'Tell us what’s happening and our IT team will help.';
+    const fields: { type: AgentFieldType; label: string; key: string; required: boolean }[] = [
+      { type: 'text', label: 'What do you need help with?', key: 'summary', required: true },
+      { type: 'textarea', label: 'Tell us more', key: 'details', required: true },
+      { type: 'email', label: 'Your email', key: 'email', required: true },
+      { type: 'attachment', label: 'Add a screenshot or file', key: 'attachment', required: false },
+    ];
+    formRows = fields.map(field => ({ id: crypto.randomUUID(), cols_max: 3, cols: [{ id: crypto.randomUUID(), type: field.type, label: field.label, hydrationKey: field.key, required: field.required, col_span: 3, ...(field.type === 'attachment' ? { allowUpload: true, allowScreenshot: true } : {}) }] }));
+    ticketTitle = '{{summary}}';
+    ticketBody = '{{details}}';
+  }
 
   // Selection
   let selectedRowId = $state<string | null>(null);
@@ -311,7 +345,7 @@
       }
     } else {
       editingFormId = null;
-      formName = 'New Form';
+      formName = '';
       formDescription = '';
       ticketTitle = '';
       ticketBody = '';
@@ -319,19 +353,24 @@
       packageBindings = {};
       formRows = [];
     }
+    savedSnapshot = JSON.stringify({ formName, formDescription, ticketTitle, ticketBody, formRows, packageId, packageBindings });
+    loading = false;
   });
 
   async function handleSave() {
+    if (!canWrite || loading || saving) return;
     if (!formName.trim()) {
       toast.error('Form name is required');
       return;
     }
     if (packageId && unmappedRequired.length > 0) {
+      deselect();
       rightPanelTab = 'automation';
       toast.error(`Map ${unmappedRequired.length} required automation input${unmappedRequired.length === 1 ? '' : 's'} before saving`);
       return;
     }
     saving = true;
+    const savingSnapshot = snapshot;
     try {
       const payload = {
         name: formName,
@@ -348,8 +387,14 @@
       } else {
         const result = await createMut.mutateAsync(payload);
         editingFormId = result?.id ?? null;
+        if (editingFormId) {
+          const url = new URL(get(page).url);
+          url.searchParams.set('id', editingFormId);
+          replaceState(url, get(page).state);
+        }
         toast.success('Form created');
       }
+      savedSnapshot = savingSnapshot;
       queryClient.invalidateQueries({ queryKey: ['forms.list'] });
     } catch (err) {
       toast.error(toUserMessage(err, 'Failed to save form'));
@@ -364,6 +409,7 @@
     try {
       await deleteMut.mutateAsync(deleteDialogId);
       queryClient.invalidateQueries({ queryKey: ['forms.list'] });
+      savedSnapshot = snapshot;
       toast.success('Form deleted');
       goto(BACK);
     } catch (err) {
@@ -554,74 +600,57 @@
   </AlertDialog.Content>
 </AlertDialog.Root>
 
+<svelte:window onbeforeunload={(event) => { if (hasChanges) { event.preventDefault(); event.returnValue = ''; } }} />
+
 <!-- ─── Editor ────────────────────────────────────────────────────────────── -->
-<div class="flex flex-col size-full overflow-hidden">
-
-    <!-- Editor header -->
-    <div class="flex items-center gap-3 px-4 py-2.5 border-b bg-background shrink-0">
-      <Button
-        variant="ghost"
-        size="sm"
-        class="gap-1.5 text-muted-foreground hover:text-foreground -ml-1 shrink-0"
-        onclick={() => goto(BACK)}
-      >
-        <ArrowLeft class="size-3.5" />
-        Forms
-      </Button>
-      <div class="w-px h-4 bg-border shrink-0"></div>
-      <input
-        type="text"
-        bind:value={formName}
-        placeholder="Form name"
-        class="flex-1 text-sm font-medium bg-transparent border-none outline-none placeholder:text-muted-foreground min-w-0"
-      />
-      <div class="flex items-center gap-2 shrink-0">
-        {#if editingFormId && canDelete}
-          <Button
-            variant="ghost"
-            size="sm"
-            class="text-destructive hover:text-destructive hover:bg-destructive/10"
-            onclick={() => (deleteDialogId = editingFormId)}
-          >
-            <Trash2 class="size-3.5 mr-1.5" />
-            Delete
-          </Button>
-        {/if}
-        <Button variant="outline" size="sm" onclick={() => goto(BACK)}>Cancel</Button>
-        <Button size="sm" onclick={handleSave} disabled={saving}>
-          {saving ? 'Saving…' : 'Save Form'}
-        </Button>
-      </div>
+<div class="forms-workspace fw-editor">
+  <header class="fw-editor-header">
+    <div class="flex items-center gap-3 min-w-0">
+      <Button variant="outline" size="icon" class="size-9 shrink-0" onclick={() => goto(BACK)} aria-label="Back to forms"><ArrowLeft class="size-4" /></Button>
+      <div class="min-w-0"><p class="fw-eyebrow">MSPAgent / Forms</p><h1 class="font-semibold truncate">{editingFormId ? formName || 'Untitled form' : 'Create a form'}</h1></div>
     </div>
-
-    <!-- Editor body: canvas + panel -->
-    <div class="flex flex-1 overflow-hidden">
-
-      <!-- ── Canvas ─────────────────────────────────────────────────────────── -->
-      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-      <div
-        class="flex-1 overflow-y-auto p-4 bg-muted/20"
-        onclick={(e) => {
-          if (e.target === e.currentTarget) deselect();
-        }}
-      >
-        <!-- Form description (compact, inline) -->
-        <div class="mb-4">
-          <input
-            type="text"
-            bind:value={formDescription}
-            placeholder="Optional description shown at the top of the form…"
-            class="w-full text-xs text-muted-foreground bg-transparent border-none outline-none placeholder:text-muted-foreground/60"
-          />
+    <div class="flex items-center gap-2">
+      <span class="fw-save-state" aria-live="polite"><span class:changed={hasChanges}></span>{loading ? 'Loading…' : saving ? 'Saving…' : hasChanges ? 'Unsaved changes' : editingFormId ? 'All changes saved' : 'New form'}</span>
+      {#if editingFormId && canDelete}<Button variant="ghost" size="icon" aria-label="Delete form" onclick={() => deleteDialogId = editingFormId}><Trash2 class="size-4" /></Button>{/if}
+      <Button variant="outline" size="sm" class="gap-1.5" onclick={() => { deselect(); rightPanelTab = 'preview'; }}><Eye size={14} /> Preview</Button>
+      {#if canWrite}<Button size="sm" onclick={handleSave} disabled={saving || loading || !formName.trim() || !hasChanges}>{saving ? 'Saving…' : editingFormId ? 'Save changes' : 'Create form'}</Button>{/if}
+    </div>
+  </header>
+  <div class="fw-editor-context"><span><LayoutGrid class="size-4" /> Form builder</span><p>Design the request. Preview the experience. Connect the next step.</p><span class="fw-field-count">{fieldCount} {fieldCount === 1 ? 'field' : 'fields'}</span></div>
+  {#if loading}
+    <div class="fw-empty" role="status"><p>Loading your form…</p></div>
+  {:else}
+    <div class="fw-editor-body">
+      <aside class="fw-palette" aria-label="Add fields">
+        <p class="fw-eyebrow">Build your form</p><h2>Add fields</h2><p class="fw-palette-help">Everything you need, one field at a time.</p>
+        <div class="fw-palette-fields">
+          {#each FIELD_TYPES_ORDERED as type}
+            {@const Icon = FIELD_META[type].icon}
+            <button type="button" onclick={() => addPaletteField(type)}><Icon class="size-4" /><span>{FIELD_META[type].label}</span><Plus class="size-3 fw-palette-plus" /></button>
+          {/each}
         </div>
+        <div class="fw-palette-tip"><LayoutGrid class="size-4" /><p>Need fields side by side? Add a row, then choose fields for its columns.</p></div>
+      </aside>
+
+      <div class="fw-canvas">
+        <div class="fw-canvas-top"><span class="fw-eyebrow">Form canvas</span><span>Click any field to edit</span></div>
+        <div class="fw-form-details">
+          <label for="form-name" class="fw-eyebrow">Form name <span class="text-primary">*</span></label>
+          <input id="form-name" bind:value={formName} placeholder="Give your form a name" class="fw-name-input" />
+          <label for="form-description" class="sr-only">Form description</label>
+          <input id="form-description" bind:value={formDescription} placeholder="Add a short description for your users…" class="fw-description-input" />
+        </div>
+        {#if formRows.length === 0}
+          <div class="fw-builder-empty"><span class="fw-empty-icon"><FileText class="size-7" /></span><h2>A little structure. A better request.</h2><p>Add your first field from the left, or start with the essentials for a support ticket.</p><Button variant="outline" onclick={startSupportForm} class="gap-2"><TicketCheck class="size-4" /> Use support request template</Button><span>Summary, details, email, and attachments</span></div>
+        {/if}
 
         <!-- Rows -->
-        <div class="flex flex-col gap-2">
+        <div class="flex flex-col gap-3">
           {#each formRows as row, rowIdx (row.id)}
             {@const usedSpan = rowSpanUsed(row)}
             {@const remainingSpan = row.cols_max - usedSpan}
 
-            <div class="group/row rounded-lg border bg-background shadow-sm">
+            <div class="fw-canvas-row group/row rounded-lg border bg-background shadow-sm">
               <!-- Row header -->
               <div class="flex items-center gap-1 px-2 pt-2 pb-1">
                 <GripVertical class="size-3.5 text-muted-foreground/40 shrink-0" />
@@ -644,12 +673,12 @@
                   >3</button>
                 </div>
                 <div class="flex-1"></div>
-                <div class="flex items-center gap-0.5 opacity-0 group-hover/row:opacity-100 transition-opacity">
+                <div class="flex items-center gap-0.5 opacity-60 group-hover/row:opacity-100 group-focus-within/row:opacity-100 transition-opacity">
                   <button
                     type="button"
                     onclick={() => moveRow(row.id, -1)}
                     disabled={rowIdx === 0}
-                    class="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+                    class="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
                     title="Move row up"
                   >
                     <ChevronUp class="size-3" />
@@ -658,7 +687,7 @@
                     type="button"
                     onclick={() => moveRow(row.id, 1)}
                     disabled={rowIdx === formRows.length - 1}
-                    class="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+                    class="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
                     title="Move row down"
                   >
                     <ChevronDown class="size-3" />
@@ -666,7 +695,7 @@
                   <button
                     type="button"
                     onclick={() => removeRow(row.id)}
-                    class="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-destructive"
+                    class="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-destructive"
                     title="Remove row"
                   >
                     <X class="size-3" />
@@ -680,8 +709,12 @@
                   {@const isSelected = selectedRowId === row.id && selectedColIdx === colIdx}
                   {@const meta = FIELD_META[field.type]}
 
-                  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+
                   <div
+                    role="button"
+                    tabindex="0"
+                    aria-label={"Edit " + (field.label || meta.label)}
+                    onkeydown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); selectCell(row.id, colIdx); } }}
                     style="grid-column: span {field.col_span}"
                     class="group/cell relative rounded-md border cursor-pointer transition-all
                       {isSelected
@@ -699,7 +732,7 @@
                         </div>
                       {:else}
                         <div class="flex items-center justify-center h-7 w-7 rounded bg-muted shrink-0">
-                          <svelte:component this={meta.icon} class="size-3.5 text-muted-foreground" />
+                          <meta.icon class="size-3.5 text-muted-foreground" />
                         </div>
                         <div class="flex-1 min-w-0">
                           <p class="text-xs font-medium truncate {field.label ? 'text-foreground' : 'text-muted-foreground italic'}">
@@ -715,12 +748,12 @@
 
                     <!-- Field controls on hover/select -->
                     {#if isSelected || true}
-                      <div class="absolute -top-2 right-1 flex items-center gap-0.5 opacity-0 group-hover/cell:opacity-100 {isSelected ? 'opacity-100' : ''} transition-opacity">
+                      <div class="absolute -top-2 right-1 flex items-center gap-0.5 opacity-60 group-hover/cell:opacity-100 group-focus-within/cell:opacity-100 {isSelected ? 'opacity-100' : ''} transition-opacity">
                         {#if colIdx > 0}
                           <button
                             type="button"
                             onclick={(e) => { e.stopPropagation(); moveField(row.id, colIdx, -1); }}
-                            class="flex h-4 w-4 items-center justify-center rounded-sm bg-background border border-border shadow-sm text-muted-foreground hover:text-foreground"
+                            class="flex h-6 w-6 items-center justify-center rounded-sm bg-background border border-border shadow-sm text-muted-foreground hover:text-foreground"
                             title="Move left"
                           >
                             <ChevronLeft class="size-2.5" />
@@ -730,7 +763,7 @@
                           <button
                             type="button"
                             onclick={(e) => { e.stopPropagation(); moveField(row.id, colIdx, 1); }}
-                            class="flex h-4 w-4 items-center justify-center rounded-sm bg-background border border-border shadow-sm text-muted-foreground hover:text-foreground"
+                            class="flex h-6 w-6 items-center justify-center rounded-sm bg-background border border-border shadow-sm text-muted-foreground hover:text-foreground"
                             title="Move right"
                           >
                             <ChevronRight class="size-2.5" />
@@ -739,7 +772,7 @@
                         <button
                           type="button"
                           onclick={(e) => { e.stopPropagation(); removeField(row.id, colIdx); }}
-                          class="flex h-4 w-4 items-center justify-center rounded-sm bg-background border border-border shadow-sm text-muted-foreground hover:text-destructive"
+                          class="flex h-6 w-6 items-center justify-center rounded-sm bg-background border border-border shadow-sm text-muted-foreground hover:text-destructive"
                           title="Remove field"
                         >
                           <X class="size-2.5" />
@@ -768,7 +801,7 @@
                             class="flex flex-col items-center gap-0.5 p-1.5 rounded text-center hover:bg-background transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                             title={meta.label}
                           >
-                            <svelte:component this={meta.icon} class="size-3.5 text-muted-foreground" />
+                            <meta.icon class="size-3.5 text-muted-foreground" />
                             <span class="text-[9px] text-muted-foreground leading-none">{meta.shortLabel}</span>
                           </button>
                         {/each}
@@ -805,7 +838,7 @@
               class="flex flex-1 items-center justify-center gap-2 rounded-lg border border-dashed border-border/60 py-3 text-sm text-muted-foreground/60 hover:border-border hover:text-muted-foreground hover:bg-background transition-all"
             >
               <Plus class="size-4" />
-              Add row (3-col)
+              Add 3-column row
             </button>
             <button
               type="button"
@@ -813,20 +846,21 @@
               class="flex flex-1 items-center justify-center gap-2 rounded-lg border border-dashed border-border/60 py-3 text-sm text-muted-foreground/60 hover:border-border hover:text-muted-foreground hover:bg-background transition-all"
             >
               <Plus class="size-4" />
-              Add row (2-col)
+              Add 2-column row
             </button>
           </div>
         </div>
       </div>
 
       <!-- ── Right panel ─────────────────────────────────────────────────────── -->
-      <div class="w-96 border-l bg-background flex flex-col overflow-hidden shrink-0">
+      <div class="fw-inspector border-l bg-background flex flex-col overflow-hidden shrink-0">
         {#if selectedField}
+          {@const SelectedIcon = FIELD_META[selectedField.type].icon}
           <!-- Field editor -->
           <div class="flex items-center gap-2 px-3 py-2.5 border-b shrink-0">
-            <svelte:component this={FIELD_META[selectedField.type].icon} class="size-3.5 text-muted-foreground" />
-            <span class="text-xs font-medium flex-1">Edit Field</span>
-            <button type="button" onclick={deselect} class="text-muted-foreground hover:text-foreground">
+            <SelectedIcon class="size-3.5 text-muted-foreground" />
+            <span class="text-sm font-semibold flex-1">Field settings</span>
+            <button type="button" onclick={deselect} aria-label="Close field settings" class="text-muted-foreground hover:text-foreground">
               <X class="size-3.5" />
             </button>
           </div>
@@ -847,7 +881,7 @@
                         : 'hover:bg-muted text-muted-foreground'}"
                     title={meta.label}
                   >
-                    <svelte:component this={meta.icon} class="size-3.5" />
+                    <meta.icon class="size-3.5" />
                     <span class="text-[9px] leading-none">{meta.shortLabel}</span>
                   </button>
                 {/each}
@@ -1077,7 +1111,7 @@
           <div class="flex border-b shrink-0">
             <button
               type="button"
-              onclick={() => (rightPanelTab = 'preview')}
+              aria-pressed={rightPanelTab === 'preview'} onclick={() => (rightPanelTab = 'preview')}
               class="flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 transition-colors
                 {rightPanelTab === 'preview' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}"
             >
@@ -1086,16 +1120,16 @@
             </button>
             <button
               type="button"
-              onclick={() => (rightPanelTab = 'template')}
+              aria-pressed={rightPanelTab === 'template'} onclick={() => (rightPanelTab = 'template')}
               class="flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 transition-colors
                 {rightPanelTab === 'template' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}"
             >
               <FileText class="size-3.5" />
-              Ticket Template
+              Ticket
             </button>
             <button
               type="button"
-              onclick={() => (rightPanelTab = 'automation')}
+              aria-pressed={rightPanelTab === 'automation'} onclick={() => (rightPanelTab = 'automation')}
               class="flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 transition-colors
                 {rightPanelTab === 'automation' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}"
             >
@@ -1108,12 +1142,14 @@
           </div>
 
           {#if rightPanelTab === 'preview'}
-            <div class="flex-1 overflow-y-auto p-3 bg-muted/20">
+            <div class="flex-1 overflow-y-auto p-5 bg-muted/20">
+              <div class="fw-preview-heading"><span class="fw-eyebrow">End-user preview</span><span class="fw-live-dot">Live</span></div>
               <AgentFormPreview
                 rows={formRows}
                 formName={formName}
                 formDescription={formDescription}
               />
+              <p class="text-xs text-muted-foreground leading-relaxed mt-4 text-center">Try your fields here. This preview doesn’t submit a ticket.</p>
             </div>
           {:else if rightPanelTab === 'template'}
             <!-- Ticket template editor -->
@@ -1288,4 +1324,5 @@
       </div>
 
     </div>
-  </div>
+    {/if}
+</div>

@@ -6,6 +6,8 @@
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import Loader from '$lib/components/transition/loader.svelte';
+  import Button from '$lib/components/ui/button/button.svelte';
+  import '../workspace.css';
   import PackageBuilder, {
     subpackageCapabilityId,
     type ExposedOutput,
@@ -123,15 +125,19 @@
   });
 </script>
 
-{#if query.isLoading || !initial}
+{#if query.error}
+  <div class="pk-route-error"><h1>We couldn’t load this package</h1><p>It may be unavailable, or you may not have access. Try again or return to your library.</p><div><Button variant="outline" href="/automation/packages">Back to packages</Button><Button onclick={() => query.refetch()}>Try again</Button></div></div>
+{:else if query.isLoading}
   <Loader />
-{:else if query.error}
-  <div class="p-6 text-sm text-rose-500">Failed to load package.</div>
+{:else if !initial}
+  <div class="pk-route-error"><h1>Package unavailable</h1><Button href="/automation/packages">Back to packages</Button></div>
 {:else}
+  {#key packageId}
   <PackageBuilder
     {initial}
     currentPackageId={packageId}
     saving={update.isPending}
     onSave={(draft) => update.mutate(draft)}
   />
+  {/key}
 {/if}

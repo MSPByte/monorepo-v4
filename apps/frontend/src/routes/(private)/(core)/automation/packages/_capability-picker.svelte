@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as Dialog from '$lib/components/ui/dialog/index.js';
   import * as ScrollArea from '$lib/components/ui/scroll-area/index.js';
+  import MultiSelect from '$lib/components/multi-select.svelte';
   import { Input } from '$lib/components/ui/input';
   import { Search, X } from '@lucide/svelte';
   import type { inferRouterOutputs } from '@trpc/server';
@@ -53,12 +54,6 @@
     });
   });
 
-  function toggleFilter(current: string[], value: string) {
-    return current.includes(value)
-      ? current.filter((entry) => entry !== value)
-      : [...current, value];
-  }
-
   function clearFilters() {
     search = '';
     vendorFilters = [];
@@ -81,7 +76,7 @@
 
 <Dialog.Root bind:open>
   <Dialog.Content
-    class="flex h-[min(88vh,820px)] w-[min(96vw,1320px)] max-w-[min(96vw,1320px)] flex-col overflow-hidden p-0 sm:max-w-[min(96vw,1320px)]"
+    class="pk-picker flex h-[min(88vh,820px)] w-[min(96vw,1320px)] max-w-[min(96vw,1320px)] flex-col overflow-hidden p-0 sm:max-w-[min(96vw,1320px)]"
   >
     <Dialog.Header class="border-b bg-muted/20 px-6 py-5">
       <Dialog.Title class="text-xl font-semibold tracking-tight">
@@ -152,20 +147,7 @@
               >
                 Vendors
               </div>
-              <div class="flex flex-wrap gap-2">
-                {#each vendors as vendor}
-                  <button
-                    type="button"
-                    class="rounded-full border px-3 py-1.5 text-[11px] font-semibold tracking-[0.08em] transition-colors {vendorFilters.includes(
-                      vendor
-                    )
-                      ? 'border-primary/40 bg-primary text-primary-foreground'
-                      : 'border-border bg-background text-foreground/80 hover:border-foreground/20 hover:bg-background'}"
-                    onclick={() => (vendorFilters = toggleFilter(vendorFilters, vendor))}
-                    >{formatVendorLabel(vendor)}</button
-                  >
-                {/each}
-              </div>
+              <MultiSelect options={vendors.map(value => ({ value, label: formatVendorLabel(value) }))} selected={vendorFilters} onchange={(values) => vendorFilters = values} placeholder="All vendors" />
             </div>
             <div class="space-y-3">
               <div
@@ -173,20 +155,7 @@
               >
                 Categories
               </div>
-              <div class="flex flex-wrap gap-2">
-                {#each categories as category}
-                  <button
-                    type="button"
-                    class="rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors {categoryFilters.includes(
-                      category
-                    )
-                      ? 'border-primary/20 bg-primary/12 text-primary'
-                      : 'border-border bg-background text-foreground/80 hover:border-foreground/20 hover:bg-background'}"
-                    onclick={() => (categoryFilters = toggleFilter(categoryFilters, category))}
-                    >{formatCategoryLabel(category)}</button
-                  >
-                {/each}
-              </div>
+              <MultiSelect options={categories.map(value => ({ value, label: formatCategoryLabel(value) }))} selected={categoryFilters} onchange={(values) => categoryFilters = values} placeholder="All categories" />
             </div>
           </div>
         </ScrollArea.Root>

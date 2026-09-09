@@ -48,7 +48,7 @@
   });
 
   const itemClass =
-    'relative z-10 inline-flex items-center h-8 px-4 rounded-full text-sm font-medium transition-colors hover:text-foreground';
+    'relative z-10 inline-flex items-center h-10 px-3 rounded-md text-xs font-medium transition-colors hover:text-white';
 
   function activeChildOf(route: Route): Route | undefined {
     return route.children?.find((c) => isRouteActive(c, page.url.pathname));
@@ -57,11 +57,11 @@
 
 <div
   bind:this={container}
-  class="relative flex rounded-full p-1 bg-muted/50 border border-border/60 gap-0.5"
+  class="byte-navigation relative flex gap-1"
 >
   {#if indicator.visible}
     <div
-      class="absolute top-1 bottom-1 rounded-full bg-background shadow-sm ring-1 ring-border/40"
+      class="absolute bottom-0 h-0.5 rounded-full bg-[#73e6c5]"
       style="left: {indicator.left}px; width: {indicator.width}px; transition: left 320ms cubic-bezier(0.32, 0.72, 0, 1), width 320ms cubic-bezier(0.32, 0.72, 0, 1);"
       aria-hidden="true"
     ></div>
@@ -78,7 +78,7 @@
               bind:this={itemEls[i]}
               type="button"
               aria-current={active ? 'page' : undefined}
-              class={cn(itemClass, 'gap-1.5', active ? 'text-foreground' : 'text-muted-foreground')}
+              class={cn(itemClass, 'gap-1.5', active ? 'text-white' : 'text-[#a8c0ca]')}
             >
               {route.label}
               {#if activeChild && activeChild.label !== route.label}
@@ -113,10 +113,14 @@
         href={route.href}
         bind:this={itemEls[i]}
         aria-current={active ? 'page' : undefined}
-        class={cn(itemClass, active ? 'text-foreground' : 'text-muted-foreground')}
+        class={cn(itemClass, active ? 'text-white' : 'text-[#a8c0ca]')}
       >
         {route.label}
       </a>
     {/if}
   {/each}
 </div>
+
+<style>
+  @media(max-width:760px) { .byte-navigation { flex-wrap:wrap; } .byte-navigation > div[aria-hidden] { display:none; } .byte-navigation :global([aria-current="page"]) { background:#284752; } }
+</style>

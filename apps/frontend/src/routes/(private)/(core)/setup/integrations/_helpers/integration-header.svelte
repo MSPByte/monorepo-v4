@@ -3,21 +3,26 @@
   import Badge from '$lib/components/ui/badge/badge.svelte';
   import Button from '$lib/components/ui/button/button.svelte';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
-  import { CircleHelp, Database, KeyRound, Sparkles } from '@lucide/svelte';
+  import { CircleHelp, Database, KeyRound, Sparkles, Monitor } from '@lucide/svelte';
   import type { Integration } from '@mspbyte/shared';
 
   let {
     integration,
     active,
     loading = false,
+    workspace = false,
   }: {
     integration: Integration;
     active: boolean;
     loading?: boolean;
+    workspace?: boolean;
   } = $props();
 </script>
 
 <div class="flex items-start justify-between gap-4">
+  {#if workspace}
+    <div class="fw-product-heading"><span class="fw-product-icon"><Monitor size={23} strokeWidth={1.6} /></span><div><nav aria-label="Breadcrumb" class="fw-breadcrumb"><a href="/setup/integrations">Integrations</a><span>/</span><span>{integration.name}</span></nav><div class="flex items-center gap-3"><h1>{integration.name}</h1>{#if !loading}<span class="fw-connected"><span></span>{active ? 'Configured' : 'Not configured'}</span>{/if}</div></div></div>
+  {:else}
   <div class="flex flex-col gap-0.5">
     <div class="flex items-center gap-2">
       <h1 class="text-lg font-semibold">{integration.name}</h1>
@@ -39,6 +44,7 @@
       Manage {integration.name} credentials and site mappings.
     </p>
   </div>
+  {/if}
   <Dialog.Root>
     <Dialog.Trigger>
       {#snippet child({ props })}
