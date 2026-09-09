@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import { listen, emit } from '@tauri-apps/api/event';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { toast } from 'sonner';
 import type { Bundle, FieldDef, FormDef } from '@/lib/bundle';
@@ -255,6 +255,7 @@ function DynamicForm({
 
       if (ack.accepted) {
         toast.success('Ticket submitted' + (ack.submission_id ? ` (#${ack.submission_id})` : ''));
+        await emit('ticket-submitted');
         setValues(defaultValues);
         setImages({});
         onSuccess();

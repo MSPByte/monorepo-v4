@@ -87,8 +87,21 @@ export function ticketsV2Route(fastify: FastifyInstance) {
 
     const connector = await getPsaConnector(db, device.siteId);
 
+    // Fetch status lookup once so we can resolve status_id → name without a per-ticket API call.
+    // Some HaloPSA versions omit the status name from the ticket detail response.
+    const statusMap = new Map<number, string>();
+    if (connector) {
+      try {
+        const statuses = await connector.statuses.list();
+        for (const s of statuses) statusMap.set(s.id, s.name);
+      } catch (err) {
+        logger.warn('Failed to fetch HaloPSA status list', { err: String(err) });
+      }
+    }
+
     // Parallel-fetch live status from HaloPSA for each ticket.
-    const withStatus = await Promise.all(
+    // A 404 means the ticket was deleted in the PSA — exclude it silently.
+    const withStatusRaw = await Promise.all(
       filtered.map(async (r) => {
         let status_id: number | null = null;
         let status_name: string | null = null;
@@ -96,14 +109,18 @@ export function ticketsV2Route(fastify: FastifyInstance) {
           try {
             const t = await connector.tickets.get(r.ticketId);
             status_id = t.status_id ?? null;
-            status_name = t.status || null;
+            // Prefer the pre-fetched name map; fall back to whatever the ticket response included.
+            status_name = (status_id ? (statusMap.get(status_id) ?? null) : null) ?? (t.status || null);
           } catch (err) {
-            logger.warn('Failed to fetch ticket status', { ticketId: r.ticketId, err: String(err) });
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes('404')) return null; // deleted in PSA
+            logger.warn('Failed to fetch ticket status', { ticketId: r.ticketId, err: msg });
           }
         }
         return { ...r, status_id, status_name };
       })
     );
+    const withStatus = withStatusRaw.filter((r): r is NonNullable<typeof r> => r !== null);
 
     const CLOSED_RE = /closed|resolved|cancelled|completed/i;
     const isOpen = (name: string | null) => !name || !CLOSED_RE.test(name);

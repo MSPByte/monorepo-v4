@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { sendNotification } from '@tauri-apps/plugin-notification';
+import { sendNotification, registerActionTypes, onAction } from '@tauri-apps/plugin-notification';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { toast } from 'sonner';
 import { ipc, type TicketSummary, type OsUser, type TicketDetail, type NoteAttachment } from '@/lib/ipc';
@@ -79,20 +79,27 @@ export default function Tickets({
   const [note, setNote] = useState('');
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [search, setSearch] = useState('');
+  const [showClosed, setShowClosed] = useState(false);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const osUserRef = useRef<OsUser | null>(null);
+  const ticketsRef = useRef<TicketSummary[]>([]);
 
-  const loadTickets = async () => {
-    setLoading(true);
+  const loadTickets = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
-      const user = await ipc.getOsUser().catch(() => null);
-      setOsUser(user);
+      const user = osUserRef.current ?? await ipc.getOsUser().catch(() => null);
+      if (!osUserRef.current) {
+        osUserRef.current = user;
+        setOsUser(user);
+      }
       const result = await ipc.getTickets(user?.sid ?? undefined);
       setTickets(result.tickets ?? []);
     } catch (err) {
       await logToFile('WARN', `Load tickets error: ${err}`);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -114,6 +121,34 @@ export default function Tickets({
 
   useEffect(() => {
     loadTickets();
+    const interval = setInterval(() => loadTickets(true), 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Refresh list immediately when a new ticket is submitted from the Support window
+  useEffect(() => {
+    const unlisten = listen('ticket-submitted', () => loadTickets(true));
+    return () => { void unlisten.then((fn) => fn()); };
+  }, []);
+
+  // Keep ref current so the onAction closure always sees the latest ticket list.
+  useEffect(() => { ticketsRef.current = tickets; }, [tickets]);
+
+  // Register the notification action type and handle clicks (open the relevant ticket).
+  useEffect(() => {
+    registerActionTypes([{
+      id: 'ticket-update',
+      actions: [{ id: 'open', title: 'Open Ticket', foreground: true }],
+    }]).catch(() => {});
+
+    const listener = onAction((notification) => {
+      const ticketId = notification.extra?.ticket_id as string | undefined;
+      if (!ticketId) return;
+      void showWindow('tickets');
+      const ticket = ticketsRef.current.find((t) => t.ticket_id === ticketId);
+      if (ticket) setSelectedTicket(ticket);
+    });
+    return () => { void listener.then((l) => l.unregister()); };
   }, []);
 
   useEffect(() => {
@@ -145,7 +180,12 @@ export default function Tickets({
           const body = payload.kind === 'ticket_status_changed'
             ? `Ticket #${payload.ticket_id} status changed to ${payload.status_name}`
             : `New reply on ticket #${payload.ticket_id}`;
-          sendNotification({ title: 'Support Update', body });
+          sendNotification({
+            title: 'Support Update',
+            body,
+            actionTypeId: 'ticket-update',
+            extra: { ticket_id: payload.ticket_id },
+          });
         }
       }
     });
@@ -235,6 +275,17 @@ export default function Tickets({
       setSubmitting(false);
     }
   };
+
+  const filteredTickets = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return tickets
+      .filter((t) => showClosed || t.is_open !== false)
+      .filter((t) =>
+        !q ||
+        t.summary.toLowerCase().includes(q) ||
+        t.ticket_id.toLowerCase().includes(q)
+      );
+  }, [tickets, search, showClosed]);
 
   const headerBg = { backgroundColor: accentColor ?? 'hsl(var(--primary))' };
 
@@ -388,11 +439,33 @@ export default function Tickets({
         <Button
           variant="ghost"
           size="sm"
-          onClick={loadTickets}
+          onClick={() => loadTickets()}
           className="ml-auto text-white/80 hover:text-white hover:bg-white/10 h-7 text-xs"
         >
           Refresh
         </Button>
+      </div>
+
+      {/* Search + filter bar */}
+      <div className="flex items-center gap-2 px-3 py-2 border-b shrink-0">
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search tickets…"
+          className="flex-1 h-7 rounded-md border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
+        />
+        <button
+          type="button"
+          onClick={() => setShowClosed((v) => !v)}
+          className={`shrink-0 h-7 px-2 rounded-md border text-xs font-medium transition-colors ${
+            showClosed
+              ? 'bg-primary text-primary-foreground border-primary'
+              : 'bg-background text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          Closed
+        </button>
       </div>
 
       <div className="flex flex-col flex-1 overflow-y-auto min-h-0 p-3 gap-2">
@@ -400,33 +473,43 @@ export default function Tickets({
           <div className="flex flex-1 items-center justify-center">
             <Loader />
           </div>
-        ) : tickets.filter((t) => t.is_open !== false).length === 0 ? (
+        ) : filteredTickets.length === 0 ? (
           <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm text-muted-foreground">No open tickets.</p>
+            <p className="text-sm text-muted-foreground">
+              {search.trim()
+                ? 'No tickets match your search.'
+                : showClosed
+                ? 'No tickets found.'
+                : 'No open tickets.'}
+            </p>
           </div>
         ) : (
-          tickets
-            .filter((t) => t.is_open !== false)
-            .map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setSelectedTicket(t)}
-                className="border rounded-lg p-3 flex items-center gap-2 text-left hover:bg-accent transition-colors w-full"
-              >
-                <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{t.summary}</p>
-                  <p className="text-xs text-muted-foreground">
-                    #{t.ticket_id} · {formatDate(t.created_at)}
-                  </p>
-                </div>
-                {t.status_name && (
-                  <span className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400">
-                    {t.status_name}
-                  </span>
-                )}
-                <span className="text-muted-foreground shrink-0 text-base leading-none">›</span>
-              </button>
-            ))
+          filteredTickets.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setSelectedTicket(t)}
+              className="border rounded-lg p-3 flex items-center gap-2 text-left hover:bg-accent transition-colors w-full"
+            >
+              <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">{t.summary}</p>
+                <p className="text-xs text-muted-foreground">
+                  #{t.ticket_id} · {formatDate(t.created_at)}
+                </p>
+              </div>
+              {t.status_name && (
+                <span
+                  className={`shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+                    t.is_open !== false
+                      ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400'
+                      : 'bg-muted text-muted-foreground'
+                  }`}
+                >
+                  {t.status_name}
+                </span>
+              )}
+              <span className="text-muted-foreground shrink-0 text-base leading-none">›</span>
+            </button>
+          ))
         )}
       </div>
       {(supportEmail || supportPhone) && (

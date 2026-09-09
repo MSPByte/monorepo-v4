@@ -1,0 +1,2 @@
+# Local E2E test state — contains enrolled device IDs, do not commit
+.e2e-state.json

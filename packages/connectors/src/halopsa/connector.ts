@@ -313,7 +313,8 @@ export class HaloPSAConnector {
           id: Number(ticket.id),
           summary: String(ticket.summary ?? ''),
           status_id: Number(ticket.status_id ?? 0),
-          status: String(ticket.status ?? ticket.statusname ?? ticket.status_name ?? ''),
+          // HaloPSA may omit the name; the route resolves it via statuses.list().
+          status: String(ticket.statusname ?? ticket.status_name ?? ticket.status ?? ''),
         };
       },
       update: async (id, fields) => {
