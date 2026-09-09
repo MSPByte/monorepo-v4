@@ -53,6 +53,7 @@
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error(`Poll failed: ${msg}`);
+      throw err;
     }
   }
 

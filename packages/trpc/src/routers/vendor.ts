@@ -3057,20 +3057,50 @@ export const vendorRouter = t.router({
           for (const row of stillOnSource) {
             const item = byExtId.get(row.externalId)!;
             const newExternalId = item.newId ?? row.externalId;
-            await ctx.db
-              .update(sophosEndpoints)
-              .set({
-                linkId: job.toLinkId,
-                siteId: job.toSiteId,
-                externalId: newExternalId,
-                updatedAt: now
-              })
-              .where(eq(sophosEndpoints.id, row.id));
 
-            await ctx.db
-              .update(sophosTamperProtection)
-              .set({ linkId: job.toLinkId, siteId: job.toSiteId })
-              .where(eq(sophosTamperProtection.endpointId, row.id));
+            // If ingestion already created a row for this endpoint under the target link,
+            // delete the stale source row instead of updating it (unique constraint on link_id + external_id).
+            const [alreadyIngested] = await ctx.db
+              .select({ id: sophosEndpoints.id })
+              .from(sophosEndpoints)
+              .where(
+                and(
+                  eq(sophosEndpoints.linkId, job.toLinkId),
+                  eq(sophosEndpoints.externalId, newExternalId)
+                )
+              )
+              .limit(1);
+
+            if (alreadyIngested) {
+              await ctx.db
+                .delete(sophosEndpoints)
+                .where(
+                  and(
+                    eq(sophosEndpoints.id, row.id),
+                    eq(sophosEndpoints.linkId, job.fromLinkId)
+                  )
+                );
+            } else {
+              await ctx.db
+                .update(sophosEndpoints)
+                .set({
+                  linkId: job.toLinkId,
+                  siteId: job.toSiteId,
+                  externalId: newExternalId,
+                  updatedAt: now
+                })
+                .where(
+                  and(
+                    eq(sophosEndpoints.id, row.id),
+                    eq(sophosEndpoints.linkId, job.fromLinkId)
+                  )
+                );
+
+              await ctx.db
+                .update(sophosTamperProtection)
+                .set({ linkId: job.toLinkId, siteId: job.toSiteId })
+                .where(eq(sophosTamperProtection.endpointId, row.id));
+            }
 
             await ctx.db.insert(customerLogs).values({
               siteId: job.toSiteId,
