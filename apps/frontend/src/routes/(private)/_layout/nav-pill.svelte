@@ -61,7 +61,7 @@
 >
   {#if indicator.visible}
     <div
-      class="absolute bottom-0 h-0.5 rounded-full bg-[#73e6c5]"
+      class="absolute bottom-0 h-0.5 rounded-full bg-[var(--sidebar-primary)]"
       style="left: {indicator.left}px; width: {indicator.width}px; transition: left 320ms cubic-bezier(0.32, 0.72, 0, 1), width 320ms cubic-bezier(0.32, 0.72, 0, 1);"
       aria-hidden="true"
     ></div>
@@ -78,7 +78,7 @@
               bind:this={itemEls[i]}
               type="button"
               aria-current={active ? 'page' : undefined}
-              class={cn(itemClass, 'gap-1.5', active ? 'text-white' : 'text-[#a8c0ca]')}
+              class={cn(itemClass, 'gap-1.5', active ? 'text-white' : 'text-[var(--sidebar-foreground)]')}
             >
               {route.label}
               {#if activeChild && activeChild.label !== route.label}
@@ -113,7 +113,7 @@
         href={route.href}
         bind:this={itemEls[i]}
         aria-current={active ? 'page' : undefined}
-        class={cn(itemClass, active ? 'text-white' : 'text-[#a8c0ca]')}
+        class={cn(itemClass, active ? 'text-white' : 'text-[var(--sidebar-foreground)]')}
       >
         {route.label}
       </a>
@@ -122,5 +122,5 @@
 </div>
 
 <style>
-  @media(max-width:760px) { .byte-navigation { flex-wrap:wrap; } .byte-navigation > div[aria-hidden] { display:none; } .byte-navigation :global([aria-current="page"]) { background:#284752; } }
+  @media(max-width:760px) { .byte-navigation { flex-wrap:wrap; } .byte-navigation > div[aria-hidden] { display:none; } .byte-navigation :global([aria-current="page"]) { background:var(--sidebar-accent); } }
 </style>

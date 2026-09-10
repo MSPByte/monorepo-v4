@@ -33,12 +33,12 @@ export function sourceLabel(source: Source): string {
   return {
     fixed: 'Fixed value',
     runtime: 'Ask when run',
-    row: 'From triggering row',
-    wire: 'Wire from step',
-    failure: 'From failure',
-    template: 'Template',
+    row: 'Use selected item',
+    wire: 'Use an earlier result',
+    failure: 'Use failure details',
+    template: 'Build a message',
     generated: 'Generate',
-    fact: 'From site fact',
+    fact: 'Use site profile',
   }[source];
 }
 
@@ -49,15 +49,15 @@ export function sourceHint(
   if (source === 'fixed') return 'Same value every run.';
   if (source === 'runtime')
     return meta?.entityType
-      ? 'The operator picks from a live list when they start the run.'
-      : 'The operator enters this when they start the run.';
+      ? 'Your team picks from a live list when they start the run.'
+      : 'Your team enters this when they start the run.';
   if (source === 'row')
-    return 'Auto-filled from the row that triggered this package (from a table row-action).';
-  if (source === 'generated') return 'Produced by a generator at run time.';
+    return 'Uses the item your team selected when launching this package from a table.';
+  if (source === 'generated') return 'Created automatically each time this package runs.';
   if (source === 'fact')
-    return "Reads a value from the run's site profile facts — needs a site selected at run time.";
+    return "Uses a saved field from the selected site’s profile. Choose a site when starting the run.";
   if (source === 'failure')
-    return 'Reads a single value from the failure context — for free-form text mixing multiple values, use Template instead.';
+    return 'Uses details about what went wrong. To combine details into a message, choose Build a message.';
   if (source === 'template')
     return 'Write free-form text with {{variable}} placeholders — mix failure details, step outputs, and site facts into one string.';
   return 'Reads a specific output from an earlier step in this package.';

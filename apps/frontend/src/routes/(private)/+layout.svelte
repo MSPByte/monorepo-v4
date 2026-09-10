@@ -95,9 +95,9 @@
   }
   .byte-header {
     flex-shrink: 0;
-    color: #cadbe1;
-    background: #112a33;
-    border-bottom: 1px solid #28434e;
+    color: var(--sidebar-foreground);
+    background: var(--sidebar);
+    border-bottom: 1px solid var(--sidebar-border);
   }
   .byte-header-top {
     display: flex;
@@ -114,7 +114,7 @@
     line-height: 1;
     letter-spacing: -1.2px;
     font-weight: 400;
-    color: #f0f7f8;
+    color: #f0f2f4;
     flex-shrink: 0;
   }
   .byte-brand-mark {
@@ -123,16 +123,16 @@
     justify-content: center;
     width: 34px;
     height: 34px;
-    color: #73e6c5;
-    border: 1px solid #447164;
-    background: #1d403e;
+    color: var(--sidebar-primary);
+    border: 1px solid #425d78;
+    background: #233446;
     border-radius: 10px;
   }
   .byte-brand-emphasis {
     font-weight: 650;
   }
   .byte-brand-period {
-    color: #73e6c5;
+    color: var(--sidebar-primary);
   }
   .byte-workspace {
     display: flex;
@@ -150,7 +150,7 @@
   .byte-header-divider {
     height: 22px;
     width: 1px;
-    background: #35505a;
+    background: var(--sidebar-border);
     margin-right: 4px;
   }
   .byte-search {
@@ -158,23 +158,23 @@
     align-items: center;
     gap: 10px;
     padding: 9px 12px;
-    border: 1px solid #3b535d;
+    border: 1px solid #454b50;
     border-radius: 8px;
-    color: #b4cbd5;
+    color: #c9d0d6;
     font-size: 11px;
     margin-left: auto;
     min-width: 240px;
-    background: #1b3540;
+    background: #292d30;
     transition: background 0.15s;
   }
   .byte-search:hover {
-    background: #25444f;
+    background: #353b3f;
     color: #fff;
   }
   .byte-search kbd {
     margin-left: auto;
     padding: 1px 4px;
-    border: 1px solid #4b6570;
+    border: 1px solid #5b656d;
     border-radius: 3px;
     font-size: 9px;
   }
@@ -182,13 +182,13 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    --foreground: #e7f0f4;
-    --muted-foreground: #b4cad4;
-    --background: #112a33;
-    --accent: #284752;
+    --foreground: #edf0f2;
+    --muted-foreground: #c9d0d6;
+    --background: var(--sidebar);
+    --accent: #353b3f;
     --accent-foreground: #ffffff;
-    --border: #395561;
-    --muted: #203c47;
+    --border: #485057;
+    --muted: #30363a;
   }
   .byte-header-nav {
     display: flex;
@@ -206,7 +206,7 @@
     font-size: 9px;
     font-weight: 500;
     letter-spacing: 0.14em;
-    color: #8cabb7;
+    color: #aab4bc;
     white-space: nowrap;
   }
   .byte-main {
@@ -218,7 +218,7 @@
     overflow: hidden;
   }
   :is(a, button):focus-visible {
-    outline: 2px solid #73e6c5;
+    outline: 2px solid var(--sidebar-primary);
     outline-offset: 4px;
   }
   @media (max-width: 1100px) {

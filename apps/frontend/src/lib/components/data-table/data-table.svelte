@@ -31,6 +31,7 @@
     enableColumnToggle = true,
     enableExport = true,
     enableURLState = true,
+    enableViewSelector = true,
     views = [],
     rowActions = [],
     actionMode = 'inline',
@@ -51,6 +52,8 @@
   }
 
   const stripApi = {
+    get activeViewId() { return activeViewId; },
+    setView: (viewId?: string) => handleViewChange(views.find((view) => view.id === viewId)),
     addFilter: (filter: Omit<TableFilter, 'id'>) => {
       const id = makeFilterId(filter.field, filter.operator);
       // Replace existing filter with the same field+operator so repeated clicks toggle values.
@@ -508,7 +511,7 @@
       onaddfilter={enableFilters ? handleAddFilter : undefined}
       onremovefilter={enableFilters ? handleRemoveFilter : undefined}
       onclearfilters={enableFilters ? handleClearFilters : undefined}
-      {views}
+      views={enableViewSelector ? views : []}
       {activeView}
       onviewchange={handleViewChange}
       visibleColumns={resolvedVisibleColumnKeys}

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import '../../workspace.css';
+  import { fieldLabel } from '$lib/utils/label';
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
@@ -15,7 +17,21 @@
   import { toast } from 'svelte-sonner';
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import { toUserMessage } from '$lib/utils/errors';
-  import { ArrowLeft, Clock, DollarSign, RotateCcw, ShieldAlert, Eye, UserRound, CornerDownRight, ArrowUpRight, Trash2 } from '@lucide/svelte';
+  import {
+    CheckCircle2,
+    AlertTriangle,
+    Activity,
+    ArrowLeft,
+    Clock,
+    DollarSign,
+    RotateCcw,
+    ShieldAlert,
+    Eye,
+    UserRound,
+    CornerDownRight,
+    ArrowUpRight,
+    Trash2,
+  } from '@lucide/svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
@@ -25,7 +41,14 @@
   // Terminal runs can be permanently removed — useful when a package's
   // capabilities have been renamed and the historical run is unrepresentable
   // in the current schema. In-flight runs must be canceled first.
-  const TERMINAL_RUN_STATUSES = new Set(['completed', 'succeeded', 'failed', 'halted', 'partial', 'canceled']);
+  const TERMINAL_RUN_STATUSES = new Set([
+    'completed',
+    'succeeded',
+    'failed',
+    'halted',
+    'partial',
+    'canceled',
+  ]);
 
   let deleteDialogOpen = $state(false);
   const deleteRun = createMutation(() => ({
@@ -74,7 +97,10 @@
     },
   }));
   const childrenByPosition = $derived.by(() => {
-    const map = new Map<number, Array<{ id: string; status: string; packageName: string | null }>>();
+    const map = new Map<
+      number,
+      Array<{ id: string; status: string; packageName: string | null }>
+    >();
     for (const child of children.data ?? []) {
       const pos = (child.triggerRef as { parentPosition?: number } | null)?.parentPosition;
       if (typeof pos !== 'number') continue;
@@ -116,24 +142,24 @@
       return {
         variant: 'outline',
         label: 'Completed',
-        class: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400',
+        class: 'border-[var(--success)] text-[var(--success)]',
       };
     if (status === 'running' || status === 'queued' || status === 'pending')
       return {
         variant: 'outline',
         label: status,
-        class: 'border-sky-500/40 text-sky-600 dark:text-sky-400',
+        class: 'border-primary text-primary',
       };
     if (status === 'halted' || status === 'partial')
       return {
         variant: 'outline',
         label: status,
-        class: 'border-amber-500/40 text-amber-600 dark:text-amber-400',
+        class: 'border-[var(--warning)] text-[var(--warning)]',
       };
     return {
       variant: 'outline',
       label: status,
-      class: 'border-rose-500/40 text-rose-600 dark:text-rose-400',
+      class: 'border-[var(--warning)] text-[var(--warning)]',
     };
   }
 
@@ -179,8 +205,8 @@
   }
 </script>
 
-<div class="flex size-full flex-col overflow-hidden">
-  <div class="flex flex-wrap items-center gap-3 border-b px-6 py-4">
+<div class="au-detail">
+  <div class="au-backbar">
     <button
       type="button"
       class="flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -194,7 +220,10 @@
       <button
         type="button"
         class="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-        onclick={() => goto(`/automation/runs/${detail.data!.run.parentRunId ?? detail.data!.run.fanoutParentId}`)}
+        onclick={() =>
+          goto(
+            `/automation/runs/${detail.data!.run.parentRunId ?? detail.data!.run.fanoutParentId}`
+          )}
       >
         <CornerDownRight class="size-3.5" />
         {detail.data?.run.fanoutParentId ? 'Batch run' : 'Parent run'}
@@ -203,11 +232,15 @@
   </div>
 
   <div class="flex-1 overflow-auto">
-    <div class="flex flex-col gap-8 p-6">
+    <div class="au-detail-body">
       {#if detail.isLoading}
         <Loader />
       {:else if detail.error || !detail.data}
-        <p class="text-sm text-rose-500">Failed to load run.</p>
+        <div class="au-error" role="alert">
+          <h2>We couldn’t load this run</h2>
+          <p>Try again, or return to run history to find another run.</p>
+          <Button onclick={() => detail.refetch()}>Try again</Button>
+        </div>
       {:else}
         {@const run = detail.data.run}
         {@const steps = detail.data.steps}
@@ -224,13 +257,13 @@
         {@const totalDuration = formatDuration(run.startedAt, run.finishedAt)}
         {@const isFanout = (run.triggerRef as { kind?: string } | null)?.kind === 'fanout'}
 
-        <header class="space-y-4">
-          <div class="flex flex-wrap items-start justify-between gap-4">
+        <header class="space-y-5">
+          <div class="au-heading">
             <div class="space-y-1">
               <div
                 class="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground"
               >
-                <span>Package run</span>
+                <span>Run report</span>
                 <span>·</span>
                 <span class="capitalize">{run.triggerType}</span>
               </div>
@@ -242,7 +275,12 @@
                 {#if run.startedAt}· started {formatRelativeDate(run.startedAt)}{/if}
               </p>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="au-heading-actions">
+              {#if run.packageId}<Button
+                  variant="outline"
+                  size="sm"
+                  href={`/automation/packages/${run.packageId}`}>Open package</Button
+                >{/if}
               <Badge variant="outline" class={badge.class + ' capitalize'}>{badge.label}</Badge>
               {#if canDelete && TERMINAL_RUN_STATUSES.has(run.status)}
                 <Button
@@ -258,7 +296,7 @@
             </div>
           </div>
 
-          <div class="flex flex-wrap items-center gap-6 text-sm text-muted-foreground">
+          <div class="au-run-facts">
             {#if totalDuration}
               <div class="flex items-center gap-1.5">
                 <Clock class="size-3.5" />
@@ -281,43 +319,101 @@
             <div class="flex items-center gap-1.5">
               {#if purged}
                 <ShieldAlert class="size-3.5" />
-                <span>Sensitive outputs purged</span>
+                <span>Sensitive results expired</span>
               {:else}
                 <Eye class="size-3.5" />
                 <span>
-                  Sensitive outputs available until {formatRelativeDate(run.outputsExpiresAt)}
+                  Sensitive results available until {formatRelativeDate(run.outputsExpiresAt)}
                 </span>
               {/if}
             </div>
           </div>
         </header>
 
-        <Separator />
+        {@const failedStep = steps.find((step) => step.status === 'fail')}
+        {@const needsAttention = ['failed', 'halted', 'partial'].includes(run.status)}
+        <section
+          class="au-notice"
+          class:au-attention={needsAttention}
+          class:au-success={run.status === 'completed'}
+          aria-label="Run outcome"
+        >
+          {#if needsAttention}<AlertTriangle
+              size={23}
+            />{:else if run.status === 'completed'}<CheckCircle2 size={23} />{:else}<Activity
+              size={23}
+              class="au-info"
+            />{/if}
+          <div>
+            <strong
+              >{run.status === 'completed'
+                ? 'This package finished successfully'
+                : needsAttention
+                  ? 'This run needs your attention'
+                  : run.status === 'canceled'
+                    ? 'This run was canceled'
+                    : run.status === 'running'
+                      ? 'Your automation is running'
+                      : 'Waiting to start'}</strong
+            >
+            <p>
+              {needsAttention
+                ? 'Review the action results below before deciding whether to retry. A retry can repeat changes made by later actions.'
+                : run.status === 'completed'
+                  ? 'Review each action’s results below, including any follow-ups.'
+                  : run.status === 'canceled'
+                    ? 'Review the recorded actions to see what finished before cancellation.'
+                    : 'This report updates automatically while the run is active.'}
+            </p>
+          </div>
+          {#if failedStep}<a
+              class="inline-flex items-center gap-1 text-xs text-primary"
+              href={`#run-step-${failedStep.id}`}>View failed action <ArrowUpRight size={14} /></a
+            >{/if}
+        </section>
+        {#if purged && needsAttention}<p class="text-xs text-muted-foreground">
+            Sensitive results have expired. Retrying a later action may be unavailable because it
+            needs those results.
+          </p>{/if}
 
         {#if isFanout}
           {@const targets = fanoutTargets.data ?? []}
-          {@const completedTargets = targets.filter((target) => target.status === 'completed').length}
-          {@const failedTargets = targets.filter((target) => ['failed', 'halted', 'partial', 'canceled'].includes(target.status)).length}
+          {@const completedTargets = targets.filter(
+            (target) => target.status === 'completed'
+          ).length}
+          {@const failedTargets = targets.filter((target) =>
+            ['failed', 'halted', 'partial', 'canceled'].includes(target.status)
+          ).length}
           <section class="space-y-3">
             <div class="flex items-baseline justify-between gap-3">
               <div>
-                <h2 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">Target runs</h2>
+                <h2 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+                  Target runs
+                </h2>
                 <p class="mt-1 text-sm text-muted-foreground">
-                  {completedTargets} completed{failedTargets ? ` · ${failedTargets} need attention` : ''} · {targets.length} total
+                  {completedTargets} completed{failedTargets
+                    ? ` · ${failedTargets} need attention`
+                    : ''} · {targets.length} total
                 </p>
               </div>
             </div>
             <div class="divide-y rounded-lg border">
               {#each targets as target (target.id)}
-                {@const targetInfo = (target.triggerRef as { target?: { label?: string; id?: string } } | null)?.target}
+                {@const targetInfo = (
+                  target.triggerRef as { target?: { label?: string; id?: string } } | null
+                )?.target}
                 {@const targetBadge = runStatusBadge(target.status)}
                 <button
                   type="button"
                   class="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-muted/50"
                   onclick={() => goto(`/automation/runs/${target.id}`)}
                 >
-                  <span class="min-w-0 truncate text-sm font-medium">{targetInfo?.label ?? targetInfo?.id ?? 'Identity'}</span>
-                  <Badge variant="outline" class={targetBadge.class + ' shrink-0 capitalize'}>{targetBadge.label}</Badge>
+                  <span class="min-w-0 truncate text-sm font-medium"
+                    >{targetInfo?.label ?? targetInfo?.id ?? 'Identity'}</span
+                  >
+                  <Badge variant="outline" class={targetBadge.class + ' shrink-0 capitalize'}
+                    >{targetBadge.label}</Badge
+                  >
                 </button>
               {:else}
                 <div class="px-4 py-3 text-sm text-muted-foreground">Preparing target runs…</div>
@@ -328,189 +424,221 @@
         {/if}
 
         {#if !isFanout}
-        <div>
-          <div class="mb-4 flex items-baseline justify-between">
-            <h2 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">Steps</h2>
-            <span class="text-xs tabular-nums text-muted-foreground">
-              {steps.filter((s) => s.status === 'success').length} of {steps.length} succeeded
-            </span>
-          </div>
+          <div>
+            <div class="mb-4 flex items-baseline justify-between">
+              <h2 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+                Action results
+              </h2>
+              <span class="text-xs tabular-nums text-muted-foreground">
+                {steps.filter((s) => s.status === 'success').length} of {steps.length} succeeded
+              </span>
+            </div>
 
-          <div class="space-y-0">
-            {#each steps as step, index (step.id)}
-              {@const stepDuration = formatDuration(step.startedAt, step.finishedAt)}
-              {@const lane = step.lane ?? 'main'}
-              {@const snapshotStep = lane === 'on_success'
-                ? snapshot?.outcomeSteps?.onSuccess?.[step.position]
-                : lane === 'on_failure'
-                  ? snapshot?.outcomeSteps?.onFailure?.[step.position]
-                  : snapshot?.steps?.[step.position]}
-              {@const outputs = (step.outputs ?? {}) as Record<string, unknown>}
-              {@const inputs = (step.resolvedInputs ?? {}) as Record<string, unknown>}
-              {@const isLast = index === steps.length - 1}
-              {@const isSubpackageStep = step.capabilityId.startsWith('subpackage:')}
-              {@const childRuns = isSubpackageStep && lane === 'main' ? (childrenByPosition.get(step.position) ?? []) : []}
-              <div class="grid grid-cols-[36px_1fr] gap-4">
-                <div class="flex flex-col items-center">
-                  <StepNode status={stepStatus(step.status)} number={step.position + 1} />
-                  {#if !isLast}
-                    <div class="w-px flex-1 bg-border"></div>
-                  {/if}
-                </div>
-                <div class={isLast ? 'pb-2' : 'pb-6'}>
-                  <div class="rounded-lg border bg-card p-4">
-                      <div class="flex flex-wrap items-start justify-between gap-3">
-                        <div class="space-y-0.5">
-                        <div class="flex items-center gap-2">
-                          <div class="font-medium">{snapshotStep?.label ?? step.capabilityId}</div>
-                          {#if isSubpackageStep}
-                            <span class="rounded-sm bg-primary/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-primary">
-                              Sub-package
-                            </span>
-                          {/if}
-                          {#if lane !== 'main'}
-                            <span class="rounded-sm px-1.5 py-0.5 text-[10px] uppercase tracking-wide {lane === 'on_success' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' : 'bg-rose-500/10 text-rose-700 dark:text-rose-400'}">
-                              {lane === 'on_success' ? 'On success' : 'On failure'}
-                            </span>
-                          {/if}
-                        </div>
-                        <div class="font-mono text-xs text-muted-foreground">
-                          {step.capabilityId}
-                        </div>
-                      </div>
-                      <div class="flex items-center gap-3 text-xs text-muted-foreground">
-                        {#if stepDuration}<span>{stepDuration}</span>{/if}
-                        {#if childRuns.length > 0}
-                          <button
-                            type="button"
-                            class="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                            onclick={() => goto(`/automation/runs/${childRuns[0]!.id}`)}
-                            title={childRuns[0]!.packageName ?? undefined}
-                          >
-                            View sub-run
-                            <ArrowUpRight class="size-3" />
-                          </button>
-                        {/if}
-                        {#if lane === 'main' && canRun && canRetry(run.status, purged, step.position)}
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            class="gap-1.5"
-                            onclick={() =>
-                              retry.mutate({ runId: run.id, stepPosition: step.position })}
-                          >
-                            <RotateCcw class="size-3" />
-                            Retry from here
-                          </Button>
-                        {/if}
-                      </div>
-                    </div>
-
-                    {#if step.errorMessage}
-                      <div
-                        class="mt-3 rounded-md border border-rose-500/30 bg-rose-500/5 p-3 text-sm"
-                      >
-                        <div class="font-medium text-rose-600 dark:text-rose-400">
-                          {step.errorClass}
-                        </div>
-                        <div class="mt-1 font-mono text-xs text-rose-500/80">
-                          {step.errorMessage}
-                        </div>
-                      </div>
-                    {/if}
-                    {#if step.skipReason}
-                      <div class="mt-3 text-sm text-muted-foreground">
-                        Skipped — {step.skipReason}
-                      </div>
-                    {/if}
-
-                    {#if Object.keys(inputs).length > 0 || Object.keys(outputs).length > 0}
-                      <div class="mt-4 grid gap-4 sm:grid-cols-2">
-                        {#if Object.keys(inputs).length > 0}
-                          <div>
-                            <div
-                              class="mb-1.5 text-xs uppercase tracking-wide text-muted-foreground"
-                            >
-                              Inputs
-                            </div>
-                            <dl class="space-y-1 text-sm">
-                              {#each Object.entries(inputs) as [name, value]}
-                                <div class="flex items-baseline justify-between gap-3">
-                                  <dt class="font-mono text-xs text-muted-foreground">{name}</dt>
-                                  <dd class="truncate font-mono text-xs">
-                                    {isSensitiveShape(value) ? '•••••' : String(value ?? '')}
-                                  </dd>
-                                </div>
-                              {/each}
-                            </dl>
-                          </div>
-                        {/if}
-                        {#if Object.keys(outputs).length > 0}
-                          <div>
-                            <div
-                              class="mb-1.5 text-xs uppercase tracking-wide text-muted-foreground"
-                            >
-                              Outputs
-                            </div>
-                            <dl class="space-y-1 text-sm">
-                              {#each Object.entries(outputs) as [name, value]}
-                                {@const key = `${step.id}:${name}`}
-                                <div class="flex items-baseline justify-between gap-3">
-                                  <dt class="font-mono text-xs text-muted-foreground">{name}</dt>
-                                  <dd class="truncate text-right font-mono text-xs">
-                                    {#if isSensitiveShape(value)}
-                                      {#if revealed[key] !== undefined}
-                                        {String(revealed[key])}
-                                      {:else if purged}
-                                        <span class="text-muted-foreground">purged</span>
-                                      {:else if canRun}
-                                        <button
-                                          type="button"
-                                          class="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-muted"
-                                          onclick={() =>
-                                            reveal.mutate({
-                                              runStepId: step.id,
-                                              outputPath: name,
-                                            })}
-                                        >
-                                          <Eye class="size-3" />
-                                          Reveal
-                                        </button>
-                                      {:else}
-                                        <span class="text-muted-foreground">restricted</span>
-                                      {/if}
-                                    {:else}
-                                      {String(value ?? '')}
-                                    {/if}
-                                  </dd>
-                                </div>
-                              {/each}
-                            </dl>
-                          </div>
-                        {/if}
-                      </div>
+            <div class="space-y-0">
+              {#each steps as step, index (step.id)}
+                {@const stepDuration = formatDuration(step.startedAt, step.finishedAt)}
+                {@const lane = step.lane ?? 'main'}
+                {@const snapshotStep =
+                  lane === 'on_success'
+                    ? snapshot?.outcomeSteps?.onSuccess?.[step.position]
+                    : lane === 'on_failure'
+                      ? snapshot?.outcomeSteps?.onFailure?.[step.position]
+                      : snapshot?.steps?.[step.position]}
+                {@const outputs = (step.outputs ?? {}) as Record<string, unknown>}
+                {@const inputs = (step.resolvedInputs ?? {}) as Record<string, unknown>}
+                {@const isLast = index === steps.length - 1}
+                {@const isSubpackageStep = step.capabilityId.startsWith('subpackage:')}
+                {@const childRuns =
+                  isSubpackageStep && lane === 'main'
+                    ? (childrenByPosition.get(step.position) ?? [])
+                    : []}
+                <div class="grid grid-cols-[36px_1fr] gap-4">
+                  <div class="flex flex-col items-center">
+                    <StepNode status={stepStatus(step.status)} number={step.position + 1} />
+                    {#if !isLast}
+                      <div class="w-px flex-1 bg-border"></div>
                     {/if}
                   </div>
+                  <div class={isLast ? 'pb-2' : 'pb-6'}>
+                    <div class="au-result-card" id={`run-step-${step.id}`}>
+                      <div class="flex flex-wrap items-start justify-between gap-3">
+                        <div class="space-y-0.5">
+                          <div class="flex items-center gap-2">
+                            <div class="font-medium">
+                              {snapshotStep?.label ??
+                                fieldLabel(step.capabilityId.split('.').pop() ?? step.capabilityId)}
+                            </div>
+                            {#if isSubpackageStep}
+                              <span
+                                class="rounded-sm bg-primary/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-primary"
+                              >
+                                Included package
+                              </span>
+                            {/if}
+                            {#if lane !== 'main'}
+                              <span
+                                class="rounded-sm px-1.5 py-0.5 text-[10px] uppercase tracking-wide {lane ===
+                                'on_success'
+                                  ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                                  : 'bg-rose-500/10 text-rose-700 dark:text-rose-400'}"
+                              >
+                                {lane === 'on_success' ? 'On success' : 'On failure'}
+                              </span>
+                            {/if}
+                          </div>
+                          <span class="au-cell-detail"
+                            >{(
+                              {
+                                success: 'Completed',
+                                fail: 'Failed',
+                                skip: 'Skipped',
+                                running: 'Running',
+                                pending: 'Waiting',
+                              } as Record<string, string>
+                            )[step.status] ?? step.status}</span
+                          >
+                        </div>
+                        <div class="flex items-center gap-3 text-xs text-muted-foreground">
+                          {#if stepDuration}<span>{stepDuration}</span>{/if}
+                          {#if childRuns.length > 0}
+                            <button
+                              type="button"
+                              class="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                              onclick={() => goto(`/automation/runs/${childRuns[0]!.id}`)}
+                              title={childRuns[0]!.packageName ?? undefined}
+                            >
+                              View included run
+                              <ArrowUpRight class="size-3" />
+                            </button>
+                          {/if}
+                          {#if lane === 'main' && canRun && canRetry(run.status, purged, step.position)}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              class="gap-1.5"
+                              disabled={retry.isPending}
+                              onclick={() =>
+                                retry.mutate({ runId: run.id, stepPosition: step.position })}
+                            >
+                              <RotateCcw class="size-3" />
+                              Retry from here
+                            </Button>
+                          {/if}
+                        </div>
+                      </div>
+
+                      {#if step.errorMessage}
+                        <div class="au-step-error">
+                          <strong>{fieldLabel(step.errorClass ?? 'Action failed')}</strong>
+                          <p>{step.errorMessage}</p>
+                        </div>
+                      {/if}
+                      {#if step.skipReason}
+                        <div class="mt-3 text-sm text-muted-foreground">
+                          Skipped — {step.skipReason}
+                        </div>
+                      {/if}
+
+                      {#if Object.keys(inputs).length > 0 || Object.keys(outputs).length > 0}
+                        <details class="au-step-record">
+                          <summary
+                            >Values used and results <span class="ml-2"
+                              >{Object.keys(inputs).length} inputs · {Object.keys(outputs).length} results</span
+                            ></summary
+                          >
+                          <p class="mt-3 text-xs text-muted-foreground">
+                            Action identifier: <code>{step.capabilityId}</code>
+                          </p>
+                          <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                            {#if Object.keys(inputs).length > 0}
+                              <div>
+                                <div
+                                  class="mb-1.5 text-xs uppercase tracking-wide text-muted-foreground"
+                                >
+                                  Values used
+                                </div>
+                                <dl class="space-y-1 text-sm">
+                                  {#each Object.entries(inputs) as [name, value]}
+                                    <div class="flex items-baseline justify-between gap-3">
+                                      <dt class="text-xs text-muted-foreground">
+                                        {fieldLabel(name)}
+                                      </dt>
+                                      <dd class="text-xs">
+                                        {isSensitiveShape(value) ? '•••••' : String(value ?? '')}
+                                      </dd>
+                                    </div>
+                                  {/each}
+                                </dl>
+                              </div>
+                            {/if}
+                            {#if Object.keys(outputs).length > 0}
+                              <div>
+                                <div
+                                  class="mb-1.5 text-xs uppercase tracking-wide text-muted-foreground"
+                                >
+                                  Results
+                                </div>
+                                <dl class="space-y-1 text-sm">
+                                  {#each Object.entries(outputs) as [name, value]}
+                                    {@const key = `${step.id}:${name}`}
+                                    <div class="flex items-baseline justify-between gap-3">
+                                      <dt class="text-xs text-muted-foreground">
+                                        {fieldLabel(name)}
+                                      </dt>
+                                      <dd class="text-right text-xs">
+                                        {#if isSensitiveShape(value)}
+                                          {#if revealed[key] !== undefined}
+                                            {String(revealed[key])}
+                                          {:else if purged}
+                                            <span class="text-muted-foreground">purged</span>
+                                          {:else if canRun}
+                                            <button
+                                              type="button"
+                                              class="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-muted"
+                                              disabled={reveal.isPending}
+                                              onclick={() =>
+                                                reveal.mutate({
+                                                  runStepId: step.id,
+                                                  outputPath: name,
+                                                })}
+                                            >
+                                              <Eye class="size-3" />
+                                              Reveal
+                                            </button>
+                                          {:else}
+                                            <span class="text-muted-foreground">restricted</span>
+                                          {/if}
+                                        {:else}
+                                          {String(value ?? '')}
+                                        {/if}
+                                      </dd>
+                                    </div>
+                                  {/each}
+                                </dl>
+                              </div>
+                            {/if}
+                          </div>
+                        </details>
+                      {/if}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            {/each}
+              {/each}
+            </div>
           </div>
-        </div>
         {/if}
       {/if}
     </div>
   </div>
 </div>
 
-<AlertDialog.Root
-  open={deleteDialogOpen}
-  onOpenChange={(o) => (deleteDialogOpen = o)}
->
+<AlertDialog.Root open={deleteDialogOpen} onOpenChange={(o) => (deleteDialogOpen = o)}>
   <AlertDialog.Content>
     <AlertDialog.Header>
       <AlertDialog.Title>Delete this run?</AlertDialog.Title>
       <AlertDialog.Description>
-        Removes the run and all of its recorded step outputs. This can't be undone. The parent package and other runs are not affected.
+        Removes the run and all of its recorded step outputs. This can't be undone. The parent
+        package and other runs are not affected.
       </AlertDialog.Description>
     </AlertDialog.Header>
     <AlertDialog.Footer>

@@ -81,15 +81,15 @@
     <Dialog.Header class="border-b bg-muted/20 px-6 py-5">
       <Dialog.Title class="text-xl font-semibold tracking-tight">
         {target === 'main'
-          ? 'Add capability'
+          ? 'Add an action'
           : target === 'onSuccess'
-            ? 'Add success reaction'
-            : 'Add failure reaction'}
+            ? 'Add a success follow-up'
+            : 'Add a failure follow-up'}
       </Dialog.Title>
       <Dialog.Description>
         {target === 'main'
-          ? 'Search the catalog, narrow the list, then insert the next step.'
-          : 'Choose the next one-way reaction for this terminal lane.'}
+          ? 'Find the task you want to automate. Choose an action to add it to your workflow.'
+          : 'Choose what should happen after the workflow finishes.'}
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Body class="p-0">
@@ -165,7 +165,7 @@
         <div
           class="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/[0.08] px-6 py-3"
         >
-          <div class="text-sm font-medium text-foreground">Capability results</div>
+          <div class="text-sm font-medium text-foreground">Available actions</div>
           {#if search || vendorFilters.length > 0 || categoryFilters.length > 0}
             <div class="flex flex-wrap items-center gap-2">
               {#each vendorFilters as vendor}
@@ -200,12 +200,12 @@
             {#if filteredCapabilities.length === 0}
               <div class="rounded-xl border border-dashed p-10 text-center">
                 {#if catalog.length === 0}
-                  <p class="text-sm font-medium">No connected capabilities yet</p>
+                  <p class="text-sm font-medium">No actions available yet</p>
                   <p class="mt-1 text-xs text-muted-foreground">
                     Connect an integration and establish any required active link to add its actions here.
                   </p>
                 {:else}
-                  <p class="text-sm font-medium">No matching capabilities</p>
+                  <p class="text-sm font-medium">No matching actions</p>
                   <p class="mt-1 text-xs text-muted-foreground">
                     Adjust the search or clear some filters to see more results.
                   </p>

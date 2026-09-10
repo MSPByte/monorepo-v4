@@ -5,7 +5,7 @@
   import Button from '$lib/components/ui/button/button.svelte';
   import MultiSelect from '$lib/components/multi-select.svelte';
   import SingleSelect from '$lib/components/single-select.svelte';
-  import { Info, Sparkles, Plus, Trash2 } from '@lucide/svelte';
+  import { ArrowUp, ArrowDown, Plus, Trash2 } from '@lucide/svelte';
   import type { ExposedOutput, PackageDraft, PackagePrompt, Step } from './_package-builder.svelte';
 
   type Option = { value: string; label: string; subLabel?: string };
@@ -68,6 +68,14 @@
     }));
   }
 
+  function moveQuestion(prompts: PackagePrompt[], index: number, offset: number) {
+    const reordered = [...prompts];
+    const target = index + offset;
+    if (target < 0 || target >= reordered.length) return;
+    [reordered[index], reordered[target]] = [reordered[target]!, reordered[index]!];
+    reordered.forEach((prompt, order) => onUpdatePrompt(prompt.id, { order }));
+  }
+
   function addExposedOutput() {
     const next: ExposedOutput = {
       name: '',
@@ -114,12 +122,13 @@
     />
   </div>
 
+  <div><h2 class="text-lg font-semibold">Client availability</h2><p class="mt-1 text-sm text-muted-foreground">Choose where your team can use this package.</p></div>
   <div class="space-y-3 rounded-lg border p-4">
     <div class="flex items-baseline justify-between gap-3">
       <div>
-        <h3 class="text-sm font-medium">Scope</h3>
+        <h3 class="text-sm font-medium">Available to</h3>
         <p class="mt-0.5 text-xs text-muted-foreground">
-          Restrict where this package can run. Leave all scope selections empty to make it global.
+          Restrict where this package can run. Leave all scope selections empty to make it available to all clients.
         </p>
       </div>
       <span
@@ -127,7 +136,7 @@
           ? 'bg-sky-500/10 text-sky-700 dark:text-sky-400'
           : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'}"
         >{isGlobalScope
-          ? 'Global'
+          ? 'All clients'
           : `${draft.allowedSites.length} sites · ${draft.allowedSiteGroups.length} groups · ${draft.allowedIntegrationLinks.length} tenants`}</span
       >
     </div>
@@ -150,7 +159,7 @@
       />
     </div>
     <div class="space-y-2">
-      <div class="text-xs text-muted-foreground">Allowed tenant links</div>
+      <div class="text-xs text-muted-foreground">Allowed organization connections</div>
       <MultiSelect
         options={tenantLinkOptions}
         selected={draft.allowedIntegrationLinks}
@@ -163,9 +172,9 @@
   <div class="space-y-3 rounded-lg border bg-muted/10 p-4">
     <div class="flex items-baseline justify-between gap-3">
       <div>
-        <h3 class="text-sm font-medium">Run experience</h3>
+        <h3 class="text-sm font-medium">Questions your team will answer</h3>
         <p class="mt-0.5 text-xs text-muted-foreground">
-          These are the only questions an operator sees when they run this preset.
+          Customize the questions asked before a run. Choose “Ask when run” on a workflow field to add a question here.
         </p>
       </div>
       <span class="font-mono text-[11px] text-muted-foreground"
@@ -175,12 +184,12 @@
     </div>
     {#if normalPublishedPrompts.length === 0}
       <p class="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-        This package runs with its preset values. Add a capability input as “Ask when run” to
+        No run questions have been configured. Set a workflow field to “Ask when run” to
         publish a question.
       </p>
     {:else}
       <div class="space-y-2">
-        {#each normalPublishedPrompts as prompt (prompt.id)}<div
+        {#each normalPublishedPrompts as prompt, index (prompt.id)}<div
             class="grid gap-2 rounded-md border bg-background p-3 sm:grid-cols-[1fr_auto] sm:items-start"
           >
             <div class="min-w-0 space-y-1">
@@ -200,6 +209,11 @@
                   })}
                 class="h-8 text-xs"
               />
+              <div class="flex items-center gap-2 pt-1">
+                <Input value={prompt.section ?? ''} placeholder="Section, e.g. New employee" aria-label={`Section for ${prompt.label}`} class="h-8 text-xs" oninput={(event) => onUpdatePrompt(prompt.id, { section: (event.target as HTMLInputElement).value || undefined })} />
+                <Button variant="ghost" size="icon" disabled={index === 0} aria-label={`Move ${prompt.label} up`} onclick={() => moveQuestion(normalPublishedPrompts, index, -1)}><ArrowUp class="size-3.5" /></Button>
+                <Button variant="ghost" size="icon" disabled={index === normalPublishedPrompts.length - 1} aria-label={`Move ${prompt.label} down`} onclick={() => moveQuestion(normalPublishedPrompts, index, 1)}><ArrowDown class="size-3.5" /></Button>
+              </div>
             </div>
             <label
               class="flex items-center gap-2 whitespace-nowrap pt-1 text-xs text-muted-foreground"
@@ -362,17 +376,4 @@
     </Button>
   </details>
 
-  <div class="rounded-lg border bg-muted/10 p-4">
-    <div class="flex items-start gap-3">
-      <Info class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-      <div class="space-y-1">
-        <p class="text-sm font-medium">Reactions live in the sidebar</p>
-        <p class="text-xs text-muted-foreground">
-          Use the <strong>On Failure</strong> and <strong>On Success</strong> sections in the left panel
-          to add capabilities that run after the main package finishes. Click any reaction to configure
-          it here.
-        </p>
-      </div>
-    </div>
-  </div>
 </div>

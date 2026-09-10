@@ -104,8 +104,8 @@
   import './workspace.css';
   import RunPackageDialog from '$lib/components/domain/run-package-dialog.svelte';
   import { authStore } from '$lib/stores/auth.store.svelte';
-  import { getContext } from 'svelte';
-  import { goto } from '$app/navigation';
+  import { getContext, tick } from 'svelte';
+  import { beforeNavigate, goto } from '$app/navigation';
   import { createQuery } from '@tanstack/svelte-query';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
@@ -331,7 +331,15 @@
   });
 
   // The inspector selection can target package details, a main step, or a terminal reaction.
-  let selected = $state<Selection>(initial.steps.length > 0 ? { kind: 'step', index: 0 } : { kind: 'details' });
+  let selected = $state<Selection>(initial.steps.length ? { kind: 'step', index: 0 } : { kind: 'details' });
+  let showRunPreview = $state(false);
+  let showSetupIssues = $state(false);
+  let inspectorElement: HTMLElement;
+  let previewAnswers = $state<Record<string, string | boolean | string[]>>({});
+  const hasChanges = $derived(JSON.stringify(draft) !== JSON.stringify(initial));
+  beforeNavigate(({ cancel }) => {
+    if (hasChanges && !saving && !window.confirm('Leave this package? Your unsaved changes will be lost.')) cancel();
+  });
   let capabilityPickerOpen = $state(false);
   let capabilityPickerTarget = $state<'main' | 'onSuccess' | 'onFailure'>('main');
   let subpackagePickerOpen = $state(false);
@@ -714,6 +722,7 @@
   }
 
   function addSubpackageStep(packageId: string) {
+    showRunPreview = false;
     const step = buildSubpackageStep(packageId, 'main');
     if (!step) return;
     const nextIndex = draft.steps.length;
@@ -723,6 +732,7 @@
   }
 
   function addStep(capabilityId: string) {
+    showRunPreview = false;
     const step = buildStep(capabilityId, capabilityPickerTarget);
     if (!step) return;
     if (capabilityPickerTarget === 'main') {
@@ -1137,49 +1147,54 @@
     };
   }
 
-  function canSave(): boolean {
-    if (!draft.name.trim()) return false;
-    if (draft.steps.length === 0) return false;
-    if (draft.prompts.some((prompt) => !prompt.id.trim() || !prompt.label.trim())) return false;
-    const allSteps = [
-      ...draft.steps,
-      ...draft.outcomeSteps.onSuccess,
-      ...draft.outcomeSteps.onFailure,
-    ];
-    for (const step of allSteps) {
-      // Sub-package steps: child metadata may not be loaded yet — treat as
-      // saveable and let the backend cycle/depth/prompt checks reject if the
-      // referenced package became invalid.
-      if (step.kind === 'subpackage') {
-        if (!step.packageId) return false;
-        for (const [, binding] of Object.entries(step.inputBindings)) {
-          if (binding.kind === 'runtime' && !binding.promptKey.trim()) return false;
-          if (binding.kind === 'priorOutput' && !binding.path.trim()) return false;
-          if (binding.kind === 'generated' && !binding.generator.trim()) return false;
-          if (binding.kind === 'siteFact' && !binding.key.trim()) return false;
-          if (binding.kind === 'template' && !binding.template.trim()) return false;
+  type SetupIssue = { message: string; target: Selection; blocksSave?: boolean };
+  const setupIssues = $derived.by(() => {
+    const issues: SetupIssue[] = [];
+    const details = (message: string) =>
+      issues.push({ message, target: { kind: 'details' } });
+    if (!draft.name.trim()) details('Give this package a name your team will recognize.');
+    if (!draft.steps.length) details('Add the first action to your workflow.');
+    if (draft.prompts.some((p) => !p.id.trim() || !p.label.trim())) details('Give each run question a label.');
+    for (const lane of ['main', 'onSuccess', 'onFailure'] as const) {
+      const steps = lane === 'main' ? draft.steps : draft.outcomeSteps[lane];
+      steps.forEach((step, index) => {
+        const cap = capIndex.get(step.capabilityId);
+        const target: Selection = lane === 'main' ? { kind: 'step', index } : { kind: 'reaction', lane, index };
+        const title = step.label || cap?.name || `Step ${index + 1}`;
+        const add = (message: string, blocksSave = true) => issues.push({ message: `${title}: ${message}`, target, blocksSave });
+        if (step.kind === 'subpackage' ? !step.packageId : !cap) {
+          add('choose an available action or remove this step.');
+          return;
         }
-        continue;
-      }
-      const cap = capIndex.get(step.capabilityId);
-      if (!cap) return false;
-      for (const [name, binding] of Object.entries(step.inputBindings)) {
-        if (binding.kind === 'runtime' && !binding.promptKey.trim()) return false;
-        if (binding.kind === 'priorOutput' && !binding.path.trim()) return false;
-        if (binding.kind === 'failureContext' && !binding.path.trim()) return false;
-        if (binding.kind === 'literal') {
-          const meta = cap.inputMeta[name];
-          if (!meta) return false;
+        for (const [name, binding] of Object.entries(step.inputBindings)) {
+          const meta = cap?.inputMeta[name];
+          const label = fieldLabel(name, meta?.label);
+          if (binding.kind === 'literal' && meta && isRequiredInput(meta) &&
+              (binding.value == null || (typeof binding.value === 'string' && !binding.value.trim()) ||
+               (Array.isArray(binding.value) && binding.value.length === 0))) {
+            add(`enter a value for ${label} before running, or choose “Ask when run” if available.`, false);
+          }
+          if (binding.kind === 'runtime' && !binding.promptKey.trim()) add(`set up the question for ${label}.`);
+          if (binding.kind === 'priorOutput' && !binding.path.trim()) add(`choose an earlier result for ${label}.`);
+          if (binding.kind === 'failureContext' && !binding.path.trim()) add(`choose failure details for ${label}.`);
+          if (binding.kind === 'literal' && step.kind !== 'subpackage' && !cap?.inputMeta[name]) add(`remove the unavailable field ${label}.`);
+          if (binding.kind === 'generated' && !binding.generator.trim()) add(`choose how to generate ${label}.`);
+          if (binding.kind === 'siteFact' && !binding.key.trim()) add(`choose a site profile field for ${label}.`);
+          if (binding.kind === 'template' && !binding.template.trim()) add(`write the message for ${label}.`);
         }
-        if (binding.kind === 'generated') {
-          if (!binding.generator.trim()) return false;
-        }
-        if (binding.kind === 'siteFact' && !binding.key.trim()) return false;
-        if (binding.kind === 'template' && !binding.template.trim()) return false;
-      }
+      });
     }
-    return true;
+    return issues;
+  });
+  function canSave(): boolean { return !setupIssues.some((issue) => issue.blocksSave !== false); }
+  function fixIssue(issue: SetupIssue) {
+    selected = issue.target;
   }
+  const clientSummary = $derived(
+    [...draft.allowedSites.map((id) => siteOptions.find((o) => o.value === id)?.label ?? 'Unavailable site'),
+     ...draft.allowedSiteGroups.map((id) => siteGroupOptions.find((o) => o.value === id)?.label ?? 'Unavailable group'),
+     ...draft.allowedIntegrationLinks.map((id) => tenantLinkOptions.find((o) => o.value === id)?.label ?? 'Unavailable connection')]
+  );
 
   const selectedStep = $derived(selected.kind === 'step' ? (draft.steps[selected.index] ?? null) : null);
   const selectedReaction = $derived(selected.kind === 'reaction' ? (draft.outcomeSteps[selected.lane][selected.index] ?? null) : null);
@@ -1235,11 +1250,44 @@
     };
   }
 
-  // Tracks per-input visibility for advanced prompt-key editing.
-  let showPromptKeyEditor = $state<Record<string, boolean>>({});
+  function bindingSummary(binding: Binding, meta: { sensitive?: boolean; entityType?: string } | undefined): string {
+    if (binding.kind === 'runtime') return `Ask: ${draft.prompts.find((p) => p.id === binding.promptKey)?.label || 'your team'}`;
+    if (binding.kind === 'siteFact') return siteFactFieldsQuery.data?.find((f) => f.key === binding.key)?.label || 'Choose a site field';
+    if (binding.kind === 'priorOutput') {
+      const sourceSteps = binding.lane && binding.lane !== 'main' ? draft.outcomeSteps[binding.lane] : draft.steps;
+      const source = sourceSteps[binding.stepPosition];
+      return source ? `From ${source.label || capIndex.get(source.capabilityId)?.name || 'an earlier action'}` : 'Choose an earlier result';
+    }
+    if (binding.kind === 'literal') {
+      if (meta?.sensitive) return binding.value ? 'Hidden value' : 'Not set';
+      if (meta?.entityType) return binding.value ? 'Selected item' : 'Not selected';
+      if (typeof binding.value === 'boolean') return binding.value ? 'Yes' : 'No';
+      if (typeof binding.value === 'number') return String(binding.value);
+      if (Array.isArray(binding.value)) return `${binding.value.length} selected`;
+      return typeof binding.value === 'string' && binding.value.trim() ? binding.value : 'Not set';
+    }
+    if (binding.kind === 'generated') return 'Created automatically';
+    if (binding.kind === 'template') return 'Personalized message';
+    if (binding.kind === 'failureContext') return 'Details of the failure';
+    return binding.source === 'picker' ? 'Choose when running' : 'Selected item';
+  }
+  function selectAction(selection: Selection) {
+    selected = selection;
+    showRunPreview = false;
+    void tick().then(() => {
+      if ((inspectorElement?.closest('.pk-builder')?.clientWidth ?? 1000) <= 760) inspectorElement.scrollIntoView({ block: 'start' });
+    });
+  }
+  function previewMeta(promptId: string): { typeHint?: string; sensitive?: boolean; entityType?: string; choices?: { value: string; label: string }[] } {
+    for (const step of [...draft.steps, ...draft.outcomeSteps.onSuccess]) {
+      const input = Object.entries(step.inputBindings).find(([, binding]) => binding.kind === 'runtime' && binding.promptKey === promptId);
+      if (input) return capIndex.get(step.capabilityId)?.inputMeta[input[0]] ?? {};
+    }
+    return {};
+  }
 </script>
 
-<div class="pk-workspace pk-builder">
+<div class="pk-workspace pk-builder pk-studio">
   <!-- Header bar -->
   <header class="pk-builder-header">
     <div class="flex flex-wrap items-center gap-3 px-6 py-4">
@@ -1262,26 +1310,10 @@
         class="pk-title-input h-9 w-full max-w-sm text-base font-semibold"
       />
 
-      <div
-        class="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium capitalize {statusBadgeClass}"
-      >
-        <Circle class="size-2 fill-current" />
-        {draft.status}
-      </div>
-
-      <button
-        type="button"
-        onclick={() => (selected = { kind: 'details' })}
-        class="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors {packageExecutionScope.batchReady
-          ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-400'
-          : 'border-amber-500/30 bg-amber-500/5 text-amber-700 hover:bg-amber-500/10 dark:text-amber-400'}"
-        title={packageExecutionScope.reason}
-      >
-        <Circle class="size-2 fill-current" />
-        {packageExecutionScope.batchReady ? 'Batch-ready' : 'Single run'}
-      </button>
+      {#if !canWrite}<span class="text-xs text-muted-foreground capitalize">{draft.status}</span>{/if}
 
       <div class="ml-auto flex flex-wrap items-center gap-2">
+        <span class="text-xs text-muted-foreground" role="status">{saving ? 'Saving changes…' : hasChanges ? 'Unsaved changes' : currentPackageId ? 'All changes saved' : 'New package'}</span>
         {#if currentPackageId && initial.status === 'active' && canRun}<Button variant="outline" class="gap-1.5" disabled={saving} onclick={() => runDialogOpen = true} title="Runs the saved version. Unsaved edits are not included."><Play size={14} /> Run saved version</Button>{/if}
         {#if canWrite}
         <div class="w-36"><SingleSelect allowClear={false} aria-label="Package status" options={[{value:'draft',label:'Draft',subLabel:'Not available to run'},{value:'active',label:'Active',subLabel:'Available to run and schedule'},{value:'archived',label:'Archived',subLabel:'Retained for reference'}]} selected={draft.status} onchange={(value) => { if (value === 'draft' || value === 'active' || value === 'archived') draft.status = value; }} class="h-9" disableSort /></div>
@@ -1294,378 +1326,109 @@
         {:else}<span class="text-xs text-muted-foreground">View only</span>{/if}
       </div>
     </div>
-    <div class="pk-builder-guide"><span><Workflow size={15} /> Workflow builder</span><p>{draft.status === 'active' ? 'Saving an active package updates what future runs execute.' : draft.status === 'archived' ? 'Archived packages cannot run. Change the status and save to reactivate.' : 'Start as a draft. Switch to Active and save when your workflow is ready.'}</p><span>{draft.steps.length} {draft.steps.length === 1 ? 'step' : 'steps'}</span></div>
-    {#if !canSave() && draft.name.trim() && draft.steps.length > 0}
-      <div
-        class="flex items-center gap-2 border-t bg-amber-500/5 px-6 py-1.5 text-xs text-amber-700 dark:text-amber-500"
-      >
-        <AlertTriangle class="size-3.5" />
-        Check your step inputs and run questions before saving. Each step needs a valid capability and input sources.
+    <div class="pk-builder-context">
+      <span><Workflow size={15} /> Package builder</span>
+      <p>{draft.status === 'active' ? 'Changes apply to future runs after you save.' : 'Build your workflow, then set it to Active when your team can use it.'}</p>
+      <button type="button" onclick={() => showSetupIssues = !showSetupIssues} aria-expanded={showSetupIssues}>
+        {#if setupIssues.length}<AlertTriangle size={14} /> {setupIssues.length} to finish{:else}<CheckCircle2 size={14} /> Review setup{/if}
+      </button>
+    </div>
+    {#if showSetupIssues}
+      <div class="pk-inline-checks">
+        {#each setupIssues as issue}<button type="button" onclick={() => { fixIssue(issue); showRunPreview = false; }}><span>{issue.message}{#if issue.blocksSave === false}<small class="ml-2 text-muted-foreground">You can save and finish this later.</small>{/if}</span><ArrowUpRight size={14} /></button>{:else}<p>Connections, permissions, and input values are checked when starting a run.</p>{/each}
       </div>
     {/if}
   </header>
 
   <!-- Two-pane body -->
   <div class="pk-builder-body">
-    <!-- Canvas: node list -->
-    <aside class="pk-workflow flex min-h-0 flex-col border-r">
-      <div class="border-b px-4 py-3">
-        <div class="flex items-baseline justify-between">
-          <h2 class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            Workflow
-          </h2>
-          <span class="font-mono text-[11px] tabular-nums text-muted-foreground">
-            {String(draft.steps.length).padStart(2, '0')}
-          </span>
-        </div>
+    <aside class="pk-plan" aria-label="Package workflow">
+      <div class="pk-plan-intro">
+        <p class="pk-eyebrow">THE WORKFLOW</p>
+        <h2>Build the workflow</h2>
+        <p>Actions run from top to bottom. Select one to edit its settings.</p>
       </div>
-
-      <div class="min-h-0 flex-1 overflow-y-auto">
-        <button
-          type="button"
-          onclick={() => (selected = { kind: 'details' })}
-          class="flex w-full items-center gap-2 border-b px-4 py-3 text-left text-sm transition-colors hover:bg-muted/50 {selected.kind === 'details' ? 'bg-muted/60' : ''}"
-        >
-          <Info class="size-3.5 text-muted-foreground" />
-          <span class="text-muted-foreground">Package details</span>
+      <div class="pk-plan-setup">
+        <button type="button" onclick={() => selectAction({ kind: 'details' })} aria-pressed={selected.kind === 'details' && !showRunPreview}>
+          <SlidersHorizontal size={17} /><span><strong>Package settings</strong><small>{clientSummary.length ? clientSummary.join(', ') : 'Available to all clients'}</small></span><ChevronDown size={15} />
         </button>
-
-        {#if draft.steps.length === 0}
-          <div class="pk-workflow-empty"><span><Layers size={25} strokeWidth={1.5} /></span><h3>What should happen first?</h3><p>Add a capability to start your workflow, or reuse an existing package.</p></div>
-        {:else}
-          <ol class="p-3">
-            {#each draft.steps as step, i (i)}
-              {@const cap = capIndex.get(step.capabilityId)}
-              {@const summary = summarize(step)}
-              {@const executionRole = stepExecutionRole(step, cap)}
-              {@const isSelected = selected.kind === 'step' && selected.index === i}
-              {@const isLast = i === draft.steps.length - 1}
-              <li class="relative">
-                {#if !isLast}
-                  <span
-                    aria-hidden="true"
-                    class="absolute left-[22px] top-11 h-[calc(100%-8px)] w-px bg-border"
-                  ></span>
-                {/if}
-                <button
-                  type="button"
-                  onclick={() => (selected = { kind: 'step', index: i })}
-                  aria-pressed={isSelected}
-                  class="group relative mb-1.5 flex w-full items-start gap-3 rounded-md border p-3 text-left transition-all {isSelected
-                    ? 'border-primary/50 bg-background shadow-sm ring-1 ring-primary/20'
-                    : 'border-transparent hover:border-border hover:bg-background/70'}"
-                >
-                  <span
-                    class="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-full border-2 bg-background font-mono text-[11px] font-semibold tabular-nums {isSelected
-                      ? 'border-primary text-primary'
-                      : 'border-muted-foreground/30 text-muted-foreground'}"
-                  >
-                    {String(i + 1).padStart(2, '0')}
-                  </span>
-                  <div class="min-w-0 flex-1 space-y-1">
-                    <div class="truncate text-sm font-medium">
-                      {step.label ?? cap?.name ?? step.capabilityId}
-                    </div>
-                    <div class="truncate font-mono text-[10px] text-muted-foreground/70">
-                      {cap?.category ?? '—'}
-                    </div>
-                    <div class="flex flex-wrap items-center gap-1.5 pt-1 text-[10px]">
-                      {#if executionRole.kind === 'target'}
-                        <span class="rounded-sm bg-emerald-500/10 px-1.5 py-0.5 font-mono text-emerald-700 dark:text-emerald-400" title={executionRole.inferred ? 'Inferred from this step’s direct entity input' : `Targets ${entityTypeLabel(executionRole.entityType)}`}>
-                          targets {entityTypeLabel(executionRole.entityType)}{executionRole.inferred ? ' · inferred' : ''}
-                        </span>
-                      {:else if executionRole.kind === 'context'}
-                        <span class="rounded-sm bg-sky-500/10 px-1.5 py-0.5 font-mono text-sky-700 dark:text-sky-400" title={executionRole.inferred ? 'Follows the target wired from an earlier step' : 'Runs once for each package target'}>
-                          uses context{executionRole.inferred ? ' · wired' : ''}
-                        </span>
-                      {:else if executionRole.kind === 'single_run'}
-                        <span class="rounded-sm bg-amber-500/10 px-1.5 py-0.5 font-mono text-amber-700 dark:text-amber-400" title="This step runs once and prevents table batching">
-                          runs once
-                        </span>
-                      {/if}
-                      {#if summary.wires.length > 0}
-                        <span
-                          class="inline-flex items-center gap-1 rounded-sm bg-cyan-500/10 px-1.5 py-0.5 font-mono text-cyan-700 dark:text-cyan-400"
-                          title="Wired from earlier steps"
-                        >
-                          <Link2 class="size-2.5" />
-                          {summary.wires.length}
-                        </span>
-                      {/if}
-                      {#if summary.prompts > 0}
-                        <span
-                          class="inline-flex items-center gap-1 rounded-sm bg-amber-500/10 px-1.5 py-0.5 font-mono text-amber-700 dark:text-amber-500"
-                          title="Prompts at run time"
-                        >
-                          <Keyboard class="size-2.5" />
-                          {summary.prompts}
-                        </span>
-                      {/if}
-                      {#if summary.row > 0}
-                        <span
-                          class="inline-flex items-center gap-1 rounded-sm bg-violet-500/10 px-1.5 py-0.5 font-mono text-violet-700 dark:text-violet-400"
-                          title="From triggering row"
-                        >
-                          <Pin class="size-2.5" />
-                          {summary.row}
-                        </span>
-                      {/if}
-                      {#if summary.generated > 0}
-                        <span
-                          class="inline-flex items-center gap-1 rounded-sm bg-emerald-500/10 px-1.5 py-0.5 font-mono text-emerald-700 dark:text-emerald-400"
-                          title="Generated at run time"
-                        >
-                          <Sparkles class="size-2.5" />
-                          {summary.generated}
-                        </span>
-                      {/if}
-                      {#if summary.facts > 0}
-                        <span
-                          class="inline-flex items-center gap-1 rounded-sm bg-fuchsia-500/10 px-1.5 py-0.5 font-mono text-fuchsia-700 dark:text-fuchsia-400"
-                          title="From site facts"
-                        >
-                          <Database class="size-2.5" />
-                          {summary.facts}
-                        </span>
-                      {/if}
-                      {#if summary.literals > 0}
-                        <span
-                          class="inline-flex items-center gap-1 rounded-sm bg-stone-500/10 px-1.5 py-0.5 font-mono text-stone-600 dark:text-stone-400"
-                          title="Fixed values"
-                        >
-                          {summary.literals}
-                        </span>
-                      {/if}
-                      {#if step.optional}
-                        <span
-                          class="inline-flex items-center gap-1 rounded-sm bg-sky-500/10 px-1.5 py-0.5 font-mono text-sky-700 dark:text-sky-400"
-                          title="Can be skipped at run time"
-                        >
-                          opt
-                        </span>
-                      {/if}
-                    </div>
-                  </div>
-                </button>
-              </li>
-            {/each}
-          </ol>
-        {/if}
-
-        <!-- Add step controls: capability and sub-package -->
-        <div class="space-y-2 border-t bg-background/60 p-3">
-          <Button
-            variant="outline"
-            class="h-auto w-full items-center justify-between gap-3 overflow-hidden px-3 py-3 text-left"
-            onclick={() => openCapabilityPicker()}
-          >
-            <span class="min-w-0 flex-1">
-              <span class="block truncate text-sm font-medium text-foreground">
-                Add capability
-              </span>
-              <span class="block text-[11px] text-muted-foreground">Connected integrations</span>
-            </span>
-            <span
-              class="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[10px] font-mono text-muted-foreground"
-            >
-              <SlidersHorizontal class="size-3" />
-              {capabilitiesQuery.data?.length ?? 0}
-            </span>
-          </Button>
-          <Button
-            variant="outline"
-            class="h-auto w-full items-center justify-between gap-3 overflow-hidden px-3 py-3 text-left"
-            onclick={() => (subpackagePickerOpen = true)}
-          >
-            <span class="min-w-0 flex-1">
-              <span class="block truncate text-sm font-medium text-foreground">
-                Add sub-package
-              </span>
-              <span class="block text-[11px] text-muted-foreground">
-                Embed an existing package
-              </span>
-            </span>
-            <span
-              class="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[10px] font-mono text-muted-foreground"
-            >
-              {(subpackagesQuery.data ?? []).filter((p) => p.status === 'active').length}
-            </span>
-          </Button>
-        </div>
-
-        <!-- On Failure lane -->
-        <div class="border-t">
-          <div class="flex items-center justify-between px-4 py-2">
-            <div class="flex items-center gap-1.5">
-              <TriangleAlert class="size-3 text-rose-500" />
-              <span class="text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-600 dark:text-rose-500">On Failure</span>
-            </div>
-            <button
-              type="button"
-              class="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-              onclick={() => openCapabilityPicker('onFailure')}
-              title="Add failure reaction"
-            >
-              <Plus class="size-3" /> Add
-            </button>
-          </div>
-          {#if draft.outcomeSteps.onFailure.length === 0}
-            <p class="px-4 pb-3 text-[11px] text-muted-foreground">Runs after a halted or partial package. Add a reaction above.</p>
-          {:else}
-            <ol class="space-y-1 px-3 pb-3">
-              {#each draft.outcomeSteps.onFailure as reaction, i (i)}
-                {@const reactionCap = capIndex.get(reaction.capabilityId)}
-                {@const reactionSummary = summarize(reaction)}
-                {@const isSelected = selected.kind === 'reaction' && selected.lane === 'onFailure' && selected.index === i}
-                <li>
-                  <div
-                    role="button"
-                    tabindex="0"
-                    onclick={() => (selected = { kind: 'reaction', lane: 'onFailure', index: i })}
-                    onkeydown={(e) => e.key === 'Enter' && (selected = { kind: 'reaction', lane: 'onFailure', index: i })}
-                    class="group relative flex w-full cursor-pointer items-start gap-3 rounded-md border p-2.5 text-left transition-all {isSelected
-                      ? 'border-rose-500/50 bg-rose-500/5 shadow-sm ring-1 ring-rose-500/20'
-                      : 'border-transparent hover:border-border hover:bg-background/70'}"
-                  >
-                    <span class="flex size-7 shrink-0 items-center justify-center rounded-full border-2 font-mono text-[10px] font-semibold {isSelected ? 'border-rose-500 text-rose-600 dark:text-rose-400' : 'border-muted-foreground/30 text-muted-foreground'}">
-                      F{i + 1}
-                    </span>
-                    <div class="min-w-0 flex-1 space-y-1">
-                      <div class="truncate text-xs font-medium">{reaction.label ?? reactionCap?.name ?? reaction.capabilityId}</div>
-                      <div class="flex flex-wrap items-center gap-1 text-[10px]">
-                        {#if reactionSummary.wires.length > 0}
-                          <span class="inline-flex items-center gap-0.5 rounded-sm bg-cyan-500/10 px-1 py-0.5 font-mono text-cyan-700 dark:text-cyan-400"><Link2 class="size-2" />{reactionSummary.wires.length}</span>
-                        {/if}
-                        {#if reactionSummary.prompts > 0}
-                          <span class="inline-flex items-center gap-0.5 rounded-sm bg-amber-500/10 px-1 py-0.5 font-mono text-amber-700 dark:text-amber-500"><Keyboard class="size-2" />{reactionSummary.prompts}</span>
-                        {/if}
-                        {#if reactionSummary.facts > 0}
-                          <span class="inline-flex items-center gap-0.5 rounded-sm bg-fuchsia-500/10 px-1 py-0.5 font-mono text-fuchsia-700 dark:text-fuchsia-400"><Database class="size-2" />{reactionSummary.facts}</span>
-                        {/if}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      class="shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-rose-500 group-hover:opacity-100"
-                      onclick={(e) => { e.stopPropagation(); removeOutcomeStep('onFailure', i); }}
-                      aria-label="Remove reaction"
-                    >
-                      <Trash2 class="size-3" />
-                    </button>
-                  </div>
-                </li>
-              {/each}
-            </ol>
-          {/if}
-        </div>
-
-        <!-- On Success lane (secondary) -->
-        <div class="border-t">
-          <div class="flex items-center justify-between px-4 py-2">
-            <div class="flex items-center gap-1.5">
-              <CheckCircle2 class="size-3 text-muted-foreground" />
-              <span class="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">On Success</span>
-            </div>
-            <button
-              type="button"
-              class="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-              onclick={() => openCapabilityPicker('onSuccess')}
-              title="Add success reaction"
-            >
-              <Plus class="size-3" /> Add
-            </button>
-          </div>
-          {#if draft.outcomeSteps.onSuccess.length > 0}
-            <ol class="space-y-1 px-3 pb-3">
-              {#each draft.outcomeSteps.onSuccess as reaction, i (i)}
-                {@const reactionCap = capIndex.get(reaction.capabilityId)}
-                {@const reactionSummary = summarize(reaction)}
-                {@const isSelected = selected.kind === 'reaction' && selected.lane === 'onSuccess' && selected.index === i}
-                <li>
-                  <div
-                    role="button"
-                    tabindex="0"
-                    onclick={() => (selected = { kind: 'reaction', lane: 'onSuccess', index: i })}
-                    onkeydown={(e) => e.key === 'Enter' && (selected = { kind: 'reaction', lane: 'onSuccess', index: i })}
-                    class="group relative flex w-full cursor-pointer items-start gap-3 rounded-md border p-2.5 text-left transition-all {isSelected
-                      ? 'border-emerald-500/50 bg-emerald-500/5 shadow-sm ring-1 ring-emerald-500/20'
-                      : 'border-transparent hover:border-border hover:bg-background/70'}"
-                  >
-                    <span class="flex size-7 shrink-0 items-center justify-center rounded-full border-2 font-mono text-[10px] font-semibold {isSelected ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'border-muted-foreground/30 text-muted-foreground'}">
-                      S{i + 1}
-                    </span>
-                    <div class="min-w-0 flex-1 space-y-1">
-                      <div class="truncate text-xs font-medium">{reaction.label ?? reactionCap?.name ?? reaction.capabilityId}</div>
-                      <div class="flex flex-wrap items-center gap-1 text-[10px]">
-                        {#if reactionSummary.wires.length > 0}
-                          <span class="inline-flex items-center gap-0.5 rounded-sm bg-cyan-500/10 px-1 py-0.5 font-mono text-cyan-700 dark:text-cyan-400"><Link2 class="size-2" />{reactionSummary.wires.length}</span>
-                        {/if}
-                        {#if reactionSummary.prompts > 0}
-                          <span class="inline-flex items-center gap-0.5 rounded-sm bg-amber-500/10 px-1 py-0.5 font-mono text-amber-700 dark:text-amber-500"><Keyboard class="size-2" />{reactionSummary.prompts}</span>
-                        {/if}
-                        {#if reactionSummary.facts > 0}
-                          <span class="inline-flex items-center gap-0.5 rounded-sm bg-fuchsia-500/10 px-1 py-0.5 font-mono text-fuchsia-700 dark:text-fuchsia-400"><Database class="size-2" />{reactionSummary.facts}</span>
-                        {/if}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      class="shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-rose-500 group-hover:opacity-100"
-                      onclick={(e) => { e.stopPropagation(); removeOutcomeStep('onSuccess', i); }}
-                      aria-label="Remove reaction"
-                    >
-                      <Trash2 class="size-3" />
-                    </button>
-                  </div>
-                </li>
-              {/each}
-            </ol>
-          {/if}
-        </div>
+        <button type="button" onclick={() => showRunPreview = !showRunPreview} aria-pressed={showRunPreview}>
+          <Keyboard size={17} /><span><strong>What your team will see</strong><small>{normalPublishedPrompts.length} run {normalPublishedPrompts.length === 1 ? 'question' : 'questions'} · Preview as you build</small></span><ChevronDown size={15} />
+        </button>
       </div>
-
-      <!-- Legend anchor -->
-      <div class="border-t bg-background/40 px-4 py-2.5 text-[10px] text-muted-foreground">
-        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono">
-          <span class="inline-flex items-center gap-1">
-            <Keyboard class="size-2.5 text-amber-600 dark:text-amber-400" /> prompt
-          </span>
-          <span class="inline-flex items-center gap-1">
-            <Link2 class="size-2.5 text-cyan-600 dark:text-cyan-400" /> wired
-          </span>
-          <span class="inline-flex items-center gap-1">
-            <Braces class="size-2.5 text-blue-600 dark:text-blue-400" /> template
-          </span>
-          <span class="inline-flex items-center gap-1">
-            <Pin class="size-2.5 text-violet-600 dark:text-violet-400" /> row
-          </span>
-          <span class="inline-flex items-center gap-1">
-            <Sparkles class="size-2.5 text-emerald-600 dark:text-emerald-400" /> generated
-          </span>
-          <span class="inline-flex items-center gap-1">
-            <Database class="size-2.5 text-fuchsia-600 dark:text-fuchsia-400" /> fact
-          </span>
-          <span class="inline-flex items-center gap-1">
-            <span class="size-2 rounded-sm bg-stone-500/60"></span> fixed
-          </span>
-        </div>
+      <ol class="pk-action-plan">
+        {#each draft.steps as step, index}
+          {@const cap = capIndex.get(step.capabilityId)}
+          {@const issues = setupIssues.filter((issue) => issue.target.kind === 'step' && issue.target.index === index)}
+          <li>
+            <button type="button" class="pk-action-card" aria-pressed={!showRunPreview && selected.kind === 'step' && selected.index === index} onclick={() => selectAction({ kind: 'step', index })}>
+              <span class="pk-action-number">{index + 1}</span>
+              <span class="pk-action-content">
+                <span class="pk-action-provider">{step.kind === 'subpackage' ? 'Saved package' : (cap?.vendor ?? 'Action').replace(/[-_]/g, ' ')}</span>
+                <strong>{step.label || cap?.name || 'Unavailable action'}</strong>
+                <span class="pk-action-description">{cap?.description || 'Configure this action to continue.'}</span>
+                <span class="pk-action-values">
+                  {#each Object.entries(step.inputBindings).slice(0, 3) as [name, binding]}
+                    <span><span>{fieldLabel(name, cap?.inputMeta[name]?.label)}</span><b>{bindingSummary(binding, cap?.inputMeta[name])}</b></span>
+                  {/each}
+                  {#if Object.keys(step.inputBindings).length > 3}<small>+{Object.keys(step.inputBindings).length - 3} more fields</small>{/if}
+                </span>
+                <span class="pk-action-footer">{#if issues.length}<AlertTriangle size={12} /> {issues.length} to finish{:else if step.optional}Your team can skip this action{:else}Included in every run{/if}</span>
+              </span>
+            </button>
+          </li>
+        {:else}
+          <li class="pk-plan-empty"><Layers size={28} /><h3>What should happen first?</h3><p>Choose a task from your connected tools, or start with a package you already use.</p></li>
+        {/each}
+      </ol>
+      <div class="pk-plan-add"><Button class="w-full gap-2" variant="outline" onclick={() => openCapabilityPicker()}><Plus size={16} /> Add an action</Button><button type="button" onclick={() => subpackagePickerOpen = true}>Reuse an existing package</button></div>
+      <div class="pk-plan-outcomes">
+        <p class="pk-eyebrow">AFTER THE WORKFLOW</p>
+        {#each [{ lane: 'onSuccess' as const, title: 'When everything succeeds', empty: 'Send a confirmation, update a ticket…' }, { lane: 'onFailure' as const, title: 'If something goes wrong', empty: 'Notify your team or create a ticket…' }] as outcome}
+          <div class="pk-plan-outcome" class:pk-plan-failure={outcome.lane === 'onFailure'}>
+            <h3>{outcome.title}</h3>
+            {#each draft.outcomeSteps[outcome.lane] as step, index}
+              <button type="button" class="pk-outcome-action" aria-pressed={!showRunPreview && selected.kind === 'reaction' && selected.lane === outcome.lane && selected.index === index} onclick={() => selectAction({ kind: 'reaction', lane: outcome.lane, index })}>{step.label || capIndex.get(step.capabilityId)?.name || 'Unavailable action'}<ArrowUpRight size={14} /></button>
+            {:else}<p>{outcome.empty}</p>{/each}
+            <button type="button" class="pk-add-followup" onclick={() => openCapabilityPicker(outcome.lane)}><Plus size={13} /> Add follow-up</button>
+          </div>
+        {/each}
       </div>
     </aside>
 
     <!-- Inspector -->
-    <section class="pk-inspector flex min-h-0 flex-col overflow-y-auto">
+    <section bind:this={inspectorElement} class="pk-inspector flex min-h-0 flex-col overflow-y-auto" aria-label="Action editor">
       {#if capabilitiesQuery.isError}<div class="pk-load-error" role="alert"><TriangleAlert size={18} /><div><strong>Capabilities couldn’t be loaded</strong><p>Reload the catalog to inspect and configure your steps.</p></div><Button variant="outline" onclick={() => capabilitiesQuery.refetch()}>Retry</Button></div>{/if}
-      {#if selected.kind === 'details'}
-        {#if !currentPackageId && draft.steps.length === 0}<div class="pk-start"><p class="pk-eyebrow">Create your first step</p><h2>Make room for more meaningful work.</h2><p>Name your package, then pick a capability. You’ll choose what it does, which values to use, and what to ask when it runs.</p><Button class="gap-2" onclick={() => openCapabilityPicker()}><Plus size={15} /> Browse capabilities</Button></div>{/if}
-        {#if draft.steps.length > 0}
-        <div class="pk-execution-note mx-6 mt-6 border-l-4 px-4 py-3 text-sm {packageExecutionScope.batchReady ? 'border-emerald-500 bg-emerald-500/5' : 'border-amber-500 bg-amber-500/5'}">
-          <p class="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Execution mode</p>
-          <p class="mt-1 font-medium {packageExecutionScope.batchReady ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}">
-            {packageExecutionScope.title}
-          </p>
-          <p class="mt-1 text-xs text-muted-foreground">{packageExecutionScope.reason}</p>
+      {#if showRunPreview}
+        <div class="pk-run-preview">
+          <p class="pk-eyebrow">TECHNICIAN PREVIEW</p><h2>{draft.name || 'Your package'}</h2><p>{draft.description || 'Your team will see the package description here.'}</p>
+          <div class="pk-preview-notice"><Info size={16} /><span>This is a preview. No actions will run.</span></div>
+          <div class="pk-preview-client"><strong>Choose a client and target</strong><p>Available clients depend on package restrictions, connections, and your team’s permissions.</p></div>
+          {#each normalPublishedPrompts as prompt}
+            {@const meta = previewMeta(prompt.id)}
+            <div class="pk-preview-question">
+              <span>{prompt.section || 'Run details'}</span><strong>{prompt.label}<small>{prompt.required ? 'Required' : 'Optional'}</small></strong>
+              {#if prompt.description}<p>{prompt.description}</p>{/if}
+              <div class="mt-3">
+                {#if meta.entityType}
+                  <div class="pk-preview-placeholder">Choose from available {meta.entityType.replace(/_/g, ' ')} items after selecting a client.</div>
+                {:else if meta.typeHint === 'boolean'}
+                  <label class="flex items-center gap-2 text-sm"><Checkbox checked={Boolean(previewAnswers[prompt.id])} onCheckedChange={(checked) => previewAnswers[prompt.id] = Boolean(checked)} />{prompt.label}</label>
+                {:else if meta.choices?.length && meta.typeHint === 'stringArray'}
+                  <MultiSelect options={meta.choices} selected={Array.isArray(previewAnswers[prompt.id]) ? previewAnswers[prompt.id] as string[] : []} onchange={(values) => previewAnswers[prompt.id] = values} placeholder="Choose one or more…" />
+                {:else if meta.choices?.length}
+                  <SingleSelect options={meta.choices} selected={typeof previewAnswers[prompt.id] === 'string' ? previewAnswers[prompt.id] as string : ''} onchange={(value) => previewAnswers[prompt.id] = value} aria-label={prompt.label} placeholder="Choose…" />
+                {:else}
+                  <Input aria-label={prompt.label} type={meta.sensitive || meta.typeHint === 'password' ? 'password' : meta.typeHint === 'number' ? 'number' : 'text'} value={typeof previewAnswers[prompt.id] === 'string' ? previewAnswers[prompt.id] as string : ''} placeholder={meta.typeHint === 'stringArray' ? 'Enter values separated by commas' : 'Try an answer…'} oninput={(event) => previewAnswers[prompt.id] = (event.target as HTMLInputElement).value} />
+                {/if}
+              </div>
+            </div>
+          {:else}<p class="py-5">No questions configured. Set any action field to “Ask when run” to add one.</p>{/each}
+          <div class="pk-preview-actions"><h3>Actions included</h3>{#each draft.steps as step, index}<p><span>{index + 1}</span>{step.label || capIndex.get(step.capabilityId)?.name || 'Unavailable action'}{#if step.optional}<small>Can be skipped</small>{/if}</p>{/each}</div>
+          {#if failurePublishedPrompts.length}<p class="mt-4 text-sm text-muted-foreground">{failurePublishedPrompts.length} additional questions are configured for failure follow-ups.</p>{/if}
+          <Button variant="outline" onclick={() => showRunPreview = false}>Back to editing</Button>
         </div>
-        {/if}
+      {:else if selected.kind === 'details'}
         {@const subpackageOutputsByPackageId = new Map(
           [...subpackageDetails.entries()].map(([id, detail]) => [
             id,
@@ -1701,7 +1464,7 @@
         {@const boundInputNames = Object.keys(step.inputBindings).sort((a, b) => {
           const aGroup = inputGroupFor(cap, a);
           const bGroup = inputGroupFor(cap, b);
-          return aGroup.order - bGroup.order || aGroup.inputOrder - bGroup.inputOrder || a.localeCompare(b);
+          return aGroup.order - bGroup.order || aGroup.inputOrder - bGroup.inputOrder || Number(!isRequiredInput(cap.inputMeta[a])) - Number(!isRequiredInput(cap.inputMeta[b])) || a.localeCompare(b);
         })}
         {@const availableOptional = Object.entries(cap.inputMeta as Record<string, { required?: boolean; label?: string }>)
           .filter(([name, meta]) => !isRequiredInput(meta) && !(name in step.inputBindings))
@@ -1711,7 +1474,8 @@
           }))}
         {@const readers = workflowReaders(lane, stepIndex)}
         <!-- Step header -->
-        <div class="border-b bg-muted/20 px-6 py-4">
+        <div class="pk-action-editor-heading">
+          <p class="pk-eyebrow">{lane === 'main' ? `ACTION ${stepIndex + 1} OF ${draft.steps.length}` : lane === 'onFailure' ? 'FAILURE FOLLOW-UP' : 'SUCCESS FOLLOW-UP'}</p>
           <div class="flex items-start gap-4">
             <div
               class="flex size-11 shrink-0 items-center justify-center rounded-lg border bg-background font-mono text-sm font-semibold tabular-nums text-muted-foreground"
@@ -1720,7 +1484,7 @@
             </div>
             <div class="min-w-0 flex-1 space-y-1">
               <div class="flex flex-wrap items-center gap-2">
-                <h2 class="truncate text-lg font-semibold">{cap.name}</h2>
+                <h2 class="truncate text-lg font-semibold">{step.label || cap.name}</h2>
                 <span
                   class="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
                 >
@@ -1730,24 +1494,7 @@
               {#if cap.description}
                 <p class="text-sm text-muted-foreground">{cap.description}</p>
               {/if}
-              {#if lane === 'main'}
-                <div class="flex items-center gap-2 pt-1">
-                  <span class="font-mono text-[10px] text-muted-foreground/70">{cap.id}</span>
-                  {#if stepExecutionRole(step, cap).kind === 'target'}
-                    <span class="rounded-sm border border-primary/30 bg-primary/5 px-1.5 py-0.5 font-mono text-[10px] text-primary" title="This step supplies the package's one batch target">
-                      targets · {targetRoleLabel(step, cap)}
-                    </span>
-                  {:else if stepExecutionRole(step, cap).kind === 'context'}
-                    <span class="rounded-sm border border-sky-500/30 bg-sky-500/5 px-1.5 py-0.5 font-mono text-[10px] text-sky-700 dark:text-sky-400" title="This step runs once for every package target">
-                      uses context{contextRoleLabel(step, cap)}
-                  </span>
-                  {:else if stepExecutionRole(step, cap).kind === 'single_run'}
-                    <span class="rounded-sm border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 font-mono text-[10px] text-amber-700 dark:text-amber-400" title="This step prevents batch execution">
-                      single run only
-                    </span>
-                  {/if}
-                </div>
-              {/if}
+              <details class="pk-action-naming"><summary>Rename this action</summary>
               <input
                 class="min-w-0 w-full bg-transparent pt-1 text-sm text-muted-foreground outline-none placeholder:text-muted-foreground/50 focus:text-foreground"
                 aria-label="Step name"
@@ -1756,6 +1503,7 @@
                 oninput={(event) =>
                   setWorkflowStepLabel(lane, stepIndex, (event.currentTarget as HTMLInputElement).value)}
               />
+              </details>
             </div>
             <div class="flex shrink-0 items-center gap-1">
               {#if lane === 'main'}
@@ -1824,10 +1572,10 @@
         </div>
 
         <!-- Inputs -->
-        <div class="mx-auto w-full max-w-3xl space-y-6 p-6">
+        <div class="pk-action-form">
           <div class="flex items-baseline justify-between">
             <h3 class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-              Inputs
+              Set up this action
             </h3>
             <span class="text-xs text-muted-foreground">
               {boundInputNames.length} configured
@@ -1836,7 +1584,7 @@
 
           {#if boundInputNames.length === 0}
             <p class="text-sm text-muted-foreground">
-              This capability takes no inputs. It's ready to run as-is.
+              This action needs no additional settings. Add another action or save your package.
             </p>
           {/if}
 
@@ -1846,7 +1594,7 @@
               {#if meta}
                 {@const group = inputGroupFor(cap, inputName)}
                 {@const previousGroup = inputIndex > 0 ? inputGroupFor(cap, boundInputNames[inputIndex - 1]!) : null}
-                {#if !previousGroup || previousGroup.id !== group.id}
+                {#if (!previousGroup || previousGroup.id !== group.id) && (group.id !== 'general' || group.description)}
                   <div class="pt-3 first:pt-0">
                     <h4 class="text-sm font-semibold">{group.label}</h4>
                     {#if group.description}
@@ -1860,20 +1608,12 @@
                 {@const currentSource = sourceOf(binding)}
                 {@const allowed = allowedSourcesFor(meta, lane === 'onFailure')}
                 <div
-                  class="rounded-lg border border-l-[3px] bg-card {sourceBorderClass(
-                    currentSource
-                  )}"
+                  class="pk-config-field"
                 >
-                  <div class="flex items-start justify-between gap-3 border-b px-4 py-3">
+                  <div class="pk-field-heading">
                     <div class="min-w-0 space-y-0.5">
                       <div class="flex flex-wrap items-center gap-2">
                         <span class="text-sm font-medium">{label}</span>
-                        <span
-                          class="rounded-sm border bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
-                          title="Field type"
-                        >
-                          {inputTypeLabel(meta)}
-                        </span>
                         {#if !optional}
                           <span
                             class="text-[10px] font-semibold uppercase tracking-wider text-rose-600 dark:text-rose-500"
@@ -1909,40 +1649,20 @@
                     {/if}
                   </div>
 
-                  <!-- Source picker -->
-                  <div
-                    class="flex flex-wrap gap-1 border-b bg-muted/30 p-1.5"
-                  >
-                    {#each allowed as src (src)}
-                      {@const isActive = currentSource === src}
-                      <button
-                        type="button"
-                        onclick={() => changeSource(stepIndex, inputName, src)}
-                        class="group relative flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-all {isActive
-                          ? 'bg-background text-foreground shadow-sm ring-1 ring-border'
-                          : 'text-muted-foreground hover:bg-background/60 hover:text-foreground'}"
-                        title={sourceHint(src, meta)}
-                      >
-                        {#if src === 'fixed'}
-                          <Circle class="size-3 {isActive ? sourceIconColor('fixed') : ''}" />
-                        {:else if src === 'runtime'}
-                          <Keyboard class="size-3 {isActive ? sourceIconColor('runtime') : ''}" />
-                        {:else if src === 'generated'}
-                          <Sparkles class="size-3 {isActive ? sourceIconColor('generated') : ''}" />
-                        {:else if src === 'fact'}
-                          <Database class="size-3 {isActive ? sourceIconColor('fact') : ''}" />
-                        {:else if src === 'row'}
-                          <Pin class="size-3 {isActive ? sourceIconColor('row') : ''}" />
-                        {:else}
-                          <Link2 class="size-3 {isActive ? sourceIconColor('wire') : ''}" />
-                        {/if}
-                        {sourceLabel(src)}
-                      </button>
-                    {/each}
+                  <div class="pk-field-source">
+                    <span>How should this be filled in?</span>
+                    <SingleSelect
+                      options={allowed.map((source) => ({ value: source, label: sourceLabel(source), subLabel: sourceHint(source, meta) }))}
+                      selected={currentSource}
+                      allowClear={false}
+                      disableSort
+                      aria-label={`Value source for ${label}`}
+                      onchange={(value) => changeSource(stepIndex, inputName, value as Source)}
+                    />
                   </div>
 
                   <!-- Editor for current source -->
-                  <div class="space-y-2 p-4">
+                  <div class="pk-field-value space-y-2">
                     <p class="text-xs text-muted-foreground">
                       {sourceHint(currentSource, meta)}
                     </p>
@@ -1984,7 +1704,7 @@
                             checked={Boolean(binding.value)}
                             onCheckedChange={(c) => setBinding(stepIndex, inputName, { kind: 'literal', value: Boolean(c) })}
                           />
-                          <span class="text-muted-foreground">{binding.value ? 'true' : 'false'}</span>
+                          <span class="text-muted-foreground">{binding.value ? 'Yes' : 'No'}</span>
                         </label>
                       {:else if meta.typeHint === 'stringArray' && meta.choices && meta.choices.length > 0}
                         <MultiSelect
@@ -2017,40 +1737,20 @@
                         />
                       {/if}
                     {:else if binding?.kind === 'runtime'}
-                      <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                        {#if meta.entityType}
-                          A picker for <span class="font-mono">{meta.entityType.replace(/_/g, ' ')}</span> will appear when this runs.
-                        {:else if meta.typeHint === 'password'}
-                          A password field will appear. Operators can generate a strong random password or set a specific one.
-                        {:else}
-                          A text input will appear when this runs.
-                        {/if}
-                      </div>
-                      <button
-                        type="button"
-                        class="text-xs text-muted-foreground hover:text-foreground"
-                        onclick={() => (showPromptKeyEditor[`${selectedKey}:${inputName}`] = !showPromptKeyEditor[`${selectedKey}:${inputName}`])}
-                      >
-                        {showPromptKeyEditor[`${selectedKey}:${inputName}`] ? 'Hide' : 'Show'} prompt key
-                        <span class="ml-1 font-mono opacity-60">({binding.promptKey})</span>
-                      </button>
-                      {#if showPromptKeyEditor[`${selectedKey}:${inputName}`]}
-                        <div class="grid gap-2 pt-1 sm:grid-cols-[1fr_auto]">
-                          <Input
-                            placeholder="Prompt key"
-                            value={binding.promptKey}
-                            oninput={(e) => setBinding(stepIndex, inputName, { ...binding, promptKey: (e.target as HTMLInputElement).value })}
-                          />
-                          <label class="flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
-                            <Checkbox
-                              checked={binding.required}
-                              onCheckedChange={(c) => setBinding(stepIndex, inputName, { ...binding, required: Boolean(c) })}
-                            />
-                            Required at run time
-                          </label>
+                      {@const prompt = draft.prompts.find((p) => p.id === binding.promptKey)}
+                      {#if prompt}
+                        <div class="pk-inline-question">
+                          <label for={`question-${selectedKey}-${inputName}`}>Question your team will see</label>
+                          <Input id={`question-${selectedKey}-${inputName}`} value={prompt.label} oninput={(event) => updatePrompt(prompt.id, { label: (event.target as HTMLInputElement).value })} />
+                          <label for={`question-help-${selectedKey}-${inputName}`}>Help text <span>optional</span></label>
+                          <Input id={`question-help-${selectedKey}-${inputName}`} placeholder="Help your team make the right choice" value={prompt.description ?? ''} oninput={(event) => updatePrompt(prompt.id, { description: (event.target as HTMLInputElement).value })} />
+                          <label class="pk-question-required"><Checkbox checked={prompt.required} onCheckedChange={(checked) => setPromptRequired(prompt.id, Boolean(checked))} /> Require an answer before running</label>
                         </div>
-                        <p class="text-[11px] text-muted-foreground">Steps that share a prompt key answer the same question once.</p>
                       {/if}
+                      <details class="pk-field-advanced"><summary>Advanced · Question identifier</summary>
+                        <Input aria-label={`Question identifier for ${label}`} value={binding.promptKey} oninput={(e) => setBinding(stepIndex, inputName, { ...binding, promptKey: (e.target as HTMLInputElement).value })} />
+                        <p>Actions with the same identifier share one answer.</p>
+                      </details>
                     {:else if binding?.kind === 'entity' && binding.source === 'picker'}
                       <div class="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">A picker will appear when this runs.</div>
                     {:else if binding?.kind === 'entity' && binding.source === 'row-context'}
@@ -2208,7 +1908,7 @@
                 <div class="space-y-0.5">
                   <div class="text-sm font-medium">Optional step</div>
                   <p class="text-xs text-muted-foreground">
-                    When optional, the operator can choose to skip this step at run time.
+                    Let your team decide whether to include this action when starting a run.
                   </p>
                 </div>
                 <label class="flex items-center gap-2 cursor-pointer">
@@ -2225,7 +1925,7 @@
               <div class="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-500">
                 <AlertTriangle class="size-3.5 shrink-0 mt-0.5" />
                 <span>
-                  This step's outputs are wired to later steps — it cannot be marked optional until those wires are removed.
+                  Later actions need results from this action, so it must run. Change those fields before making this action optional.
                 </span>
               </div>
             </div>
@@ -2235,7 +1935,7 @@
                 <div class="space-y-0.5">
                   <div class="text-sm font-medium">Optional step</div>
                   <p class="text-xs text-muted-foreground">
-                    When optional, the operator can choose to skip this step at run time.
+                    Let your team decide whether to include this action when starting a run.
                   </p>
                 </div>
                 <label class="flex items-center gap-2 cursor-pointer">
@@ -2253,10 +1953,8 @@
 
           <!-- Outputs -->
           {#if Object.keys(cap.outputMeta).length > 0}
-            <div class="space-y-3 pt-2">
-              <h3 class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                Outputs
-              </h3>
+            <details class="pk-result-details">
+<summary>Results available to later actions <span>{Object.keys(cap.outputMeta).length}</span></summary>
               <div class="overflow-hidden rounded-lg border">
                 <table class="w-full text-sm">
                   <tbody class="divide-y">
@@ -2270,7 +1968,7 @@
                         </td>
                         <td class="px-3 py-2 text-xs text-muted-foreground">
                           {#if usedBy.length === 0}
-                            <span class="italic">Not wired downstream</span>
+                            <span class="italic">Available for another action</span>
                           {:else}
                             <div class="flex flex-col gap-0.5">
                               {#each usedBy as u (u.toStep + ':' + u.toInput)}
@@ -2303,7 +2001,7 @@
                   </tbody>
                 </table>
               </div>
-            </div>
+            </details>
           {/if}
         </div>
       {:else if selected.kind === 'reaction' && selectedReaction && selectedCap}
@@ -2465,7 +2163,7 @@
                     {:else if meta.typeHint === 'boolean'}
                       <label class="flex items-center gap-2 text-sm">
                         <Checkbox checked={Boolean(binding.value)} onCheckedChange={(c) => setReactionBinding(inputName, { kind: 'literal', value: Boolean(c) })} />
-                        <span class="text-muted-foreground">{binding.value ? 'true' : 'false'}</span>
+                        <span class="text-muted-foreground">{binding.value ? 'Yes' : 'No'}</span>
                       </label>
                     {:else if meta.typeHint === 'stringArray' && meta.choices && meta.choices.length > 0}
                       <MultiSelect

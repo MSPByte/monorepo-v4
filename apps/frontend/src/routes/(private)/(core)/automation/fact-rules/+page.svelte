@@ -1,4 +1,6 @@
 <script lang="ts">
+  import '../workspace.css';
+  import type { SignalStripApi } from '$lib/components/data-table/types';
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
   import { useQueryClient } from '@tanstack/svelte-query';
@@ -21,7 +23,7 @@
   } from '$lib/components/data-table/column-defs';
   import Button from '$lib/components/ui/button/button.svelte';
   import { toUserMessage } from '$lib/utils/errors';
-  import { Plus, Trash2 } from '@lucide/svelte';
+  import { Plus, Trash2, Database } from '@lucide/svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
@@ -40,19 +42,36 @@
     [key: string]: unknown;
   };
 
+  let ruleSummary = $state<{ total: number; enabled: number; disabled: number } | null>(null);
+  const views = [
+    {
+      id: 'enabled',
+      label: 'Enabled',
+      filters: [{ field: 'enabled', operator: 'eq' as const, value: true }],
+    },
+    {
+      id: 'disabled',
+      label: 'Disabled',
+      filters: [{ field: 'enabled', operator: 'eq' as const, value: false }],
+    },
+  ];
   let refreshKey = $state(0);
   let selectedIds = $state<string[]>([]);
   let deleteDialogOpen = $state(false);
 
   const columns: DataTableColumn<FactRuleRow>[] = [
-    textColumn<FactRuleRow>('name', 'Name', 'Search fact rules'),
+    textColumn<FactRuleRow>('name', 'Rule', 'Search fact rules', undefined, {
+      cell: ruleIdentity,
+      cellComponent: undefined,
+      width: '300px',
+    }),
     boolBadgeColumn<FactRuleRow>('enabled', 'Status', {
       trueLabel: 'Enabled',
       falseLabel: 'Disabled',
     }),
-    textColumn<FactRuleRow>('dataSource', 'Data Source'),
-    textColumn<FactRuleRow>('factKey', 'Fact Key', 'Search fact keys'),
-    numberColumn<FactRuleRow>('priority', 'Priority'),
+    textColumn<FactRuleRow>('dataSource', 'Read from'),
+    textColumn<FactRuleRow>('factKey', 'Site field', 'Search site fields', { pretty: true }),
+    { ...numberColumn<FactRuleRow>('priority', 'Priority'), defaultHidden: true },
     relativeDateColumn<FactRuleRow>('updatedAt', 'Updated'),
   ];
 
@@ -83,6 +102,11 @@
     input: PaginationInput
   ): Promise<{ rows: FactRuleRow[]; total: number }> {
     const rows = (await trpc.factRules.list.query()) as FactRuleRow[];
+    ruleSummary = {
+      total: rows.length,
+      enabled: rows.filter((r) => r.enabled).length,
+      disabled: rows.filter((r) => !r.enabled).length,
+    };
     const query = input.globalSearch.trim().toLowerCase();
     let filtered = query
       ? rows.filter(
@@ -124,6 +148,33 @@
   }
 </script>
 
+{#snippet ruleIdentity({ row }: { row: FactRuleRow })}<div class="au-identity">
+    <span class="au-identity-icon"><Database size={17} /></span>
+    <div>
+      <a href={`/automation/fact-rules/${row.id}`} onclick={(event) => event.stopPropagation()}
+        >{row.name}</a
+      >{#if row.description}<p>{row.description}</p>{/if}
+    </div>
+  </div>{/snippet}
+{#snippet ruleSignals(api: SignalStripApi)}<div class="au-signal-strip">
+    <button
+      type="button"
+      aria-pressed={!api.activeViewId}
+      onclick={() => {
+        api.clearFilters();
+        api.setView();
+      }}><strong>{ruleSummary?.total ?? '—'}</strong>All</button
+    >{#each [{ label: 'Enabled', value: true, count: ruleSummary?.enabled, tone: 'au-success' }, { label: 'Disabled', value: false, count: ruleSummary?.disabled, tone: '' }] as item}<button
+        type="button"
+        class={item.tone}
+        aria-pressed={api.activeViewId === (item.value ? 'enabled' : 'disabled')}
+        onclick={() => {
+          api.clearFilters();
+          api.setView(item.value ? 'enabled' : 'disabled');
+        }}><strong>{item.count ?? '—'}</strong>{item.label}</button
+      >{/each}<span>{ruleSummary?.total ?? '—'} rules · Applied after data syncs</span>
+  </div>{/snippet}
+
 <AlertDialog.Root bind:open={deleteDialogOpen}>
   <AlertDialog.Content>
     <AlertDialog.Header>
@@ -144,12 +195,13 @@
   </AlertDialog.Content>
 </AlertDialog.Root>
 
-<div class="flex size-full flex-col overflow-hidden">
-  <div class="flex items-center justify-between border-b px-6 py-3">
+<div class="au-page">
+  <header class="au-heading">
     <div>
-      <h1 class="text-base font-semibold">Fact Rules</h1>
+      <p class="au-eyebrow">Automation / Site profiles</p>
+      <h1>Fact rules</h1>
       <p class="text-xs text-muted-foreground">
-        Automatically populate site facts from vendor data after each sync.
+        Keep client profiles up to date using information from your connected tools.
       </p>
     </div>
     <div class="flex items-center gap-2">
@@ -167,14 +219,27 @@
       {#if canWrite}
         <Button size="sm" class="gap-2" onclick={() => goto('/automation/fact-rules/builder')}>
           <Plus class="size-4" />
-          New Rule
+          Create rule
         </Button>
       {/if}
     </div>
-  </div>
+  </header>
+  <details class="au-guide">
+    <summary>How fact rules keep profiles current</summary>
+    <p>
+      Read your tool’s data, choose which records match, then save the result to a site profile
+      field after each sync.
+    </p>
+  </details>
 
-  <div class="flex size-full p-4">
+  <div class="au-table">
     <DataTable
+      {views}
+      enableViewSelector={false}
+      signalStrip={ruleSignals}
+      enableGlobalSearch
+      enableFilters
+      enableExport={false}
       {columns}
       {fetchData}
       {refreshKey}

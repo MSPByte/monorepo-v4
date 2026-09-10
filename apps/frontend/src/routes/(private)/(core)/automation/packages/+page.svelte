@@ -1,5 +1,7 @@
 <script lang="ts">
   import './workspace.css';
+  import '../workspace.css';
+  import type { SignalStripApi } from '$lib/components/data-table/types';
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
   import { useQueryClient } from '@tanstack/svelte-query';
@@ -148,10 +150,11 @@
     ),
     numberColumn<PackageRow>('stepCount', 'Steps'),
     { ...numberColumn<PackageRow>('version', 'Version'), defaultHidden: true },
-    textColumn<PackageRow>('vendors', 'Vendors', 'Filter vendor', { pretty: true }),
+    textColumn<PackageRow>('vendors', 'Connected tools', 'Filter vendor', { pretty: true }),
     { ...textColumn<PackageRow>('categories', 'Categories', 'Filter category', { pretty: true }), defaultHidden: true },
-    textColumn<PackageRow>('scope', 'Scope', 'Search scope'),
+    textColumn<PackageRow>('scope', 'Available to', 'Search scope'),
     relativeDateColumn<PackageRow>('updatedAt', 'Updated'),
+    {key:'run',title:'',sortable:false,hideable:false,width:'130px',cell:packageRunAction},
     {
       key: 'actions',
       title: '',
@@ -252,7 +255,7 @@
       const groups = ((p.allowedSiteGroups as string[] | null) ?? []).length;
       const links = ((p.allowedIntegrationLinks as string[] | null) ?? []).length;
       let scope: string;
-      if (sites === 0 && groups === 0 && links === 0) scope = 'Global';
+      if (sites === 0 && groups === 0 && links === 0) scope = 'All clients';
       else if (groups === 0 && links === 0) scope = `${sites} site${sites === 1 ? '' : 's'}`;
       else if (sites === 0 && links === 0) scope = `${groups} group${groups === 1 ? '' : 's'}`;
       else if (sites === 0 && groups === 0) scope = `${links} tenant${links === 1 ? '' : 's'}`;
@@ -398,13 +401,15 @@
   <div class="pk-identity"><span class="pk-package-icon"><Layers size={18} strokeWidth={1.6} /></span><div><a href={'/automation/packages/' + row.id} onclick={(event) => event.stopPropagation()}>{row.name}</a><p title={row.description}>{row.description || 'No description added'}</p>{#if row.stepPreview}<span class="pk-step-preview" title={row.stepPreview}>{row.stepPreview}</span>{/if}</div></div>
 {/snippet}
 
-<div class="pk-workspace pk-library">
-  <header class="pk-page-heading"><div><p class="pk-eyebrow">Automation / Package library</p><h1>Good work, on repeat.</h1><p>Turn the tasks your team repeats into reliable, reusable workflows.</p></div>{#if canWrite}<Button onclick={() => goto('/automation/packages/new')} class="gap-2"><Plus size={16} /> Create package</Button>{/if}</header>
-  <div class="pk-library-overview">
-    <div class="pk-library-intro"><span class="pk-intro-icon"><Workflow size={23} /></span><div><strong>Build once. Put it to work.</strong><p>Combine capabilities, choose your targets, and run on demand or on a schedule.</p></div><a href="/automation/runs">View run history <ArrowRight size={14} /></a></div>
-    <div class="pk-metrics" aria-label="Package counts"><div><strong>{packageSummary?.active ?? '—'}</strong><span><i class="pk-dot active"></i>Active</span></div><div><strong>{packageSummary?.draft ?? '—'}</strong><span><i class="pk-dot draft"></i>Drafts</span></div><div><strong>{packageSummary?.archived ?? '—'}</strong><span><i class="pk-dot"></i>Archived</span></div></div>
+{#snippet packageRunAction({row}: {row:PackageRow})}
+  <div onclick={(event)=>event.stopPropagation()} role="none">
+    {#if row.status==='active' && canRun}<Button variant="outline" size="sm" class="gap-2" onclick={()=>{runDialogPackageId=row.id;runDialogOpen=true;}}><Play size={13} /> Run</Button>
+    {:else}<a class="text-xs text-primary" href={`/automation/packages/${row.id}`}>{row.status==='draft' && canWrite ? 'Continue building' : 'View package'}</a>{/if}
   </div>
-  <div class="pk-library-label"><h2>Your packages <span>{packageSummary?.total ?? '—'}</span></h2><p><ShieldCheck size={14} /> Only active packages can run or be scheduled.</p></div>
+{/snippet}
+{#snippet packageSignals(api:SignalStripApi)}<div class="au-signal-strip"><button type="button" aria-pressed={!api.activeViewId} onclick={()=>{api.clearFilters();api.setView();}}><strong>{packageSummary?.total ?? '—'}</strong>All</button>{#each [{label:'Ready to run',value:'active',count:packageSummary?.active,tone:'au-success'},{label:'Drafts',value:'draft',count:packageSummary?.draft,tone:'au-attention'},{label:'Archived',value:'archived',count:packageSummary?.archived,tone:''}] as item}<button type="button" class={item.tone} aria-pressed={api.activeViewId===(item.value)} onclick={()=>{api.clearFilters();api.setView(item.value);}}><strong>{item.count ?? '—'}</strong>{item.label}</button>{/each}<span>{packageSummary?.total ?? '—'} packages</span></div>{/snippet}
+<div class="pk-workspace au-page">
+  <header class="au-heading"><div><p class="au-eyebrow">Automation / Package library</p><h1>Packages</h1><p>Build repeatable workflows for your team. Run them when needed or schedule them for your clients.</p></div>{#if canWrite}<Button onclick={()=>goto('/automation/packages/new')} class="gap-2"><Plus size={15} /> Create package</Button>{/if}</header>
   <RunPackageDialog
     bind:open={runDialogOpen}
     onOpenChange={(o) => (runDialogOpen = o)}
@@ -420,9 +425,11 @@
     onScheduled={() => void queryClient.invalidateQueries({ queryKey: ['packageRuns.schedules'] })}
   />
 
-  <div class="pk-table">
+  <div class="au-table">
   <DataTable
     {views}
+    enableViewSelector={false}
+    signalStrip={packageSignals}
     {columns}
     {fetchData}
     {refreshKey}

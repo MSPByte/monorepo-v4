@@ -1,9 +1,11 @@
 <script lang="ts">
+  import '../../workspace.css';
+  import { authStore } from '$lib/stores/auth.store.svelte';
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
-  import { ArrowLeft, Plus, Save, Trash2 } from '@lucide/svelte';
+  import { ArrowLeft, ArrowUp, ArrowDown, Plus, Save, Trash2 } from '@lucide/svelte';
   import { toast } from 'svelte-sonner';
   import { showErrorToast } from '$lib/utils/errors';
   import type { AppRouter } from '@mspbyte/trpc';
@@ -32,6 +34,7 @@
   type FactCase = {
     id: string;
     conditions: ConditionDraft[];
+    logic: 'AND' | 'OR';
     output: string;
   };
 
@@ -43,6 +46,7 @@
   const queryClient = useQueryClient();
   const ruleId = $derived(page.url.searchParams.get('id') ?? '');
   const editing = $derived(Boolean(ruleId));
+  const canWrite = $derived(authStore.isAllowed('Policies.Write'));
 
   const ruleQuery = createQuery(() => ({
     queryKey: ['factRules.byId', ruleId],
@@ -83,6 +87,11 @@
   let defaultOutput = $state('');
 
   // global pre-filter
+  let filterLogic = $state<'AND' | 'OR'>('AND');
+  const logicOptions = [
+    { value: 'AND', label: 'Match all conditions' },
+    { value: 'OR', label: 'Match any condition' },
+  ];
   let filterConditions = $state<ConditionDraft[]>([]);
 
   const selectedTable = $derived.by<PolicyTableShape>(() => {
@@ -94,11 +103,11 @@
   const tableOptions = PolicyTableShapes.map((s) => ({ value: s.table, label: s.label }));
 
   const aggregateOptions = [
-    { value: 'exists', label: 'Exists — true/false if any rows match' },
-    { value: 'count', label: 'Count — number of matching rows' },
-    { value: 'value', label: 'Value — field value from first matching row' },
-    { value: 'collect', label: 'Collect — array of unique field values' },
-    { value: 'conditional', label: 'Conditional — first matching case wins' },
+    { value: 'exists', label: 'Check whether a match exists' },
+    { value: 'count', label: 'Count matching records' },
+    { value: 'value', label: 'Use a field from the first match' },
+    { value: 'collect', label: 'Collect unique field values' },
+    { value: 'conditional', label: 'Choose a value using ordered cases' },
   ];
 
   const transformOptions = [
@@ -115,18 +124,21 @@
   const catalogFactKeyOptions = $derived.by(() => {
     const catalog = catalogQuery.data;
     if (!catalog) return [];
-    const catalogFields = (catalog as { fields?: { key: string; label: string; valueTypeLabel?: string }[] }).fields ?? [];
+    const catalogFields =
+      (catalog as { fields?: { key: string; label: string; valueTypeLabel?: string }[] }).fields ??
+      [];
     return catalogFields.map((f) => ({
       value: f.key,
-      label: `${f.label} (${f.key})${f.valueTypeLabel ? ` · ${f.valueTypeLabel}` : ''}`,
+      label: f.label,
+      subLabel: f.valueTypeLabel ?? f.key,
     }));
   });
 
   const effectiveFactKey = $derived(factKey === '__custom__' ? customFactKey : factKey);
 
   const booleanOptions = [
-    { value: 'true', label: 'True' },
-    { value: 'false', label: 'False' },
+    { value: 'true', label: 'Yes' },
+    { value: 'false', label: 'No' },
   ];
 
   function newCondition(): ConditionDraft {
@@ -134,7 +146,7 @@
   }
 
   function newCase(): FactCase {
-    return { id: `fc-${nextId++}`, conditions: [], output: '' };
+    return { id: `fc-${nextId++}`, conditions: [], logic: 'AND', output: '' };
   }
 
   function flattenFields(shape: Record<string, FieldDefinition>, parentLabel = ''): FlatField[] {
@@ -214,19 +226,26 @@
     );
   }
 
-  function updateCaseCondition(caseId: string, conditionId: string, patch: Partial<ConditionDraft>) {
+  function updateCaseCondition(
+    caseId: string,
+    conditionId: string,
+    patch: Partial<ConditionDraft>
+  ) {
     cases = cases.map((c) =>
       c.id === caseId
-        ? { ...c, conditions: c.conditions.map((cc) => (cc.id === conditionId ? { ...cc, ...patch } : cc)) }
+        ? {
+            ...c,
+            conditions: c.conditions.map((cc) =>
+              cc.id === conditionId ? { ...cc, ...patch } : cc
+            ),
+          }
         : c
     );
   }
 
   function removeCaseCondition(caseId: string, conditionId: string) {
     cases = cases.map((c) =>
-      c.id === caseId
-        ? { ...c, conditions: c.conditions.filter((cc) => cc.id !== conditionId) }
-        : c
+      c.id === caseId ? { ...c, conditions: c.conditions.filter((cc) => cc.id !== conditionId) } : c
     );
   }
 
@@ -266,16 +285,16 @@
     return { field: f.ingestPath, op: condition.op, value: coerceValue(condition.value, f) };
   }
 
-  function filterFrom(conditions: ConditionDraft[]) {
+  function filterFrom(conditions: ConditionDraft[], logic: 'AND' | 'OR' = 'AND') {
     const serialized = conditions.map(serializeCondition).filter((c) => c !== null);
-    return serialized.length ? { logic: 'AND', conditions: serialized } : undefined;
+    return serialized.length ? { logic, conditions: serialized } : undefined;
   }
 
   function buildDefinition() {
     const base: Record<string, unknown> = {
       table: selectedTable.table,
       aggregate,
-      filter: filterFrom(filterConditions),
+      filter: filterFrom(filterConditions, filterLogic),
     };
 
     if (aggregate === 'exists') {
@@ -286,7 +305,7 @@
       if (transform !== 'none') base.transform = transform;
     } else if (aggregate === 'conditional') {
       const serializedCases: unknown[] = cases.map((c) => ({
-        filter: filterFrom(c.conditions) ?? { logic: 'AND', conditions: [] },
+        filter: filterFrom(c.conditions, c.logic) ?? { logic: 'AND', conditions: [] },
         output: coerceOutputValue(c.output),
       }));
       if (defaultOutput.trim()) {
@@ -319,14 +338,19 @@
     if (!rule || loadedRuleId === rule.id) return;
 
     const def = isRecord(rule.definition) ? rule.definition : {};
+    cases = [];
+    defaultOutput = '';
+    filterLogic = isRecord(def.filter) && def.filter.logic === 'OR' ? 'OR' : 'AND';
     name = rule.name;
     description = rule.description ?? '';
     enabled = rule.enabled;
     priority = String(rule.priority);
     table = typeof def.table === 'string' ? def.table : table;
-    aggregate = (['exists', 'count', 'value', 'collect', 'conditional'].includes(String(def.aggregate))
-      ? def.aggregate
-      : 'exists') as typeof aggregate;
+    aggregate = (
+      ['exists', 'count', 'value', 'collect', 'conditional'].includes(String(def.aggregate))
+        ? def.aggregate
+        : 'exists'
+    ) as typeof aggregate;
 
     // exists fields
     outputTrue = def.outputTrue != null ? String(def.outputTrue) : '';
@@ -350,7 +374,12 @@
                   .map(conditionFromDef)
                   .filter((x): x is ConditionDraft => x !== null)
               : [];
-          loadedCases.push({ id: `fc-${nextId++}`, conditions, output: c.output != null ? String(c.output) : '' });
+          loadedCases.push({
+            id: `fc-${nextId++}`,
+            conditions,
+            logic: isRecord(c.filter) && c.filter.logic === 'OR' ? 'OR' : 'AND',
+            output: c.output != null ? String(c.output) : '',
+          });
         }
       }
       cases = loadedCases;
@@ -375,10 +404,66 @@
     loadedRuleId = rule.id;
   });
 
+  function moveCase(index: number, offset: number) {
+    const next = [...cases];
+    const target = index + offset;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target]!, next[index]!];
+    cases = next;
+  }
+  const setupIssues = $derived.by(() => {
+    const issues: string[] = [];
+    if (!name.trim()) issues.push('Give this rule a name.');
+    if (!effectiveFactKey.trim()) issues.push('Choose the site profile field to update.');
+    if (!Number.isInteger(Number(priority))) issues.push('Enter a whole number for priority.');
+    if ((aggregate === 'value' || aggregate === 'collect') && !fieldFor(valueField))
+      issues.push('Choose the field to read from each match.');
+    if (aggregate === 'conditional' && !cases.length) issues.push('Add at least one case.');
+    const groups = [
+      { label: 'Record filter', conditions: filterConditions },
+      ...(aggregate === 'conditional'
+        ? cases.map((c, i) => ({ label: `Case ${i + 1}`, conditions: c.conditions }))
+        : []),
+    ];
+    for (const group of groups)
+      for (const condition of group.conditions) {
+        const field = fieldFor(condition.field);
+        if (!field) {
+          issues.push(`${group.label}: choose an available field.`);
+          continue;
+        }
+        if (!operatorOptions(field).some((o) => o.value === condition.op))
+          issues.push(`${group.label}: choose a supported comparison.`);
+        if (opNeedsValue(condition.op)) {
+          if (isSetOp(condition.op)) {
+            if (!(condition.values ?? []).some((v) => v.trim()))
+              issues.push(`${group.label}: enter at least one comparison value.`);
+          } else if (
+            condition.value === '' ||
+            (field.field.type === 'number' && !Number.isFinite(Number(condition.value)))
+          ) {
+            issues.push(`${group.label}: enter a valid comparison value.`);
+          }
+        }
+      }
+    return issues;
+  });
+
   async function save() {
+    if (!canWrite || saving) return;
+    if (setupIssues.length) {
+      toast.error(setupIssues[0]);
+      return;
+    }
     const key = effectiveFactKey.trim();
-    if (!name.trim()) { toast.error('Name is required'); return; }
-    if (!key) { toast.error('Fact key is required'); return; }
+    if (!name.trim()) {
+      toast.error('Name is required');
+      return;
+    }
+    if (!key) {
+      toast.error('Fact key is required');
+      return;
+    }
     if ((aggregate === 'value' || aggregate === 'collect') && !valueField) {
       toast.error('Value field is required for this aggregate type');
       return;
@@ -422,11 +507,12 @@
 )}
   {@const selectedField = fieldFor(condition.field)}
   {@const ops = operatorOptions(selectedField)}
-  <div class="grid gap-2 rounded-lg border bg-card p-3 md:grid-cols-[minmax(0,1fr)_190px_minmax(0,1fr)_36px]">
+  <div class="au-condition-editor">
     <SingleSelect
       options={fieldOptions}
       selected={condition.field}
-      placeholder="Select field"
+      aria-label="Condition field"
+      placeholder="Choose a field"
       onchange={(field) => {
         const f = fieldFor(field);
         onUpdate({ field, op: operatorOptions(f)[0]?.value ?? 'eq', value: '' });
@@ -434,12 +520,21 @@
     />
     <SingleSelect
       options={ops}
+      aria-label="Comparison"
       selected={condition.op}
       disabled={!selectedField}
       onchange={(op) => onUpdate({ op, value: '', values: [] })}
     />
     {#if selectedField && opNeedsValue(condition.op)}
-      {#if selectedField.field.type === 'boolean'}
+      {#if isSetOp(condition.op)}
+        <Input
+          aria-label="Comparison values"
+          value={(condition.values ?? []).join(', ')}
+          placeholder="Values separated by commas"
+          oninput={(e) =>
+            onUpdate({ values: e.currentTarget.value.split(',').map((v) => v.trim()) })}
+        />
+      {:else if selectedField.field.type === 'boolean'}
         <SingleSelect
           options={booleanOptions}
           selected={condition.value}
@@ -464,251 +559,356 @@
     {:else}
       <div></div>
     {/if}
-    <Button variant="ghost" size="icon" onclick={onRemove}>
+    <Button variant="ghost" size="icon" aria-label="Remove condition" onclick={onRemove}>
       <Trash2 class="size-4" />
     </Button>
   </div>
 {/snippet}
 
-<div class="flex size-full flex-col overflow-hidden">
-  <!-- Header -->
-  <header class="border-b bg-background">
-    <div class="flex flex-wrap items-center gap-3 px-6 py-3">
-      <button
-        type="button"
-        class="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-        onclick={() => goto(editing ? `/automation/fact-rules/${ruleId}` : '/automation/fact-rules')}
-      >
-        <ArrowLeft class="size-3.5" />
-        {editing ? 'Back to rule' : 'All fact rules'}
-      </button>
-      <div class="mx-2 h-5 w-px bg-border"></div>
-      <Input
-        placeholder="Rule name"
-        bind:value={name}
-        class="h-9 w-full max-w-sm text-base font-semibold"
-      />
-      <div class="ml-auto flex items-center gap-3">
-        <label class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground select-none">
-          <Switch bind:checked={enabled} />
-          {enabled ? 'Enabled' : 'Disabled'}
-        </label>
-        <Button onclick={save} disabled={saving || (editing && ruleQuery.isLoading)} class="gap-2">
-          <Save class="size-4" />
-          {editing ? 'Save Rule' : 'Create Rule'}
-        </Button>
+{#if editing && ruleQuery.isLoading}
+  <div class="au-page"><p class="text-sm text-muted-foreground">Loading rule…</p></div>
+{:else if editing && (ruleQuery.error || !ruleQuery.data)}
+  <div class="au-page">
+    <div class="au-error" role="alert">
+      <h2>We couldn’t load this rule</h2>
+      <p>Return to fact rules, or try loading it again.</p>
+      <div class="flex gap-2">
+        <Button variant="outline" href="/automation/fact-rules">All fact rules</Button><Button
+          onclick={() => ruleQuery.refetch()}>Try again</Button
+        >
       </div>
     </div>
-  </header>
-
-  <!-- Two-pane body -->
-  <div class="grid min-h-0 flex-1 grid-cols-[360px_1fr]">
-
-    <!-- Left: Identity + Output -->
-    <aside class="flex min-h-0 flex-col overflow-y-auto border-r">
-      <div class="border-b px-4 py-3 bg-muted/30">
-        <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Identity</p>
-      </div>
-      <div class="space-y-4 p-4">
-        <div class="space-y-1.5">
-          <label class="text-sm font-medium">Description</label>
-          <Textarea bind:value={description} placeholder="What does this rule populate?" rows={3} />
-        </div>
-        <div class="space-y-1.5">
-          <label class="text-sm font-medium">Priority</label>
-          <Input bind:value={priority} type="number" placeholder="0" />
-          <p class="text-xs text-muted-foreground">Lower number = higher priority when multiple rules target the same fact key.</p>
-        </div>
-      </div>
-
-      <div class="border-b border-t px-4 py-3 bg-muted/30">
-        <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Output</p>
-        <p class="mt-0.5 text-xs text-muted-foreground">Which site fact this rule writes to and how.</p>
-      </div>
-      <div class="space-y-4 p-4">
-        <div class="space-y-1.5">
-          <label class="text-sm font-medium">Fact key</label>
-          <SingleSelect
-            options={[...catalogFactKeyOptions, { value: '__custom__', label: 'Custom key…' }]}
-            bind:selected={factKey}
-            placeholder="Select a fact key"
-          />
-          {#if factKey === '__custom__'}
-            <Input bind:value={customFactKey} placeholder="e.g. sophos_license_type" class="mt-2" />
-          {/if}
-          <p class="text-xs text-muted-foreground">The key of the site profile fact to write.</p>
-        </div>
-
-        <div class="space-y-1.5">
-          <label class="text-sm font-medium">Aggregate</label>
-          <SingleSelect options={aggregateOptions} bind:selected={aggregate} />
-        </div>
-
-        {#if aggregate === 'exists'}
-          <div class="space-y-1.5">
-            <label class="text-sm font-medium">When matched</label>
-            <Input bind:value={outputTrue} placeholder="true" />
-            <p class="text-xs text-muted-foreground">Written when at least one row passes the filter. Defaults to <code>true</code> if left empty.</p>
-          </div>
-          <div class="space-y-1.5">
-            <label class="text-sm font-medium">When not matched</label>
-            <Input bind:value={outputFalse} placeholder="false" />
-            <p class="text-xs text-muted-foreground">Written when no rows pass the filter. Defaults to <code>false</code> if left empty.</p>
-          </div>
-
-        {:else if aggregate === 'value' || aggregate === 'collect'}
-          <div class="space-y-1.5">
-            <label class="text-sm font-medium">Value field</label>
-            <SingleSelect
-              options={fieldOptions}
-              bind:selected={valueField}
-              placeholder="Select field to extract"
-            />
-            <p class="text-xs text-muted-foreground">
-              {aggregate === 'value'
-                ? 'Field value from the first matching row.'
-                : 'Unique values of this field across all matching rows.'}
-            </p>
-          </div>
-          <div class="space-y-1.5">
-            <label class="text-sm font-medium">Transform</label>
-            <SingleSelect options={transformOptions} bind:selected={transform} />
-            <p class="text-xs text-muted-foreground">Applied to each extracted value before writing.</p>
-          </div>
-
-        {:else if aggregate === 'conditional'}
-          <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-            Define cases in the right panel. Each case is checked in order; the first match wins.
-          </div>
-        {/if}
-      </div>
-    </aside>
-
-    <!-- Right: Data Source + Filter (+ Cases for conditional) -->
-    <div class="flex min-h-0 flex-col overflow-y-auto">
-      <div class="border-b px-4 py-3 bg-muted/30">
-        <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Data Source</p>
-      </div>
-      <div class="p-4 border-b">
-        <div class="space-y-1.5 max-w-sm">
-          <label class="text-sm font-medium">Source table</label>
-          <SingleSelect
-            options={tableOptions}
-            bind:selected={table}
-            onchange={() => { filterConditions = []; valueField = ''; cases = []; }}
-          />
-          <p class="text-xs text-muted-foreground">Changing this resets all filters and the value field.</p>
-        </div>
-      </div>
-
-      <div class="flex items-center justify-between border-b px-4 py-3 bg-muted/30">
-        <div>
-          <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Candidate Filter</p>
-          <p class="mt-0.5 text-xs text-muted-foreground">
-            Narrows which {selectedTable.label} rows are in scope. Leave empty to include all.
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          class="shrink-0 gap-2"
-          onclick={() => (filterConditions = [...filterConditions, newCondition()])}
+  </div>
+{:else}
+  <div class="au-rule-editor">
+    <header>
+      <div class="flex flex-wrap items-center gap-3 px-6 py-4">
+        <a
+          class="inline-flex items-center gap-2 text-sm text-muted-foreground"
+          href={editing ? `/automation/fact-rules/${ruleId}` : '/automation/fact-rules'}
+          ><ArrowLeft size={15} />{editing ? 'Back to rule' : 'All fact rules'}</a
         >
-          <Plus class="size-4" /> Add Filter
-        </Button>
-      </div>
-      <div class="space-y-2 p-4 border-b">
-        {#each filterConditions as condition (condition.id)}
-          {@render conditionRow(
-            condition,
-            (patch) => updateCondition(condition.id, patch),
-            () => removeCondition(condition.id)
-          )}
-        {:else}
-          <div class="rounded-lg border border-dashed py-5 text-center text-sm text-muted-foreground">
-            All {selectedTable.label} rows in scope are included.
-          </div>
-        {/each}
-      </div>
-
-      {#if aggregate === 'conditional'}
-        <div class="flex items-center justify-between border-b px-4 py-3 bg-muted/30">
-          <div>
-            <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Cases</p>
-            <p class="mt-0.5 text-xs text-muted-foreground">Evaluated top-to-bottom. First matching case wins.</p>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            class="shrink-0 gap-2"
-            onclick={() => (cases = [...cases, newCase()])}
-          >
-            <Plus class="size-4" /> Add Case
-          </Button>
+        <Input
+          aria-label="Rule name"
+          placeholder="Name your rule"
+          bind:value={name}
+          disabled={!canWrite}
+          class="h-9 w-full max-w-sm text-base font-semibold"
+        />
+        <div class="ml-auto flex items-center gap-3">
+          {#if canWrite}<label class="flex items-center gap-2 text-sm"
+              ><Switch bind:checked={enabled} />{enabled ? 'Enabled' : 'Disabled'}</label
+            ><Button onclick={save} disabled={saving || setupIssues.length > 0} class="gap-2"
+              ><Save size={15} />{saving
+                ? 'Saving…'
+                : editing
+                  ? 'Save changes'
+                  : 'Create rule'}</Button
+            >{:else}<span class="text-xs text-muted-foreground">View only</span>{/if}
         </div>
-        <div class="space-y-4 p-4">
-          {#each cases as fc, idx (fc.id)}
-            <div class="rounded-lg border">
-              <div class="flex items-center justify-between border-b px-3 py-2 bg-muted/20">
-                <p class="text-xs font-semibold text-muted-foreground">Case {idx + 1}</p>
-                <Button variant="ghost" size="icon" class="size-7" onclick={() => removeCase(fc.id)}>
-                  <Trash2 class="size-3.5" />
-                </Button>
-              </div>
-              <div class="space-y-3 p-3">
+      </div>
+    </header>
+    <div class="au-rule-editor-body">
+      <aside class="au-rule-plan">
+        <p class="au-eyebrow">RULE SUMMARY</p>
+        <h2>Keep site information current</h2>
+        <p>
+          This rule reads synced records and updates one site profile field. Changes take effect
+          after saving.
+        </p>
+        <ol>
+          <li>
+            <span>1 · Read</span><strong>{selectedTable.label}</strong>
+            <p>Use the records available for each site after its integration syncs.</p>
+          </li>
+          <li>
+            <span>2 · Match</span><strong
+              >{filterConditions.length
+                ? `${filterLogic === 'OR' ? 'Any' : 'All'} of ${filterConditions.length} conditions`
+                : 'All available records'}</strong
+            >
+            <p>
+              {filterConditions.length
+                ? 'Only matching records are used to calculate the result.'
+                : 'Add conditions to narrow down which records count.'}
+            </p>
+          </li>
+          <li>
+            <span>3 · Update</span><strong
+              >{catalogFactKeyOptions.find((o) => o.value === effectiveFactKey)?.label ||
+                effectiveFactKey ||
+                'Choose a site field'}</strong
+            >
+            <p>{aggregateOptions.find((o) => o.value === aggregate)?.label}</p>
+            {#if aggregate === 'conditional'}<p>
+                {cases.length} cases, checked from top to bottom.
+              </p>{/if}
+          </li>
+        </ol>
+        {#if setupIssues.length}<div class="au-rule-checks">
+            <strong>Before you save</strong>
+            <ul>
+              {#each setupIssues as issue}<li>{issue}</li>{/each}
+            </ul>
+          </div>{:else}<div class="au-notice au-success mt-6">
+            <div>
+              <strong>Ready to save</strong>
+              <p>
+                {enabled
+                  ? 'The rule will apply during future data syncs.'
+                  : 'The rule will stay disabled until you enable it.'}
+              </p>
+            </div>
+          </div>{/if}
+      </aside>
+      <fieldset class="au-rule-form min-w-0" disabled={!canWrite || saving}>
+        <section>
+          <h2>Read from your connected tools</h2>
+          <p>Choose the records this rule should use.</p>
+          <div class="au-form-grid">
+            <div class="au-form-field">
+              <label for="rule-source">Data source</label><SingleSelect
+                aria-label="Data source"
+                options={tableOptions}
+                selected={table}
+                onchange={(value) => {
+                  if (value && value !== table) {
+                    table = value;
+                    filterConditions = [];
+                    valueField = '';
+                    cases = [];
+                  }
+                }}
+                allowClear={false}
+              />
+              <p>Changing the source clears conditions and cases that depend on its fields.</p>
+            </div>
+            <div class="au-form-field">
+              <label for="rule-description">What is this rule for?</label><Textarea
+                id="rule-description"
+                bind:value={description}
+                placeholder="e.g. Keep the client’s security product up to date"
+                rows={3}
+              />
+            </div>
+          </div>
+        </section>
+        <section>
+          <div class="au-section-heading">
+            <h2>Choose which records match</h2>
+            <Button
+              variant="outline"
+              size="sm"
+              class="gap-2"
+              onclick={() => (filterConditions = [...filterConditions, newCondition()])}
+              ><Plus size={14} /> Add condition</Button
+            >
+          </div>
+          <p>Start with all records, or narrow the result using conditions.</p>
+          {#if filterConditions.length > 1}<div class="mb-4 max-w-xs">
+              <SingleSelect
+                options={logicOptions}
+                selected={filterLogic}
+                onchange={(v) => (filterLogic = v as 'AND' | 'OR')}
+                allowClear={false}
+                aria-label="Record matching logic"
+              />
+            </div>{/if}
+          <div class="space-y-3">
+            {#each filterConditions as condition (condition.id)}{@render conditionRow(
+                condition,
+                (patch) => updateCondition(condition.id, patch),
+                () => removeCondition(condition.id)
+              )}{:else}<div class="au-notice">
                 <div>
-                  <div class="mb-2 flex items-center justify-between">
-                    <p class="text-xs font-medium text-muted-foreground">Conditions</p>
+                  <strong>All {selectedTable.label} records are included</strong>
+                  <p>Add a condition if only certain records should affect the site field.</p>
+                </div>
+              </div>{/each}
+          </div>
+        </section>
+        <section>
+          <h2>Update the site profile</h2>
+          <p>Choose the destination and how to calculate its value.</p>
+          {#if catalogQuery.error}<div class="au-notice au-attention mb-4">
+              <div>
+                <strong>Site fields couldn’t be loaded</strong>
+                <p>Retry to choose a known field, or use a custom field identifier.</p>
+              </div>
+              <Button variant="outline" onclick={() => catalogQuery.refetch()}>Retry</Button>
+            </div>{/if}
+          <div class="au-form-grid">
+            <div class="au-form-field">
+              <label>Site field to update</label><SingleSelect
+                aria-label="Site field to update"
+                options={[
+                  ...catalogFactKeyOptions,
+                  { value: '__custom__', label: 'Custom field identifier…' },
+                ]}
+                selected={factKey}
+                onchange={(v) => (factKey = v)}
+                placeholder="Choose a site field"
+              />{#if factKey === '__custom__'}<Input
+                  aria-label="Custom field identifier"
+                  bind:value={customFactKey}
+                  placeholder="e.g. security_product"
+                />{/if}
+            </div>
+            <div class="au-form-field">
+              <label>How should the value be calculated?</label><SingleSelect
+                aria-label="Calculation method"
+                options={aggregateOptions}
+                selected={aggregate}
+                onchange={(v) => (aggregate = v as typeof aggregate)}
+                allowClear={false}
+              />
+            </div>
+          </div>
+          {#if aggregate === 'exists'}<div class="au-form-grid mt-5">
+              <div class="au-form-field">
+                <label for="rule-yes">When a match is found</label><Input
+                  id="rule-yes"
+                  bind:value={outputTrue}
+                  placeholder="true"
+                />
+                <p>Leave empty to write Yes (true).</p>
+              </div>
+              <div class="au-form-field">
+                <label for="rule-no">When nothing matches</label><Input
+                  id="rule-no"
+                  bind:value={outputFalse}
+                  placeholder="false"
+                />
+                <p>Leave empty to write No (false).</p>
+              </div>
+            </div>
+          {:else if aggregate === 'value' || aggregate === 'collect'}<div class="au-form-grid mt-5">
+              <div class="au-form-field">
+                <label>Read this field</label><SingleSelect
+                  aria-label="Result field"
+                  options={fieldOptions}
+                  selected={valueField}
+                  onchange={(v) => (valueField = v)}
+                  placeholder="Choose a field"
+                />
+                <p>
+                  {aggregate === 'value'
+                    ? 'Use the value from the first matching record.'
+                    : 'Save the unique values across matching records.'}
+                </p>
+              </div>
+              <div class="au-form-field">
+                <label>Format the result</label><SingleSelect
+                  aria-label="Result formatting"
+                  options={transformOptions}
+                  selected={transform}
+                  onchange={(v) => (transform = v)}
+                  allowClear={false}
+                />
+              </div>
+            </div>{/if}
+        </section>
+        {#if aggregate === 'conditional'}
+          <section>
+            <div class="au-section-heading">
+              <h2>Choose a value using cases</h2>
+              <Button
+                variant="outline"
+                size="sm"
+                class="gap-2"
+                onclick={() => (cases = [...cases, newCase()])}><Plus size={14} /> Add case</Button
+              >
+            </div>
+            <p>The first matching case wins. Move cases to set their priority.</p>
+            {#each cases as fc, index (fc.id)}
+              <div class="au-result-card mt-4">
+                <div class="au-case-toolbar">
+                  <h3 class="text-sm font-semibold">Case {index + 1}</h3>
+                  <div class="flex gap-1">
                     <Button
                       variant="ghost"
-                      size="sm"
-                      class="h-7 gap-1 text-xs"
-                      onclick={() => addCaseCondition(fc.id)}
+                      size="icon"
+                      aria-label={`Move case ${index + 1} up`}
+                      disabled={index === 0}
+                      onclick={() => moveCase(index, -1)}><ArrowUp size={14} /></Button
+                    ><Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Move case ${index + 1} down`}
+                      disabled={index === cases.length - 1}
+                      onclick={() => moveCase(index, 1)}><ArrowDown size={14} /></Button
+                    ><Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Remove case ${index + 1}`}
+                      onclick={() => removeCase(fc.id)}><Trash2 size={14} /></Button
                     >
-                      <Plus class="size-3" /> Add condition
-                    </Button>
-                  </div>
-                  <div class="space-y-2">
-                    {#each fc.conditions as condition (condition.id)}
-                      {@render conditionRow(
-                        condition,
-                        (patch) => updateCaseCondition(fc.id, condition.id, patch),
-                        () => removeCaseCondition(fc.id, condition.id)
-                      )}
-                    {:else}
-                      <p class="text-xs italic text-muted-foreground">No conditions — this case always matches.</p>
-                    {/each}
                   </div>
                 </div>
-                <div class="space-y-1">
-                  <label class="text-xs font-medium">Output value</label>
-                  <Input
+                {#if fc.conditions.length > 1}<div class="my-3 max-w-xs">
+                    <SingleSelect
+                      aria-label={`Matching logic for case ${index + 1}`}
+                      options={logicOptions}
+                      selected={fc.logic}
+                      onchange={(v) =>
+                        (cases = cases.map((c) =>
+                          c.id === fc.id ? { ...c, logic: v as 'AND' | 'OR' } : c
+                        ))}
+                      allowClear={false}
+                    />
+                  </div>{/if}
+                <div class="space-y-3 my-4">
+                  {#each fc.conditions as condition (condition.id)}{@render conditionRow(
+                      condition,
+                      (patch) => updateCaseCondition(fc.id, condition.id, patch),
+                      () => removeCaseCondition(fc.id, condition.id)
+                    )}{:else}<p class="text-xs text-[var(--warning)]">
+                      This case has no conditions and always matches. Any cases below it will not be
+                      reached.
+                    </p>{/each}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="gap-1"
+                  onclick={() => addCaseCondition(fc.id)}><Plus size={13} /> Add condition</Button
+                >
+                <div class="au-form-field mt-5">
+                  <label for={`case-output-${fc.id}`}>Write this value</label><Input
+                    id={`case-output-${fc.id}`}
                     value={fc.output}
-                    placeholder="e.g. MDR"
+                    placeholder="e.g. Managed detection and response"
                     oninput={(e) => updateCaseOutput(fc.id, e.currentTarget.value)}
                   />
                 </div>
               </div>
+            {/each}
+            <div class="au-form-field mt-5">
+              <label for="rule-default">When no case matches</label><Input
+                id="rule-default"
+                bind:value={defaultOutput}
+                placeholder="Leave empty to keep the current site value"
+              />
+              <p>An empty fallback leaves the existing site field unchanged.</p>
             </div>
-          {:else}
-            <div class="rounded-lg border border-dashed py-5 text-center text-sm text-muted-foreground">
-              No cases yet. Add at least one case.
+          </section>
+        {/if}
+        <section>
+          <details>
+            <summary class="cursor-pointer text-sm font-medium">Advanced · Rule priority</summary>
+            <div class="au-form-field mt-4 max-w-sm">
+              <label for="rule-priority">Priority</label><Input
+                id="rule-priority"
+                bind:value={priority}
+                type="number"
+              />
+              <p>
+                Lower numbers take priority when more than one rule updates the same site field.
+              </p>
             </div>
-          {/each}
-
-          <!-- Default case -->
-          <div class="rounded-lg border">
-            <div class="border-b px-3 py-2 bg-muted/20">
-              <p class="text-xs font-semibold text-muted-foreground">Default (no match)</p>
-            </div>
-            <div class="space-y-1 p-3">
-              <label class="text-xs font-medium">Output value</label>
-              <Input bind:value={defaultOutput} placeholder="e.g. EDR — leave empty to write nothing" />
-              <p class="text-xs text-muted-foreground">Used when no case matches. Leave empty to skip writing.</p>
-            </div>
-          </div>
-        </div>
-      {/if}
+          </details>
+        </section>
+      </fieldset>
     </div>
   </div>
-</div>
+{/if}

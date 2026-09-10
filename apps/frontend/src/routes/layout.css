@@ -5,42 +5,46 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* MSPByte: crisp work surfaces, deep ink navigation, and mint accents. */
+/* MSPByte: neutral work surfaces with blue actions, teal questions, and orange attention states. */
 :root {
-  --background: #f4f7f8;
-  --foreground: #203139;
+  --background: #f5f6f7;
+  --foreground: #272b30;
   --card: #ffffff;
-  --card-foreground: #172a32;
+  --card-foreground: #202429;
   --popover: #ffffff;
-  --popover-foreground: #203139;
-  --primary: #087f6b;
+  --popover-foreground: #272b30;
+  --primary: #3982e3;
   --primary-foreground: #ffffff;
-  --secondary: #edf2f3;
-  --secondary-foreground: #334b55;
-  --muted: #edf2f4;
-  --muted-foreground: #5e727c;
-  --accent: #e4f2ee;
-  --accent-foreground: #076c5b;
+  --secondary: #eef0f2;
+  --secondary-foreground: #454c54;
+  --muted: #eef0f2;
+  --muted-foreground: #606973;
+  --accent: #e9f1fc;
+  --accent-foreground: #155cb9;
   --destructive: #c73545;
   --destructive-foreground: #ffffff;
-  --success: #14835e;
-  --warning: #a76a0a;
-  --border: #dce5e9;
-  --input: #cbd8df;
-  --ring: #119b83;
-  --chart-1: #087f6b;
-  --chart-2: #5678bb;
-  --chart-3: #b58a36;
-  --chart-4: #8a67b0;
-  --chart-5: #c16d55;
-  --sidebar: #112a33;
-  --sidebar-foreground: #d2dfe3;
-  --sidebar-primary: #6ce2c0;
-  --sidebar-primary-foreground: #112a33;
-  --sidebar-accent: #1e3d46;
+  --success: #10744f;
+  --warning: #a34b0a;
+  --question: #08766c;
+  --question-soft: #edf7f4;
+  --success-soft: #eaf6ef;
+  --warning-soft: #fff3e8;
+  --border: #dde1e5;
+  --input: #c7cdd3;
+  --ring: #2580eb;
+  --chart-1: #1767d2;
+  --chart-2: #168578;
+  --chart-3: #d97518;
+  --chart-4: #339ab6;
+  --chart-5: #6b8295;
+  --sidebar: #202326;
+  --sidebar-foreground: #d5dadd;
+  --sidebar-primary: #69adff;
+  --sidebar-primary-foreground: #10243a;
+  --sidebar-accent: #323639;
   --sidebar-accent-foreground: #ffffff;
-  --sidebar-border: #2b4650;
-  --sidebar-ring: #6ce2c0;
+  --sidebar-border: #40464a;
+  --sidebar-ring: #69adff;
   --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
   --font-serif: ui-serif, Georgia, serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -58,40 +62,44 @@
 }
 
 .dark {
-  --background: #0c181f;
-  --foreground: #e0eaee;
-  --card: #14252e;
-  --card-foreground: #e8f0f3;
-  --popover: #192e38;
-  --popover-foreground: #e0eaee;
-  --primary: #66d9b8;
-  --primary-foreground: #0b2c24;
-  --secondary: #20343f;
-  --secondary-foreground: #d2e0e6;
-  --muted: #192b35;
-  --muted-foreground: #99b0bc;
-  --accent: #193e39;
-  --accent-foreground: #85e3c7;
+  --background: #151617;
+  --foreground: #e8eaec;
+  --card: #202224;
+  --card-foreground: #f0f1f2;
+  --popover: #292c2f;
+  --popover-foreground: #e8eaec;
+  --primary: #4a9eff;
+  --primary-foreground: #081a2d;
+  --secondary: #2c2f32;
+  --secondary-foreground: #dde1e4;
+  --muted: #292c2f;
+  --muted-foreground: #adb4bb;
+  --accent: #303437;
+  --accent-foreground: #80bcff;
   --destructive: #fb8792;
   --destructive-foreground: #33121a;
-  --success: #66d9aa;
-  --warning: #efbf6b;
-  --border: #2a3e49;
-  --input: #3a5260;
-  --ring: #66d9b8;
-  --chart-1: #66d9b8;
-  --chart-2: #86a5e3;
-  --chart-3: #e1b765;
-  --chart-4: #b998df;
-  --chart-5: #e99b82;
-  --sidebar: #0a161d;
-  --sidebar-foreground: #bdcfd7;
-  --sidebar-primary: #66d9b8;
-  --sidebar-primary-foreground: #0b2c24;
-  --sidebar-accent: #1b323c;
-  --sidebar-accent-foreground: #eff6f8;
-  --sidebar-border: #243b46;
-  --sidebar-ring: #66d9b8;
+  --success: #51cba0;
+  --warning: #ffa65c;
+  --question: #4bcebb;
+  --question-soft: #242c2a;
+  --success-soft: #242c28;
+  --warning-soft: #2e2923;
+  --border: #393d41;
+  --input: #50565c;
+  --ring: #4a9eff;
+  --chart-1: #4a9eff;
+  --chart-2: #4bcebb;
+  --chart-3: #ffa65c;
+  --chart-4: #6dbbd5;
+  --chart-5: #a6b6c4;
+  --sidebar: #101112;
+  --sidebar-foreground: #cbd0d5;
+  --sidebar-primary: #4a9eff;
+  --sidebar-primary-foreground: #081a2d;
+  --sidebar-accent: #292d30;
+  --sidebar-accent-foreground: #f0f2f4;
+  --sidebar-border: #34383c;
+  --sidebar-ring: #4a9eff;
   --shadow-sm: 0 2px 5px #00000020;
   --shadow-md: 0 4px 16px #00000024;
   --shadow-lg: 0 12px 32px #00000038;
@@ -167,19 +175,50 @@
 }
 
 @layer base {
-  ::selection { background: color-mix(in oklab, var(--primary) 22%, transparent); }
-  :focus-visible { outline-color: var(--ring); }
-  * { scrollbar-width: thin; scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent) transparent; }
-  .dark { color-scheme: dark; }
-  h1, h2, h3 { text-wrap: balance; }
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 22%, transparent);
+  }
+  :focus-visible {
+    outline-color: var(--ring);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent) transparent;
+  }
+  .dark {
+    color-scheme: dark;
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
 }
 
 @layer components {
-  [data-slot="card"] { box-shadow: var(--shadow-sm); }
-  [data-slot="dialog-content"], [data-slot="popover-content"], [data-slot="dropdown-menu-content"] { box-shadow: var(--shadow-lg); }
-  [data-slot="table-head"] { font-size: 11px; font-weight: 600; letter-spacing: .025em; }
-  [data-slot="table-row"] { transition: background-color 120ms ease; }
+  [data-slot='card'] {
+    box-shadow: var(--shadow-sm);
+  }
+  [data-slot='dialog-content'],
+  [data-slot='popover-content'],
+  [data-slot='dropdown-menu-content'] {
+    box-shadow: var(--shadow-lg);
+  }
+  [data-slot='table-head'] {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.025em;
+  }
+  [data-slot='table-row'] {
+    transition: background-color 120ms ease;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0ms !important; animation-duration: 0ms !important; }
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
 }

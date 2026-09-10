@@ -92,6 +92,9 @@ export type PaginationInput = {
 
 /** API exposed to `signalStrip` so a strip cell can push a filter onto the table. */
 export interface SignalStripApi {
+  readonly activeViewId: string | undefined;
+  /** Select a named view without stacking a conflicting status filter. */
+  setView: (viewId?: string) => void;
   addFilter: (filter: Omit<TableFilter, 'id'>) => void;
   clearFilters: () => void;
   setSort: (field: string, dir: 'asc' | 'desc') => void;
@@ -110,6 +113,8 @@ export interface DataTableProps<TData> {
   enableColumnToggle?: boolean;
   enableExport?: boolean;
   enableURLState?: boolean;
+  /** Hide the toolbar view tabs when signalStrip provides view navigation. */
+  enableViewSelector?: boolean;
 
   // Config
   views?: TableView<TData>[];

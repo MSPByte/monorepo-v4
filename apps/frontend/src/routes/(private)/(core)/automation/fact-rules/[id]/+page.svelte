@@ -1,4 +1,7 @@
 <script lang="ts">
+  import '../../workspace.css';
+  import { fieldLabel } from '$lib/utils/label';
+  import { PolicyTableShapes, type FieldDefinition } from '@mspbyte/shared';
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
@@ -32,11 +35,11 @@
   const def = $derived(isRecord(rule?.definition) ? rule!.definition : {});
 
   const aggregateLabel: Record<string, string> = {
-    exists: 'Exists (true/false)',
-    count: 'Count',
-    value: 'Value (first match)',
-    collect: 'Collect (array)',
-    conditional: 'Conditional (first match wins)',
+    exists: 'Check whether a match exists',
+    count: 'Count matching records',
+    value: 'Use a value from the first match',
+    collect: 'Collect unique values',
+    conditional: 'Use the first matching case',
   };
 
   const transformLabel: Record<string, string> = {
@@ -53,16 +56,55 @@
   const aggregate = $derived(isRecord(def) ? String(def.aggregate ?? 'exists') : 'exists');
   const defCases = $derived(isRecord(def) && Array.isArray(def.cases) ? def.cases : []);
 
+  const fieldNames = $derived.by(() => {
+    const labels = new Map<string, string>();
+    function collect(shape: Record<string, FieldDefinition>) {
+      for (const field of Object.values(shape)) {
+        labels.set(field.ingestPath, field.label);
+        if (field.type === 'object' && field.fields) collect(field.fields);
+      }
+    }
+    const shape = PolicyTableShapes.find((entry) => entry.table === String(def.table ?? ''));
+    if (shape) collect(shape.shape);
+    return labels;
+  });
+  const operatorLabels: Record<string, string> = {
+    eq: 'equals',
+    ne: 'does not equal',
+    gt: 'is greater than',
+    gte: 'is at least',
+    lt: 'is less than',
+    lte: 'is at most',
+    contains: 'contains',
+    notContains: 'does not contain',
+    containsAny: 'contains any of',
+    notContainsAny: 'contains none of',
+    exists: 'has a value',
+    missing: 'is missing',
+    olderThanDays: 'is older than this many days',
+    withinDays: 'is within this many days',
+  };
+  function displayValue(value: unknown): string {
+    if (value === true) return 'Yes';
+    if (value === false) return 'No';
+    if (value == null) return 'No value';
+    return Array.isArray(value)
+      ? value.map(displayValue).join(', ')
+      : typeof value === 'object'
+        ? JSON.stringify(value)
+        : String(value);
+  }
   let toggling = $state(false);
   async function toggleEnabled() {
     if (!rule || toggling) return;
+    const nextEnabled = !rule.enabled;
     toggling = true;
     try {
       await trpc.factRules.update.mutate({
         id: rule.id,
         name: rule.name,
         description: rule.description,
-        enabled: !rule.enabled,
+        enabled: nextEnabled,
         providerId: rule.providerId,
         factKey: rule.factKey,
         priority: rule.priority,
@@ -70,7 +112,7 @@
       });
       await queryClient.invalidateQueries({ queryKey: ['factRules.byId', id] });
       await queryClient.invalidateQueries({ queryKey: ['factRules.list'] });
-      toast.success(rule.enabled ? 'Rule disabled' : 'Rule enabled');
+      toast.success(nextEnabled ? 'Rule enabled' : 'Rule disabled');
     } catch (error) {
       showErrorToast(error, 'Failed to update rule');
     } finally {
@@ -79,220 +121,164 @@
   }
 </script>
 
+{#snippet conditions(filter: unknown)}
+  {#if isRecord(filter) && Array.isArray(filter.conditions) && filter.conditions.length}
+    <p class="mb-3">
+      Match {String(filter.logic ?? 'AND').toUpperCase() === 'OR' ? 'any' : 'all'} of these conditions:
+    </p>
+    <div class="space-y-2">
+      {#each filter.conditions as condition}{#if isRecord(condition)}<div class="au-condition">
+            <b
+              >{fieldNames.get(String(condition.field)) ??
+                fieldLabel(String(condition.field ?? 'Field'))}</b
+            ><span>{operatorLabels[String(condition.op)] ?? String(condition.op)}</span
+            >{#if condition.value !== undefined}<b>{displayValue(condition.value)}</b>{/if}
+          </div>{/if}{/each}
+    </div>
+  {:else}<p>Include all available records for the site.</p>{/if}
+{/snippet}
 {#if ruleQuery.isLoading}
-  <div class="flex size-full items-center justify-center text-sm text-muted-foreground">
-    Loading…
-  </div>
-{:else if !rule}
-  <div class="flex size-full items-center justify-center text-sm text-muted-foreground">
-    Fact rule not found.
+  <div class="au-page"><p class="text-sm text-muted-foreground">Loading rule…</p></div>
+{:else if ruleQuery.error || !rule}
+  <div class="au-page">
+    <div class="au-error" role="alert">
+      <h2>We couldn’t load this rule</h2>
+      <p>It may have been removed, or your access may have changed.</p>
+      <div class="flex gap-2">
+        <Button variant="outline" href="/automation/fact-rules">All fact rules</Button><Button
+          onclick={() => ruleQuery.refetch()}>Try again</Button
+        >
+      </div>
+    </div>
   </div>
 {:else}
-  <div class="flex size-full flex-col overflow-hidden">
-    <!-- Header -->
-    <header class="border-b bg-background px-6 py-4">
-      <div class="flex items-start justify-between gap-4">
-        <div class="min-w-0">
-          <button
-            type="button"
-            class="mb-1 text-xs text-muted-foreground hover:text-foreground"
-            onclick={() => goto('/automation/fact-rules')}
-          >
-            ← All fact rules
-          </button>
-          <h1 class="truncate text-xl font-semibold">{rule.name}</h1>
-          {#if rule.description}
-            <p class="mt-0.5 text-sm text-muted-foreground">{rule.description}</p>
-          {/if}
+  <div class="au-detail">
+    <div class="au-backbar">
+      <a class="text-sm text-muted-foreground" href="/automation/fact-rules">← All fact rules</a>
+    </div>
+    <div class="overflow-auto">
+      <div class="au-detail-body">
+        <header class="au-heading">
+          <div>
+            <p class="au-eyebrow">Automation / Fact rule</p>
+            <h1>{rule.name}</h1>
+            <p>
+              {rule.description || 'Keep a site profile field up to date after each data sync.'}
+            </p>
+          </div>
+          <div class="au-heading-actions">
+            {#if canWrite}<label class="flex items-center gap-2 text-sm"
+                ><Switch
+                  checked={rule.enabled}
+                  onchange={toggleEnabled}
+                  disabled={toggling}
+                />{rule.enabled ? 'Enabled' : 'Disabled'}</label
+              ><Button
+                class="gap-2"
+                onclick={() => goto(`/automation/fact-rules/builder?id=${rule.id}`)}
+                ><Pencil size={15} /> Edit rule</Button
+              >{:else}<span class="text-sm text-muted-foreground"
+                >{rule.enabled ? 'Enabled' : 'Disabled'} · View only</span
+              >{/if}
+          </div>
+        </header>
+        <div class="au-notice" class:au-success={rule.enabled}>
+          <div>
+            <strong
+              >{rule.enabled
+                ? 'This rule updates site profiles after data syncs'
+                : 'This rule is disabled'}</strong
+            >
+            <p>
+              {rule.enabled
+                ? `Reads ${rule.dataSource} and writes to ${fieldLabel(rule.factKey)}.`
+                : 'Existing site values stay in place. Enable the rule to apply it during future syncs.'}
+            </p>
+          </div>
         </div>
-        <div class="flex shrink-0 items-center gap-3">
-          {#if canWrite}
-            <label
-              class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground select-none"
-            >
-              <Switch checked={rule.enabled} onchange={toggleEnabled} disabled={toggling} />
-              {rule.enabled ? 'Enabled' : 'Disabled'}
-            </label>
-            <Button
-              variant="outline"
-              size="sm"
-              class="gap-2"
-              onclick={() => goto(`/automation/fact-rules/builder?id=${rule.id}`)}
-            >
-              <Pencil class="size-4" /> Edit
-            </Button>
-          {/if}
+        <div class="au-rule-grid">
+          <div class="au-rule-flow">
+            <section class="au-rule-section">
+              <span class="au-eyebrow">1 · Read</span>
+              <h2>{rule.dataSource}</h2>
+              <p>Use records from this source within each site’s available data.</p>
+            </section>
+            <section class="au-rule-section">
+              <span class="au-eyebrow">2 · Match</span>
+              <h2>Choose which records count</h2>
+              {@render conditions(def.filter)}
+            </section>
+            <section class="au-rule-section">
+              <span class="au-eyebrow">3 · Update</span>
+              <h2>{fieldLabel(rule.factKey)}</h2>
+              <p>{aggregateLabel[aggregate] ?? aggregate}</p>
+              {#if aggregate === 'exists'}<dl class="mt-4 sm:grid-cols-2">
+                  <div>
+                    <dt>When a match is found</dt>
+                    <dd>{displayValue(def.outputTrue ?? true)}</dd>
+                  </div>
+                  <div>
+                    <dt>When nothing matches</dt>
+                    <dd>{displayValue(def.outputFalse ?? false)}</dd>
+                  </div>
+                </dl>
+              {:else if aggregate === 'value' || aggregate === 'collect'}<dl
+                  class="mt-4 sm:grid-cols-2"
+                >
+                  <div>
+                    <dt>Use this field</dt>
+                    <dd>
+                      {fieldNames.get(String(def.valueField)) ??
+                        fieldLabel(String(def.valueField ?? 'Not selected'))}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Format the value</dt>
+                    <dd>
+                      {transformLabel[String(def.transform ?? 'none')] ?? String(def.transform)}
+                    </dd>
+                  </div>
+                </dl>
+              {:else if aggregate === 'conditional'}
+                {#each defCases as c, i}{#if isRecord(c)}<div class="au-rule-case">
+                      <h3>{c.default ? 'When no case matches' : `Case ${i + 1}`}</h3>
+                      {#if !c.default}{@render conditions(c.filter)}{/if}
+                      <div class="au-rule-output">
+                        <span>Write</span><strong>{displayValue(c.output)}</strong>
+                      </div>
+                    </div>{/if}{/each}
+                {#if !defCases.some((c) => isRecord(c) && c.default)}<p class="mt-4">
+                    If no case matches, the rule leaves the existing site value unchanged.
+                  </p>{/if}
+              {/if}
+            </section>
+          </div>
+          <aside class="au-rule-section">
+            <h2>Rule settings</h2>
+            <dl>
+              <div>
+                <dt>Site field identifier</dt>
+                <dd>{rule.factKey}</dd>
+              </div>
+              <div>
+                <dt>Priority</dt>
+                <dd>{rule.priority}</dd>
+                <p>Lower numbers take priority when rules update the same field.</p>
+              </div>
+              <div>
+                <dt>Integration</dt>
+                <dd>
+                  {rule.providerId ? fieldLabel(rule.providerId) : 'Any available integration'}
+                </dd>
+              </div>
+              <div>
+                <dt>Last updated</dt>
+                <dd>{rule.updatedAt ? new Date(rule.updatedAt).toLocaleDateString() : '—'}</dd>
+              </div>
+            </dl>
+          </aside>
         </div>
       </div>
-    </header>
-
-    <!-- Body -->
-    <div class="flex min-h-0 flex-1 gap-6 overflow-auto p-6">
-      <!-- Main: definition -->
-      <div class="flex-1 space-y-6">
-        <!-- Output -->
-        <section class="rounded-lg border">
-          <div class="border-b px-4 py-3 bg-muted/30">
-            <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              Output
-            </p>
-          </div>
-          <div class="grid grid-cols-2 gap-4 p-4 text-sm">
-            <div>
-              <p class="text-xs text-muted-foreground">Fact key</p>
-              <p class="mt-0.5 font-mono font-medium">{rule.factKey}</p>
-            </div>
-            <div>
-              <p class="text-xs text-muted-foreground">Aggregate</p>
-              <p class="mt-0.5 font-medium">{aggregateLabel[aggregate] ?? aggregate}</p>
-            </div>
-            {#if aggregate === 'exists'}
-              {#if def.outputTrue !== undefined}
-                <div>
-                  <p class="text-xs text-muted-foreground">When matched</p>
-                  <p class="mt-0.5 font-mono font-medium">{JSON.stringify(def.outputTrue)}</p>
-                </div>
-              {/if}
-              {#if def.outputFalse !== undefined}
-                <div>
-                  <p class="text-xs text-muted-foreground">When not matched</p>
-                  <p class="mt-0.5 font-mono font-medium">{JSON.stringify(def.outputFalse)}</p>
-                </div>
-              {/if}
-            {:else if aggregate === 'value' || aggregate === 'collect'}
-              {#if def.valueField}
-                <div>
-                  <p class="text-xs text-muted-foreground">Value field</p>
-                  <p class="mt-0.5 font-mono font-medium">{def.valueField}</p>
-                </div>
-              {/if}
-              {#if def.transform && def.transform !== 'none'}
-                <div>
-                  <p class="text-xs text-muted-foreground">Transform</p>
-                  <p class="mt-0.5 font-medium">
-                    {transformLabel[String(def.transform)] ?? String(def.transform)}
-                  </p>
-                </div>
-              {/if}
-            {/if}
-          </div>
-
-          {#if aggregate === 'conditional' && defCases.length > 0}
-            <div class="border-t">
-              <div class="space-y-3 p-4">
-                {#each defCases as c, i}
-                  {#if isRecord(c)}
-                    <div class="rounded-md border text-sm">
-                      <div
-                        class="border-b px-3 py-2 bg-muted/20 text-xs font-semibold text-muted-foreground"
-                      >
-                        {c.default ? 'Default' : `Case ${i + 1}`}
-                      </div>
-                      <div class="p-3 space-y-2">
-                        {#if !c.default && isRecord(c.filter) && Array.isArray(c.filter.conditions)}
-                          <div class="space-y-1">
-                            {#each c.filter.conditions as condition}
-                              {#if isRecord(condition)}
-                                <div
-                                  class="flex items-center gap-2 rounded-md border bg-muted/20 px-3 py-1.5 font-mono text-xs"
-                                >
-                                  <span>{condition.field}</span>
-                                  <span class="text-muted-foreground">{condition.op}</span>
-                                  {#if condition.value !== undefined}
-                                    <span>{JSON.stringify(condition.value)}</span>
-                                  {/if}
-                                </div>
-                              {/if}
-                            {/each}
-                          </div>
-                        {/if}
-                        <div class="flex items-center gap-2">
-                          <span class="text-xs text-muted-foreground">Output:</span>
-                          <span class="font-mono font-medium text-xs"
-                            >{JSON.stringify(c.output)}</span
-                          >
-                        </div>
-                      </div>
-                    </div>
-                  {/if}
-                {/each}
-              </div>
-            </div>
-          {/if}
-        </section>
-
-        <!-- Data source -->
-        <section class="rounded-lg border">
-          <div class="border-b px-4 py-3 bg-muted/30">
-            <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              Data Source
-            </p>
-          </div>
-          <div class="p-4 text-sm">
-            <p class="text-xs text-muted-foreground">Source table</p>
-            <p class="mt-0.5 font-medium">{rule.dataSource}</p>
-          </div>
-        </section>
-
-        <!-- Filter -->
-        <section class="rounded-lg border">
-          <div class="border-b px-4 py-3 bg-muted/30">
-            <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              Candidate Filter
-            </p>
-          </div>
-          <div class="p-4 text-sm">
-            {#if isRecord(def.filter) && Array.isArray(def.filter.conditions) && def.filter.conditions.length > 0}
-              <div class="space-y-2">
-                {#each def.filter.conditions as condition}
-                  {#if isRecord(condition)}
-                    <div
-                      class="flex items-center gap-2 rounded-md border bg-muted/20 px-3 py-2 font-mono text-xs"
-                    >
-                      <span class="text-foreground">{condition.field}</span>
-                      <span class="text-muted-foreground">{condition.op}</span>
-                      {#if condition.value !== undefined}
-                        <span class="text-foreground">{JSON.stringify(condition.value)}</span>
-                      {/if}
-                    </div>
-                  {/if}
-                {/each}
-              </div>
-            {:else}
-              <p class="text-muted-foreground italic">
-                No filter — all rows in scope are included.
-              </p>
-            {/if}
-          </div>
-        </section>
-      </div>
-
-      <!-- Sidebar: meta -->
-      <aside class="w-64 shrink-0 space-y-4">
-        <section class="rounded-lg border">
-          <div class="border-b px-4 py-3 bg-muted/30">
-            <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              Details
-            </p>
-          </div>
-          <div class="space-y-3 p-4 text-sm">
-            <div>
-              <p class="text-xs text-muted-foreground">Priority</p>
-              <p class="mt-0.5 font-medium">{rule.priority}</p>
-            </div>
-            <div>
-              <p class="text-xs text-muted-foreground">Provider</p>
-              <p class="mt-0.5 font-medium">{rule.providerId ?? 'Any'}</p>
-            </div>
-            <div>
-              <p class="text-xs text-muted-foreground">Last updated</p>
-              <p class="mt-0.5 font-medium">
-                {rule.updatedAt ? new Date(rule.updatedAt).toLocaleDateString() : '—'}
-              </p>
-            </div>
-          </div>
-        </section>
-      </aside>
     </div>
   </div>
 {/if}
