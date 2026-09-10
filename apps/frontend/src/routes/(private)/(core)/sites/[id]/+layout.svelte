@@ -3,9 +3,10 @@
   import { page } from '$app/state';
   import { createQuery } from '@tanstack/svelte-query';
   import type { AppRouter } from '@mspbyte/trpc';
-  import type { TRPCClient } from '@trpc/client';
+  import { TRPCClientError, type TRPCClient } from '@trpc/client';
 
-  import UrlTabs from '$lib/components/url-tabs.svelte';
+  import UrlTabs from '../_components/site-tabs.svelte';
+  import Button from '$lib/components/ui/button/button.svelte';
   import BriefingBar from './_components/briefing-bar.svelte';
   import {
     provideSiteContext,
@@ -49,11 +50,30 @@
   let { children } = $props();
 </script>
 
-<div class="flex size-full flex-col overflow-hidden">
+<div class="flex size-full flex-col overflow-auto">
   {#if siteQuery.isLoading || profileQuery.isLoading}
     <Loader />
   {:else if siteQuery.error || !siteQuery.data || profileQuery.error || !profileQuery.data}
-    <div class="p-8 text-sm text-destructive">Site not found.</div>
+    <div class="sw-empty" role="alert">
+      <h1>
+        {siteQuery.error instanceof TRPCClientError && siteQuery.error.data?.code === 'NOT_FOUND'
+          ? 'Site not found'
+          : 'Unable to load this site'}
+      </h1>
+      <p>
+        {siteQuery.error instanceof TRPCClientError && siteQuery.error.data?.code === 'NOT_FOUND'
+          ? 'This site may have been removed or is no longer available.'
+          : 'Try again to load the site and its profile. If the problem continues, check your access with an administrator.'}
+      </p>
+      <div class="flex flex-wrap gap-3">
+        <Button variant="outline" href="/sites">Back to sites</Button><Button
+          onclick={() => {
+            void siteQuery.refetch();
+            void profileQuery.refetch();
+          }}>Try again</Button
+        >
+      </div>
+    </div>
   {:else}
     <BriefingBar
       siteId={id}
@@ -61,9 +81,9 @@
       description={siteQuery.data.description}
       profile={profileQuery.data}
     />
-    <UrlTabs {tabs} />
+    <UrlTabs {tabs} label="Site navigation" />
     <FadeIn class="min-h-0 flex-1 overflow-auto">
-      {@render children()}
+      {#key id}{@render children()}{/key}
     </FadeIn>
   {/if}
 </div>

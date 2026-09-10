@@ -71,7 +71,7 @@
       <SourceGlyph source={fact.source} />
       {#if fact.source === 'user_options'}
         <span
-          class="inline-flex items-center rounded-[3px] bg-foreground/[0.07] px-1.5 py-px text-[12px] font-medium text-foreground"
+          class="inline-flex items-center rounded-sm bg-foreground/[0.07] px-1.5 py-px text-[12px] font-medium text-foreground"
           >{display}</span
         >
       {:else if fact.source === 'user_flex'}

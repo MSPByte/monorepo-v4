@@ -77,12 +77,12 @@
     <DropdownMenu.Trigger>
       {#snippet child({ props })}
         <button
-          class="rounded-sm border border-transparent p-1 text-muted-foreground transition-colors hover:border-border hover:bg-muted hover:text-foreground"
+          class="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
           title="Site options"
           aria-label="Site options"
           {...props}
         >
-          <Ellipsis class="size-4" />
+          <Ellipsis class="size-4" /> Site options
         </button>
       {/snippet}
     </DropdownMenu.Trigger>

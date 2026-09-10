@@ -25,12 +25,12 @@
   ] as const;
 
   const RIBBON_LABELS: Record<(typeof RIBBON_KEYS)[number], string> = {
-    workstations: 'WORKSTATIONS',
-    servers: 'SERVERS',
-    networkAssets: 'NET-DEVICES',
-    totalAssets: 'ASSETS',
-    openFindings: 'FINDINGS',
-    connectedIntegrations: 'INTEGRATIONS',
+    workstations: 'Workstations',
+    servers: 'Servers',
+    networkAssets: 'Network devices',
+    totalAssets: 'Assets',
+    openFindings: 'Open findings',
+    connectedIntegrations: 'Integrations',
   };
 
   const ribbon = $derived.by(() => {
@@ -83,46 +83,42 @@
   }
 </script>
 
-<header class="border-b border-foreground/15 bg-card">
-  <div class="flex flex-wrap items-end justify-between gap-3 px-6 pb-2 pt-4">
-    <div class="flex items-baseline gap-3">
-      <div class="min-w-0">
-        <h1 class="truncate text-xl font-semibold leading-tight tracking-tight">{siteName}</h1>
-        {#if description}
-          <p class="mt-0.5 max-w-3xl truncate text-xs text-muted-foreground">{description}</p>
-        {/if}
-      </div>
+<header class="sw-briefing">
+  <a class="sw-back" href="/sites">← All sites</a>
+  <div class="sw-site-heading">
+    <div>
+      <h1>{siteName}</h1>
+      {#if description}<p class="sw-description">{description}</p>{/if}
     </div>
     <SiteActionsMenu {siteId} {siteName} />
   </div>
-
   {#if factPills.length}
-    <div class="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-6 pb-2 font-mono text-[10.5px]">
-      {#each factPills as fact (fact.key)}
-        <span
-          class="inline-flex items-center gap-1.5 rounded-[3px] border border-foreground/15 bg-foreground/4 px-1.5 py-px tracking-[0.14em] text-foreground/90"
-        >
-          <SourceGlyph source={fact.source} />{factPillValue(fact.value)}
-        </span>
-      {/each}
+    <div class="sw-facts">
+      {#each factPills as fact (fact.key)}<span
+          ><SourceGlyph source={fact.source} />{factPillValue(fact.value)}</span
+        >{/each}
     </div>
   {/if}
-
-  <div
-    class="flex flex-wrap items-center gap-x-5 gap-y-1.5 border-t border-border/70 bg-muted/30 px-6 py-2.5 font-mono text-[12px] text-foreground"
-  >
+  <div class="sw-site-metrics">
     {#each ribbon as stat (stat.key)}
-      <span class="flex items-baseline gap-1.5">
-        <SourceGlyph source={stat.metric!.source} class="self-center" />
-        <span class="text-[10px] uppercase tracking-[0.14em] text-muted-foreground"
-          >{stat.label}</span
-        >
-        <span class="font-semibold tabular-nums">
-          {typeof stat.metric!.value === 'number'
+      {@const href =
+        stat.key === 'openFindings'
+          ? `/sites/${siteId}/findings`
+          : stat.key === 'networkAssets'
+            ? `/sites/${siteId}/network`
+            : stat.key === 'connectedIntegrations'
+              ? null
+              : `/sites/${siteId}/assets`}
+      {#snippet metric()}
+        <span>{stat.label}</span><strong
+          >{typeof stat.metric!.value === 'number'
             ? stat.metric!.value.toLocaleString()
-            : (stat.metric!.value ?? '—')}
-        </span>
-      </span>
+            : (stat.metric!.value ?? '—')}</strong
+        >
+      {/snippet}
+      {#if href}<a {href}>{@render metric()}<span aria-hidden="true">↗</span></a>{:else}<div>
+          {@render metric()}
+        </div>{/if}
     {/each}
   </div>
 </header>

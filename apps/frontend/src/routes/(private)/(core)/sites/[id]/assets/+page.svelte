@@ -3,12 +3,16 @@
   import { goto } from '$app/navigation';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
-  import { DataTable, type DataTableColumn, type PaginationInput } from '$lib/components/data-table';
+  import {
+    DataTable,
+    type DataTableColumn,
+    type PaginationInput,
+  } from '$lib/components/data-table';
   import { numberColumn, stateColumn, textColumn } from '$lib/components/data-table/column-defs';
   import SourceBadge from '$lib/components/domain/source-badge.svelte';
   import { toServerTableInput } from '$lib/components/domain/server-table';
   import { prettyText } from '$lib/utils/format';
-  import SectionPanel from '$lib/components/panel/section-panel.svelte';
+  import SectionPanel from '../../_components/site-panel.svelte';
   import { useSiteContext } from '../_components/site-context';
 
   const ctx = useSiteContext();
@@ -31,18 +35,24 @@
   };
 
   const columns: DataTableColumn<AssetRow>[] = [
-    textColumn<AssetRow>('hostname', 'Hostname'),
-    textColumn<AssetRow>('assetType', 'Type', undefined, { pretty: true }, {
-      filter: {
-        type: 'select',
-        operators: ['eq'],
-        options: [
-          { label: 'Server', value: 'server' },
-          { label: 'Workstation', value: 'workstation' },
-          { label: 'Network', value: 'network' },
-        ],
-      },
-    }),
+    textColumn<AssetRow>('hostname', 'Device', undefined, undefined, { cell: assetCell, cellComponent: undefined }),
+    textColumn<AssetRow>(
+      'assetType',
+      'Type',
+      undefined,
+      { pretty: true },
+      {
+        filter: {
+          type: 'select',
+          operators: ['eq'],
+          options: [
+            { label: 'Server', value: 'server' },
+            { label: 'Workstation', value: 'workstation' },
+            { label: 'Network', value: 'network' },
+          ],
+        },
+      }
+    ),
     textColumn<AssetRow>('os', 'OS'),
     stateColumn<AssetRow>(
       'status',
@@ -50,10 +60,14 @@
       {
         evaluate: (value) => {
           switch (value) {
-            case 'active': return 'success';
-            case 'inactive': return 'destructive';
-            case 'unknown': return 'info';
-            default: return 'info';
+            case 'active':
+              return 'success';
+            case 'inactive':
+              return 'destructive';
+            case 'unknown':
+              return 'info';
+            default:
+              return 'info';
           }
         },
         transform: (value) => prettyText(String(value)),
@@ -75,14 +89,27 @@
   ];
 
   async function fetchData(input: PaginationInput) {
-    const base = toServerTableInput(input, ['hostname', 'displayName', 'assetType', 'os', 'sourceList']);
+    const base = toServerTableInput(input, [
+      'hostname',
+      'displayName',
+      'assetType',
+      'os',
+      'sourceList',
+    ]);
     const result = await trpc.assets.tableData.query({
       ...base,
-      filters: [...(base.filters ?? []), { column: 'siteId', operator: 'eq' as const, value: site.id }],
+      filters: [
+        ...(base.filters ?? []),
+        { column: 'siteId', operator: 'eq' as const, value: site.id },
+      ],
     });
     return { rows: result.rows as AssetRow[], total: result.total };
   }
 </script>
+
+{#snippet assetCell({ row }: { row: AssetRow; value: string | null })}
+  <a class="sw-site-link" href={`/assets/${row.id}`} onclick={(event) => event.stopPropagation()}>{row.hostname || row.displayName}</a>
+{/snippet}
 
 {#snippet sourcesCell({ row }: { row: AssetRow; value: string })}
   <span class="flex flex-wrap gap-1">
@@ -92,15 +119,22 @@
   </span>
 {/snippet}
 
-<div class="mx-auto max-w-[1400px] p-4 lg:p-6">
-  <SectionPanel code="02·A" title="CANONICAL ASSETS">
+<div class="sw-page">
+  <div class="sw-section-heading">
+    <div>
+      <h2>Assets</h2>
+      <p>Search devices, check their status, and open an asset to investigate its findings.</p>
+    </div>
+  </div>
+  <SectionPanel title="Canonical assets">
     {#snippet aside()}
-      scoped · site {site.id.slice(0, 4).toUpperCase()}
+      Devices linked to {site.name}
     {/snippet}
-    <div class="flex h-[60vh] flex-col">
+    <div class="sw-table">
       <DataTable
         {fetchData}
         {columns}
+        enableRowSelection={false}
         defaultPageSize={25}
         defaultSort={{ field: 'openFindingCount', dir: 'desc' }}
         onrowclick={(row) => goto(`/assets/${row.id}`)}

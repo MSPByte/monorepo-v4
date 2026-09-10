@@ -1,5 +1,5 @@
 <script lang="ts">
-  import SectionPanel from '$lib/components/panel/section-panel.svelte';
+  import SectionPanel from '../../_components/site-panel.svelte';
   import SourceGlyph from '../_components/source-glyph.svelte';
   import { useSiteContext } from '../_components/site-context';
   import { formatRelativeDate } from '$lib/utils/format';
@@ -11,15 +11,21 @@
   const firewalls = $derived(profile.network.firewalls);
 </script>
 
-<div class="mx-auto max-w-[1400px] space-y-4 p-4 lg:p-6">
-  <SectionPanel code="N·1" title="FIREWALLS">
+<div class="sw-page">
+  <div class="sw-section-heading">
+    <div>
+      <h2>Network</h2>
+      <p>Review linked firewalls and discovered network devices.</p>
+    </div>
+  </div>
+  <SectionPanel title="Firewalls">
     {#snippet aside()}
       {firewalls.length} linked
     {/snippet}
     {#if firewalls.length}
       <div class="grid gap-3 xl:grid-cols-2">
         {#each firewalls as fw (fw.id)}
-          <div class="border border-border bg-card/40 p-3">
+          <div class="rounded-xl border border-border bg-background p-5">
             <div class="mb-2 flex items-baseline justify-between gap-2">
               <div class="flex items-baseline gap-2">
                 <SourceGlyph source="generated" />
@@ -79,13 +85,14 @@
         {/each}
       </div>
     {:else}
-      <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-        no firewall integration data
+      <p class="text-xs leading-relaxed text-muted-foreground">
+        No firewalls linked. Firewall details appear here when your integrations sync data for this
+        site.
       </p>
     {/if}
   </SectionPanel>
 
-  <SectionPanel code="N·2" title="NETWORK ASSETS">
+  <SectionPanel title="Network assets">
     {#snippet aside()}
       {assets.length} discovered
     {/snippet}
@@ -93,7 +100,9 @@
       <div class="overflow-x-auto">
         <table class="w-full border-collapse text-sm">
           <thead>
-            <tr class="border-b border-border text-left font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            <tr
+              class="border-b border-border text-left font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+            >
               <th class="py-1.5 pr-3">Name</th>
               <th class="py-1.5 pr-3">Hostname</th>
               <th class="py-1.5 pr-3">Status</th>
@@ -106,7 +115,7 @@
                 <td class="py-1.5 pr-3">
                   <span class="flex items-center gap-2">
                     <SourceGlyph source="generated" />
-                    <span class="truncate">{asset.displayName}</span>
+                    <a class="sw-site-link" href={`/assets/${asset.id}`}>{asset.displayName}</a>
                   </span>
                 </td>
                 <td class="py-1.5 pr-3 font-mono text-[12px] text-muted-foreground">
@@ -124,8 +133,9 @@
         </table>
       </div>
     {:else}
-      <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-        no network assets linked
+      <p class="text-xs leading-relaxed text-muted-foreground">
+        No network devices linked. Devices appear here once they are discovered and assigned to this
+        site.
       </p>
     {/if}
   </SectionPanel>

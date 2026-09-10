@@ -7,11 +7,13 @@
   import type { TRPCClient } from '@trpc/client';
   import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
 
-  import SectionPanel from '$lib/components/panel/section-panel.svelte';
+  import SectionPanel from '../_components/site-panel.svelte';
   import FactRow from './_components/fact-row.svelte';
   import MetricRow from './_components/metric-row.svelte';
   import FlagPill from './_components/flag-pill.svelte';
-  import HealthMeter from './_components/health-meter.svelte';
+  import { Button } from '$lib/components/ui/button';
+  import { Input } from '$lib/components/ui/input';
+  import { Search, ListChecks, Pencil, ChevronRight, ShieldCheck } from '@lucide/svelte';
   import TribalNote from './_components/tribal-note.svelte';
   import Legend from './_components/legend.svelte';
   import SourceGlyph from './_components/source-glyph.svelte';
@@ -27,7 +29,6 @@
   import Plus from '@lucide/svelte/icons/plus';
   import X from '@lucide/svelte/icons/x';
   import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
-  import Separator from '$lib/components/ui/separator/separator.svelte';
 
   const ctx = useSiteContext();
   const profile = $derived(ctx.profile!);
@@ -270,37 +271,66 @@
   type AddMode = 'executive' | 'context' | 'stack';
   let addOpen = $state(false);
   let addMode = $state<AddMode>('executive');
-  let addSelection = $state('');
-
-  const addOptions = $derived.by(() => {
-    const rows =
-      addMode === 'executive'
-        ? hiddenExecutiveFacts.map((fact) => ({ value: fact.key, label: factLabel(fact) }))
-        : addMode === 'context'
-          ? hiddenContextFacts.map((fact) => ({ value: fact.key, label: factLabel(fact) }))
-          : hiddenStack.map((entry) => ({ value: entry.categoryKey, label: entry.categoryLabel }));
-    return rows.sort((a, b) => a.label.localeCompare(b.label));
+  let fieldSearch = $state('');
+  let fieldFilter = $state<'all' | 'missing'>('missing');
+  const profileDetailCount = $derived(profile.facts.length + profile.stack.length);
+  const missingCount = $derived(
+    hiddenExecutiveFacts.length + hiddenContextFacts.length + hiddenStack.length
+  );
+  const fieldChoices = $derived.by(() => {
+    const choices =
+      addMode === 'stack'
+        ? profile.stack.map((entry) => ({
+            key: entry.categoryKey,
+            label: entry.categoryLabel,
+            missing: !hasStackValue(entry),
+            detail: hasStackValue(entry) ? stackDisplay(entry) : 'Not documented',
+            fact: null,
+            entry,
+          }))
+        : profile.facts
+            .filter((fact) => fact.category === addMode)
+            .map((fact) => ({
+              key: fact.key,
+              label: factLabel(fact),
+              missing: !hasFactValue(fact),
+              detail: !hasFactValue(fact)
+                ? 'Not documented'
+                : fact.applicable === 'not_applicable'
+                  ? 'Not applicable'
+                  : Array.isArray(fact.value)
+                    ? fact.value.join(', ')
+                    : String(fact.value),
+              fact,
+              entry: null,
+            }));
+    return choices.sort(
+      (a, b) => Number(b.missing) - Number(a.missing) || a.label.localeCompare(b.label)
+    );
   });
-
-  function openAddDialog(mode: AddMode) {
+  const visibleFieldChoices = $derived(
+    fieldChoices.filter(
+      (choice) =>
+        (fieldFilter === 'all' || choice.missing) &&
+        `${choice.label} ${choice.detail}`.toLowerCase().includes(fieldSearch.trim().toLowerCase())
+    )
+  );
+  function openAddDialog(mode: AddMode, missingOnly = true) {
     addMode = mode;
-    addSelection = '';
+    fieldSearch = '';
+    const hasMissing =
+      mode === 'executive'
+        ? hiddenExecutiveFacts.length
+        : mode === 'context'
+          ? hiddenContextFacts.length
+          : hiddenStack.length;
+    fieldFilter = missingOnly && hasMissing ? 'missing' : 'all';
     addOpen = true;
   }
-
-  function addSelectedItem() {
-    if (!addSelection) return;
-    if (addMode === 'stack') {
-      const entry = hiddenStack.find((row) => row.categoryKey === addSelection);
-      if (entry) openStackEditor(entry, true);
-    } else {
-      const fact = [...hiddenExecutiveFacts, ...hiddenContextFacts].find(
-        (row) => row.key === addSelection
-      );
-      if (fact) openFactEditor(fact, true);
-    }
+  function chooseField(choice: (typeof fieldChoices)[number]) {
     addOpen = false;
-    addSelection = '';
+    if (choice.fact) openFactEditor(choice.fact, canWriteSites);
+    if (choice.entry) openStackEditor(choice.entry, canWriteSites);
   }
 
   let noteOpen = $state(false);
@@ -313,69 +343,120 @@
   }
 </script>
 
-<div class="mx-auto max-w-[1400px] space-y-4 p-4 lg:p-6">
-  <div
-    class="flex flex-wrap items-center justify-between gap-3 border-l-2 border-primary bg-card px-3 py-2"
-  >
-    <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-      CLIENT INTELLIGENCE PROFILE
-      <span class="ml-2 text-foreground/70">·</span>
-      <span class="ml-2">documentation {profile.completeness.value}% complete</span>
-      <span class="ml-1 text-foreground/40">
-        ({profile.completeness.completeCount}/{profile.completeness.applicableCount})
-      </span>
+<div class="sw-page sw-profile">
+  <div class="sw-section-heading">
+    <div>
+      <p class="sw-eyebrow">Client profile</p>
+      <h2>Overview</h2>
+      <p>Keep business details, technology ownership, and support instructions in one place.</p>
     </div>
-    <Legend />
+    <Button onclick={() => openAddDialog('executive', false)} class="gap-2"
+      ><ListChecks size={15} />{canWriteSites ? 'Manage profile' : 'Browse profile'}</Button
+    >
+  </div>
+  <div class="sw-profile-guidance">
+    <span class="sw-guidance-icon"><ListChecks size={20} /></span>
+    <div class="sw-guidance-copy">
+      <strong
+        >{!profileDetailCount
+          ? 'No profile fields configured'
+          : missingCount
+            ? `${missingCount} details still need documenting`
+            : 'Your profile is documented'}</strong
+      >
+      <p>
+        {!profileDetailCount
+          ? 'A workspace administrator can configure the fields and technology categories available to your team.'
+          : canWriteSites
+            ? 'Choose a section below to fill a gap, update a value, or mark a field as not applicable.'
+            : 'You have read-only access. Browse the profile and ask a site administrator to update missing details.'}
+      </p>
+      <div class="sw-gap-actions">
+        <button onclick={() => openAddDialog('executive')}
+          >Executive <span>{hiddenExecutiveFacts.length} missing</span><ChevronRight
+            size={13}
+          /></button
+        >
+        <button onclick={() => openAddDialog('context')}
+          >Business context <span>{hiddenContextFacts.length} missing</span><ChevronRight
+            size={13}
+          /></button
+        >
+        <button onclick={() => openAddDialog('stack')}
+          >Technology <span>{hiddenStack.length} missing</span><ChevronRight size={13} /></button
+        >
+      </div>
+    </div>
+    {#if profileDetailCount}<div class="sw-profile-progress">
+        <strong>{profile.completeness.value}%</strong><span>Profile fields complete</span><progress
+          max="100"
+          value={profile.completeness.value}
+          aria-label="Profile field completeness"
+        ></progress><small
+          >{profile.completeness.completeCount} of {profile.completeness.applicableCount} applicable fields</small
+        >
+      </div>{/if}
   </div>
 
+  {#if catalogQuery.isError}<div class="sw-notice" role="alert">
+      Profile editing is unavailable because field options could not be loaded.<button
+        onclick={() => catalogQuery.refetch()}>Try again</button
+      >
+    </div>{/if}
   <div class="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
     <div class="space-y-4">
-      <SectionPanel code="01" title="EXECUTIVE">
+      <SectionPanel title="Executive" description="Who the client is and how they are supported.">
         {#snippet aside()}
-          {#if hiddenExecutiveFacts.length && canWriteSites}
-            <button
-              type="button"
-              class="inline-flex size-5 items-center justify-center border border-border bg-background text-foreground hover:border-primary hover:text-primary"
-              aria-label="Add executive field"
-              title="Add field"
-              onclick={() => openAddDialog('executive')}
-            >
-              <Plus class="size-3.5" />
-            </button>
-          {/if}
+          <Button
+            variant="outline"
+            size="sm"
+            onclick={() => openAddDialog('executive')}
+            class="gap-1.5"
+          >
+            {#if canWriteSites}<Plus size={14} />{hiddenExecutiveFacts.length
+                ? 'Add field'
+                : 'Manage fields'}{:else}Browse fields{/if}
+          </Button>
         {/snippet}
         {#if executiveFacts.length}
           <dl>
             {#each executiveFacts as fact (fact.key)}
               <button
                 type="button"
-                class="block w-full text-left hover:bg-foreground/3"
-                onclick={() => openFactEditor(fact)}
+                class="sw-editable-fact"
+                disabled={canWriteSites && (catalogQuery.isPending || catalogQuery.isError)}
+                onclick={() => openFactEditor(fact, canWriteSites)}
               >
-                <FactRow label={factLabel(fact)} {fact} />
+                <FactRow label={factLabel(fact)} {fact} /><span class="sw-edit-affordance"
+                  >{#if canWriteSites}<Pencil size={13} />{:else}<ChevronRight
+                      size={14}
+                    />{/if}</span
+                >
               </button>
             {/each}
           </dl>
         {:else}
-          <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-            no facts recorded
+          <p class="text-xs leading-relaxed text-muted-foreground">
+            {#if hiddenExecutiveFacts.length}No details recorded yet.{#if canWriteSites} Choose Add field to record the first detail.{/if}{:else}No fields configured for this section. Open {canWriteSites ? 'Manage profile' : 'Browse profile'} to review the available sections.{/if}
           </p>
         {/if}
       </SectionPanel>
 
-      <SectionPanel code="02" title="TECHNOLOGY STACK">
+      <SectionPanel
+        title="Technology stack"
+        description="Products, vendors, and who manages each part of the environment."
+      >
         {#snippet aside()}
-          {#if hiddenStack.length && canWriteSites}
-            <button
-              type="button"
-              class="inline-flex size-5 items-center justify-center border border-border bg-background text-foreground hover:border-primary hover:text-primary"
-              aria-label="Add stack item"
-              title="Add stack item"
-              onclick={() => openAddDialog('stack')}
-            >
-              <Plus class="size-3.5" />
-            </button>
-          {/if}
+          <Button
+            variant="outline"
+            size="sm"
+            onclick={() => openAddDialog('stack')}
+            class="gap-1.5"
+          >
+            {#if canWriteSites}<Plus size={14} />{hiddenStack.length
+                ? 'Add item'
+                : 'Manage stack'}{:else}Browse stack{/if}
+          </Button>
         {/snippet}
         {#if visibleStack.length}
           <dl>
@@ -383,7 +464,7 @@
               <button
                 type="button"
                 class="grid w-full grid-cols-[108px_minmax(0,1fr)] items-center gap-3 border-b border-border/50 py-[7px] text-left last:border-b-0 hover:bg-foreground/3 lg:grid-cols-[108px_minmax(0,1fr)_auto]"
-                onclick={() => openStackEditor(entry)}
+                onclick={() => openStackEditor(entry, canWriteSites)}
               >
                 <dt
                   class="font-mono text-[10px] uppercase leading-tight tracking-wider text-muted-foreground"
@@ -405,7 +486,7 @@
                     <span class={`truncate ${stackTone(entry)}`}>{stackDisplay(entry)}</span>
                     {#if entry.status === 'client_managed' || entry.status === 'vendor_managed'}
                       <span
-                        class="ml-1 rounded-[3px] border border-border px-1 py-px font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                        class="ml-1 rounded-sm border border-border px-1 py-px font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
                       >
                         {entry.status === 'client_managed' ? 'client' : 'vendor'}
                       </span>
@@ -438,13 +519,11 @@
             {/each}
           </dl>
         {:else}
-          <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-            no stack categories defined
-          </p>
+          <p class="text-xs leading-relaxed text-muted-foreground">No technology recorded yet.</p>
         {/if}
       </SectionPanel>
 
-      <SectionPanel code="03" title="INFRASTRUCTURE METRICS">
+      <SectionPanel title="Infrastructure metrics">
         <div class="grid grid-cols-1 gap-x-6 md:grid-cols-2">
           <dl>
             {#each profile.metrics.slice(0, Math.ceil(profile.metrics.length / 2)) as metric (metric.key)}
@@ -459,57 +538,53 @@
         </div>
       </SectionPanel>
 
-      <SectionPanel code="04" title="BUSINESS CONTEXT">
+      <SectionPanel
+        title="Business context"
+        description="Operational details your team needs when supporting this site."
+      >
         {#snippet aside()}
-          {#if hiddenContextFacts.length && canWriteSites}
-            <button
-              type="button"
-              class="inline-flex size-5 items-center justify-center border border-border bg-background text-foreground hover:border-primary hover:text-primary"
-              aria-label="Add context field"
-              title="Add field"
-              onclick={() => openAddDialog('context')}
-            >
-              <Plus class="size-3.5" />
-            </button>
-          {/if}
+          <Button
+            variant="outline"
+            size="sm"
+            onclick={() => openAddDialog('context')}
+            class="gap-1.5"
+          >
+            {#if canWriteSites}<Plus size={14} />{hiddenContextFacts.length
+                ? 'Add field'
+                : 'Manage fields'}{:else}Browse fields{/if}
+          </Button>
         {/snippet}
         {#if contextFacts.length}
           <dl>
             {#each contextFacts as fact (fact.key)}
               <button
                 type="button"
-                class="block w-full text-left hover:bg-foreground/3"
-                onclick={() => openFactEditor(fact)}
+                class="sw-editable-fact"
+                disabled={canWriteSites && (catalogQuery.isPending || catalogQuery.isError)}
+                onclick={() => openFactEditor(fact, canWriteSites)}
               >
-                <FactRow label={factLabel(fact)} {fact} />
+                <FactRow label={factLabel(fact)} {fact} /><span class="sw-edit-affordance"
+                  >{#if canWriteSites}<Pencil size={13} />{:else}<ChevronRight
+                      size={14}
+                    />{/if}</span
+                >
               </button>
             {/each}
           </dl>
         {:else}
-          <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-            no facts recorded
+          <p class="text-xs leading-relaxed text-muted-foreground">
+            {#if hiddenContextFacts.length}No details recorded yet.{#if canWriteSites} Choose Add field to record the first detail.{/if}{:else}No fields configured for this section. Open {canWriteSites ? 'Manage profile' : 'Browse profile'} to review the available sections.{/if}
           </p>
         {/if}
       </SectionPanel>
     </div>
 
     <aside class="space-y-4">
-      <SectionPanel code="H" title="DOCUMENTATION">
-        <HealthMeter
-          label="Completeness"
-          score={profile.completeness.value}
-          detail={`${profile.completeness.completeCount} of ${profile.completeness.applicableCount} applicable facts`}
-        />
-      </SectionPanel>
-
-      <SectionPanel code="!" title="SPECIAL HANDLING">
+      <SectionPanel title="Special handling">
         {#snippet aside()}
           {#if canWriteSites}
-            <button
-              class="inline-flex items-center gap-1 hover:text-foreground"
-              onclick={() => openNoteEditor('special', null)}
-            >
-              <Plus class="size-3" /> Note
+            <button class="sw-inline-action" onclick={() => openNoteEditor('special', null)}>
+              <Plus class="size-3" /> Add note
             </button>
           {/if}
         {/snippet}
@@ -526,20 +601,15 @@
             {/each}
           </div>
         {:else}
-          <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-            No special handling
-          </p>
+          <p class="text-xs leading-relaxed text-muted-foreground">No special handling</p>
         {/if}
       </SectionPanel>
 
-      <SectionPanel code="~" title="TRIBAL KNOWLEDGE">
+      <SectionPanel title="Team knowledge">
         {#snippet aside()}
           {#if canWriteSites}
-            <button
-              class="inline-flex items-center gap-1 hover:text-foreground"
-              onclick={() => openNoteEditor('tribal', null)}
-            >
-              <Plus class="size-3" /> Note
+            <button class="sw-inline-action" onclick={() => openNoteEditor('tribal', null)}>
+              <Plus class="size-3" /> Add note
             </button>
           {/if}
         {/snippet}
@@ -556,40 +626,39 @@
             {/each}
           </div>
         {:else}
-          <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-            No tribal notes
-          </p>
+          <p class="text-xs leading-relaxed text-muted-foreground">No team notes recorded.</p>
         {/if}
       </SectionPanel>
 
-      <SectionPanel code="§" title="GROUPS">
+      <SectionPanel title="Groups">
         {#snippet aside()}
           {#if canWriteSites}
             <button
               type="button"
-              class="inline-flex size-5 items-center justify-center border border-border bg-background text-foreground hover:border-primary hover:text-primary"
+              class="sw-inline-action"
               aria-label="Add site to group"
               title="Add to group"
               onclick={openGroupDialog}
             >
-              <Plus class="size-3.5" />
+              <Plus class="size-3.5" /> Add to group
             </button>
           {/if}
         {/snippet}
         {#if groupsQuery.isLoading}
-          <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-            loading…
-          </p>
+          <p class="text-xs leading-relaxed text-muted-foreground">loading…</p>
+        {:else if groupsQuery.isError}
+          <div class="sw-notice" role="alert">
+            Groups could not be loaded.<button onclick={() => groupsQuery.refetch()}
+              >Try again</button
+            >
+          </div>
         {:else if (groupsQuery.data ?? []).length}
           <div class="space-y-1">
             {#each groupsQuery.data ?? [] as group (group.id)}
               <div
                 class="flex items-center justify-between gap-2 border-b border-border/40 py-1.5 text-sm last:border-b-0"
               >
-                <a
-                  href={`/groups/${group.id}`}
-                  class="min-w-0 flex-1 hover:text-primary"
-                >
+                <a href={`/groups/${group.id}`} class="min-w-0 flex-1 hover:text-primary">
                   <div class="truncate">{group.name}</div>
                   {#if group.description}
                     <div class="truncate text-xs text-muted-foreground">{group.description}</div>
@@ -610,13 +679,11 @@
             {/each}
           </div>
         {:else}
-          <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-            not a member of any group
-          </p>
+          <p class="text-xs leading-relaxed text-muted-foreground">not a member of any group</p>
         {/if}
       </SectionPanel>
 
-      <SectionPanel code="≡" title="INTEGRATIONS">
+      <SectionPanel title="Integrations">
         {#snippet aside()}
           {profile.integrations.length} linked
         {/snippet}
@@ -639,7 +706,9 @@
                   ></span>
                   <div class="min-w-0">
                     <div class="truncate">{link.name ?? providerName(link.integrationId)}</div>
-                    <div class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+                    <div
+                      class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground"
+                    >
                       {providerName(link.integrationId)}
                     </div>
                   </div>
@@ -649,10 +718,16 @@
             {/each}
           </div>
         {:else}
-          <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-            no integrations linked
-          </p>
+          <p class="text-xs leading-relaxed text-muted-foreground">no integrations linked</p>
         {/if}
+      </SectionPanel>
+      <SectionPanel title="Profile sources" description="Know where each detail comes from.">
+        <Legend />
+        <p class="mt-3 text-xs leading-relaxed text-muted-foreground">
+          Select a field to {canWriteSites
+            ? 'edit its value and review its source.'
+            : 'review its value and source.'} Synced values retain their source labels.
+        </p>
       </SectionPanel>
     </aside>
   </div>
@@ -691,43 +766,99 @@
 />
 
 <Dialog.Root bind:open={addOpen}>
-  <Dialog.Content class="sm:max-w-[420px]">
-    <Dialog.Header>
-      <Dialog.Title>
-        Add {addMode === 'stack' ? 'stack item' : 'field'}
-      </Dialog.Title>
-      <Dialog.Description>
-        Choose a hidden {addMode === 'stack' ? 'stack category' : 'profile field'} to add to this panel.
-      </Dialog.Description>
-    </Dialog.Header>
+  <Dialog.Content class="sw-field-library sm:max-w-[640px]">
+    <Dialog.Header
+      ><Dialog.Title>{canWriteSites ? 'Manage profile' : 'Browse profile'}</Dialog.Title
+      ><Dialog.Description
+        >Choose a detail to {canWriteSites ? 'add or update' : 'review'} for {site.name}. Missing
+        details appear first.</Dialog.Description
+      ></Dialog.Header
+    >
     <Dialog.Body>
-    <div class="grid gap-2">
-      <SingleSelect
-        options={addOptions}
-        bind:selected={addSelection}
-        placeholder={addMode === 'stack' ? 'Select stack item...' : 'Select field...'}
-        searchPlaceholder="Search..."
-      />
-    </div>
-
-
-    </Dialog.Body><Dialog.Footer>
-      <button
-        type="button"
-        class="rounded-sm px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
-        onclick={() => (addOpen = false)}
-      >
-        Cancel
-      </button>
-      <button
-        type="button"
-        class="rounded-sm bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-40"
-        disabled={!addSelection}
-        onclick={addSelectedItem}
-      >
-        Add
-      </button>
-    </Dialog.Footer>
+      <div class="sw-library-tabs" aria-label="Profile sections">
+        {#each [{ key: 'executive', label: 'Executive' }, { key: 'context', label: 'Business context' }, { key: 'stack', label: 'Technology' }] as section}
+          <button
+            aria-pressed={addMode === section.key}
+            onclick={() => {
+              addMode = section.key as AddMode;
+              fieldSearch = '';
+            }}>{section.label}</button
+          >
+        {/each}
+      </div>
+      <div class="sw-library-toolbar">
+        <div class="relative flex-1">
+          <Search size={15} class="absolute left-3 top-3 text-muted-foreground" /><Input
+            aria-label="Search profile fields"
+            placeholder="Search fields and values…"
+            bind:value={fieldSearch}
+            class="pl-9"
+          />
+        </div>
+        <label class="sw-filter-label"
+          >Show<select bind:value={fieldFilter}
+            ><option value="missing">Missing details</option><option value="all">All details</option
+            ></select
+          ></label
+        >
+      </div>
+      {#if catalogQuery.isError}<div class="sw-notice" role="alert">
+          Field options could not be loaded.<button onclick={() => catalogQuery.refetch()}
+            >Try again</button
+          >
+        </div>{/if}
+      <div class="sw-field-choices">
+        {#each visibleFieldChoices as choice (choice.key)}
+          <button
+            class="sw-field-choice"
+            onclick={() => chooseField(choice)}
+            disabled={catalogQuery.isPending || catalogQuery.isError}
+          >
+            <span class="sw-field-choice-icon"
+              >{#if choice.missing}<Plus size={16} />{:else}<ShieldCheck size={16} />{/if}</span
+            >
+            <span class="sw-field-choice-copy"
+              ><strong>{choice.label}</strong><small>{choice.detail}</small></span
+            >
+            <span class="sw-field-choice-action"
+              >{canWriteSites ? (choice.missing ? 'Add' : 'Edit') : 'View'}<ChevronRight
+                size={14}
+              /></span
+            >
+          </button>
+        {:else}
+          <div class="sw-library-empty">
+            <ListChecks size={24} /><strong
+              >{fieldSearch
+                ? 'No matching details'
+                : fieldFilter === 'missing' && fieldChoices.length
+                  ? 'Nothing missing in this section'
+                  : 'No fields configured for this section'}</strong
+            >
+            <p>
+              {fieldSearch
+                ? 'Try another field name or value.'
+                : fieldChoices.length
+                  ? 'You can still review and update existing values.'
+                  : 'A workspace administrator can configure the profile fields available to your team.'}
+            </p>
+            {#if fieldChoices.length}<Button
+                variant="outline"
+                size="sm"
+                onclick={() => {
+                  fieldSearch = '';
+                  fieldFilter = 'all';
+                }}>Show all details</Button
+              >{/if}
+          </div>
+        {/each}
+      </div>
+    </Dialog.Body>
+    <Dialog.Footer
+      ><span class="mr-auto text-xs text-muted-foreground"
+        >{visibleFieldChoices.length} of {fieldChoices.length} details</span
+      ><Button variant="outline" onclick={() => (addOpen = false)}>Done</Button></Dialog.Footer
+    >
   </Dialog.Content>
 </Dialog.Root>
 

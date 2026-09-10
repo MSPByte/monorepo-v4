@@ -238,7 +238,8 @@
     onSuccess: () => {
       editing = false;
       open = false;
-      toast.success('Fact saved');
+      toast.success(`${fact.label} saved`);
+      qc.invalidateQueries({ queryKey: ['sites.overview'] });
       qc.invalidateQueries({ queryKey: ['sites.profileById', siteId] });
     },
     onError: (e: unknown) => toast.error(e instanceof Error ? e.message : 'Save failed'),
@@ -262,7 +263,7 @@
       <Dialog.Title>{fact.label}</Dialog.Title>
       <Dialog.Description
         >{editing
-          ? 'Set a value, mark as not applicable, or leave it unknown.'
+          ? 'Update this site’s profile or mark the field as not applicable.'
           : 'Review the recorded value and source context.'}</Dialog.Description
       >
     </Dialog.Header>
@@ -293,7 +294,10 @@
         {/if}
       </div>
     {:else}
-      <div class="grid gap-3 p-4">
+      <div class="grid gap-4">
+        <div class="rounded-lg border border-border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
+          {#if fact.updatedAt}<strong class="text-foreground">Current value: {factDisplay}</strong><br />Source: {fact.origin ?? 'Manual entry'}.{:else}This field has not been documented yet.{/if}
+        </div>
         <div class="grid gap-1.5">
           <Label>Applicability</Label>
           <Select.Root
@@ -400,7 +404,7 @@
                   <div class="flex flex-wrap gap-1.5">
                     {#each listValue as item, index (item)}
                       <span
-                        class="inline-flex items-center gap-1 rounded-[3px] border border-border px-1.5 py-0.5 text-xs"
+                        class="inline-flex items-center gap-1 rounded-sm border border-border px-1.5 py-0.5 text-xs"
                       >
                         {labelForValue(item)}
                         <button
@@ -459,10 +463,10 @@
       {/if}
       <div class="flex-1"></div>
       {#if editing}
-        <Button variant="ghost" onclick={() => (editing = false)}>Cancel</Button>
+        <Button variant="ghost" onclick={() => initialEditing ? (open = false) : (editing = false)} disabled={save.isPending}>Cancel</Button>
         <Button
           onclick={() => save.mutate()}
-          disabled={save.isPending || clear.isPending || !canWrite}>Save</Button
+          disabled={save.isPending || clear.isPending || !canWrite}>{save.isPending ? 'Saving…' : 'Save changes'}</Button
         >
       {:else}
         <Button variant="ghost" onclick={() => (open = false)}>Close</Button>

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import UrlTabs from '$lib/components/url-tabs.svelte';
+  import './workspace.css';
+  import UrlTabs from './_components/site-tabs.svelte';
 
   const { children } = $props();
 
@@ -11,8 +12,8 @@
   ];
 </script>
 
-<div class="flex size-full flex-col overflow-hidden">
-  <UrlTabs {tabs} />
+<div class="sites-workspace flex size-full flex-col overflow-hidden">
+  <UrlTabs {tabs} label="Workspace" />
   <div class="min-h-0 flex-1 overflow-hidden">
     {@render children()}
   </div>

@@ -1,9 +1,16 @@
 <script lang="ts">
   import { getContext } from 'svelte';
-  import { goto } from '$app/navigation';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { toast } from 'svelte-sonner';
-  import { LayoutDashboard, Pencil, Plus, Star } from '@lucide/svelte';
+  import {
+    ArrowRight,
+    LayoutDashboard,
+    Pencil,
+    Plus,
+    RefreshCw,
+    Star,
+    TriangleAlert,
+  } from '@lucide/svelte';
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
   import { authStore } from '$lib/stores/auth.store.svelte';
@@ -21,19 +28,25 @@
     height?: string;
     format?: string;
     groupBy?: string;
-    thresholds?: Array<{ at: number; tone: 'neutral' | 'primary' | 'warning' | 'danger' | 'success' }>;
+    thresholds?: Array<{
+      at: number;
+      tone: 'neutral' | 'primary' | 'warning' | 'danger' | 'success';
+    }>;
   };
   type TileInline = {
     source?: string;
-    definition?: { filters?: Array<{ column: string; operator: string; value?: string | number | boolean }> };
+    definition?: {
+      filters?: Array<{ column: string; operator: string; value?: string | number | boolean }>;
+    };
   };
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
   const canManage = $derived(authStore.isAllowed('Reports.Write'));
 
-  let selectedId = $state('');
-  let initialized = $state(false);
+  let chosenId = $state('');
+  let savingDefault = $state(false);
+  let refreshing = $state(false);
 
   const dashboards = createQuery(() => ({
     queryKey: ['dashboards.list'],
@@ -48,6 +61,17 @@
     queryKey: ['reports.getMyPrefs'],
     queryFn: () => trpc.reports.getMyPrefs.query(),
   }));
+  const selectedId = $derived.by(() => {
+    if (prefs.isPending) return '';
+    const available = dashboards.data ?? [];
+    return (
+      available.find((d) => d.id === chosenId)?.id ??
+      available.find((d) => d.id === prefs.data?.landingDashboardId)?.id ??
+      available[0]?.id ??
+      ''
+    );
+  });
+
   const activeDashboard = createQuery(() => ({
     queryKey: ['dashboards.byId', selectedId],
     queryFn: () =>
@@ -56,26 +80,42 @@
   }));
 
   const options = $derived(
-    (dashboards.data ?? []).map((d) => ({ value: d.id, label: d.name })),
+    (dashboards.data ?? []).map((d) => ({
+      value: d.id,
+      label: d.name,
+      subLabel: `${d.tileCount} ${d.tileCount === 1 ? 'widget' : 'widgets'}${prefs.data?.landingDashboardId === d.id ? ' · Your default' : ''}`,
+    }))
   );
   const isLoadingDashboard = $derived(
-    dashboards.isPending || prefs.isPending || (Boolean(selectedId) && activeDashboard.isPending),
+    dashboards.isPending || prefs.isPending || (Boolean(selectedId) && activeDashboard.isPending)
   );
 
-  $effect(() => {
-    if (initialized || !dashboards.data || prefs.isPending) return;
-    selectedId = prefs.data?.landingDashboardId ?? dashboards.data[0]?.id ?? '';
-    initialized = true;
-  });
-
   async function setDefault() {
-    if (!selectedId) return;
+    if (!selectedId || savingDefault) return;
+    savingDefault = true;
     try {
       await trpc.reports.saveMyPrefs.mutate({ landingDashboardId: selectedId });
       await queryClient.invalidateQueries({ queryKey: ['reports.getMyPrefs'] });
       toast.success('Default dashboard updated');
     } catch (error) {
       showErrorToast(error, 'Failed to update default dashboard');
+    } finally {
+      savingDefault = false;
+    }
+  }
+
+  async function refreshWidgets() {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      await queryClient.invalidateQueries(
+        { queryKey: ['dashboards.runTile'] },
+        { throwOnError: true }
+      );
+    } catch (error) {
+      showErrorToast(error, 'Some widgets could not be refreshed. Try again.');
+    } finally {
+      refreshing = false;
     }
   }
 
@@ -87,59 +127,128 @@
   }
 </script>
 
-<div class="size-full overflow-auto">
-  <div class="flex min-h-full flex-col gap-6 p-6">
-    <header class="flex flex-col justify-between gap-4 border-b pb-5 lg:flex-row lg:items-end">
-      <div class="space-y-1">
-        <h1 class="text-3xl font-semibold tracking-tight">
-          {activeDashboard.data?.name ?? 'Overview'}
-        </h1>
-        <p class="text-sm text-muted-foreground">
-          {activeDashboard.data?.description ?? 'Choose the operational signals your team needs first.'}
-        </p>
-      </div>
+<div class="home-page">
+  <header class="home-heading">
+    <div>
+      <p class="home-eyebrow">Overview / Dashboard</p>
+      <h1>{activeDashboard.data?.name ?? 'Your overview'}</h1>
+      <p>
+        {activeDashboard.data?.description ||
+          'The signals your team follows, with the site context you need.'}
+      </p>
+    </div>
+    <div class="home-actions">
+      {#if canManage && activeDashboard.data}
+        <Button variant="outline" size="sm" href={`/dashboards/${selectedId}`}>
+          <Pencil class="size-3.5" />Edit dashboard
+        </Button>
+      {/if}
+      {#if canManage}
+        <Button size="sm" href="/dashboards/new"><Plus class="size-3.5" />New dashboard</Button>
+      {/if}
+    </div>
+  </header>
 
-      <div class="flex flex-wrap items-center gap-2">
-        <div class="w-56">
-          <SingleSelect
-            options={options}
-            bind:selected={selectedId}
-            placeholder="Choose dashboard"
-            searchPlaceholder="Search dashboards…"
-          />
-        </div>
-        <ScopeBar />
-        {#if selectedId && prefs.data?.landingDashboardId !== selectedId}
-          <Button variant="outline" size="sm" class="gap-2" onclick={setDefault}>
-            <Star class="size-4" />Set as default
-          </Button>
-        {/if}
-        {#if canManage && selectedId}
-          <Button variant="outline" size="sm" class="gap-2" onclick={() => goto(`/dashboards/${selectedId}`)}>
-            <Pencil class="size-4" />Edit
-          </Button>
-        {/if}
-        {#if canManage}
-          <Button size="sm" class="gap-2" onclick={() => goto('/dashboards/new')}>
-            <Plus class="size-4" />New dashboard
-          </Button>
+  {#if dashboards.data?.length}
+    <section class="home-toolbar" aria-label="Dashboard controls">
+      <div class="home-picker">
+        <span class="home-control-label">Dashboard</span>
+        <SingleSelect
+          {options}
+          selected={selectedId}
+          onchange={(id) => (chosenId = id)}
+          allowClear={false}
+          disabled={prefs.isPending}
+          aria-label="Choose dashboard"
+          placeholder="Choose dashboard"
+          searchPlaceholder="Search dashboards…"
+        />
+      </div>
+      <div class="home-scope">
+        <span class="home-control-label">Showing data for</span>
+        {#if !prefs.isError}<ScopeBar />{:else}<span class="text-xs text-muted-foreground"
+            >Scope unavailable</span
+          >{/if}
+      </div>
+      <div class="home-toolbar-actions">
+        {#if selectedId && !prefs.isError}
+          {#if prefs.data?.landingDashboardId === selectedId}
+            <span class="home-default"><Star class="size-3.5" />Your default</span>
+          {:else}
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={savingDefault || !activeDashboard.data}
+              onclick={setDefault}
+            >
+              <Star class="size-3.5" />{savingDefault ? 'Saving…' : 'Make default'}
+            </Button>
+          {/if}
         {/if}
       </div>
-    </header>
+    </section>
+  {/if}
 
-    {#if isLoadingDashboard}
-      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+  {#if prefs.isError}
+    <div class="home-notice" role="alert">
+      <TriangleAlert class="size-4 shrink-0" />
+      <p>
+        Your saved preferences could not be loaded. Retry to confirm your default dashboard and site
+        scope.
+      </p>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={prefs.isFetching}
+        onclick={() => prefs.refetch()}>Retry preferences</Button
+      >
+    </div>
+  {/if}
+
+  {#if dashboards.isError || (selectedId && activeDashboard.isError)}
+    <section class="home-empty" role="alert">
+      <div class="home-empty-icon"><TriangleAlert class="size-6" /></div>
+      <h2>
+        {dashboards.isError
+          ? 'Dashboards could not be loaded'
+          : 'This dashboard could not be loaded'}
+      </h2>
+      <p>Try again, or choose another dashboard if this one is no longer available.</p>
+      <Button
+        variant="outline"
+        disabled={dashboards.isFetching || activeDashboard.isFetching}
+        onclick={() => (dashboards.isError ? dashboards.refetch() : activeDashboard.refetch())}
+        >Try again</Button
+      >
+    </section>
+  {:else if isLoadingDashboard}
+    <div role="status">
+      <span class="sr-only">Loading dashboard…</span>
+      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-hidden="true">
         {#each Array(4) as _}
-          <div class="h-32 animate-pulse rounded-lg border bg-muted/30"></div>
+          <div class="h-40 motion-safe:animate-pulse rounded-xl border bg-card"></div>
         {/each}
       </div>
-    {:else if activeDashboard.data?.tiles.length}
-      <section class="grid auto-rows-min gap-4 md:grid-cols-4">
+    </div>
+  {:else if activeDashboard.data?.tiles.length}
+    <section aria-label="Dashboard widgets" class="home-widgets">
+      <div class="home-section-heading">
+        <div>
+          <h2>At a glance <span>{activeDashboard.data.tiles.length}</span></h2>
+          <p>Open a linked metric to explore the records behind it.</p>
+        </div>
+        <Button variant="outline" size="sm" disabled={refreshing} onclick={refreshWidgets}>
+          <RefreshCw class="size-3.5 {refreshing ? 'motion-safe:animate-spin' : ''}" />{refreshing
+            ? 'Refreshing…'
+            : 'Refresh widgets'}
+        </Button>
+      </div>
+      <div class="grid auto-rows-min gap-4 md:grid-cols-4">
         {#each activeDashboard.data.tiles as row (row.id)}
           {@const viz = (row.viz ?? {}) as TileViz}
           {@const inline = (row.inlineDef ?? {}) as TileInline}
           {@const route = sources.data?.find((s) => s.table === inline.source)?.route ?? null}
-          <div class={colSpanClass(viz.width)}>
+          <div class={`min-w-0 ${colSpanClass(viz.width)}`}>
             <KpiTile
               tile={{
                 key: row.id,
@@ -159,33 +268,34 @@
             />
           </div>
         {/each}
-      </section>
-    {:else}
-      <section class="rounded-xl border border-dashed bg-muted/20 px-6 py-16 text-center">
-        <LayoutDashboard class="text-muted-foreground mx-auto mb-3 size-8" />
-        <h2 class="font-semibold">
-          {selectedId ? 'This dashboard is ready for its first widget' : 'No dashboards yet'}
-        </h2>
-        <p class="text-muted-foreground mx-auto mt-1 max-w-md text-sm">
-          {#if selectedId}
-            {canManage
-              ? 'Create a KPI widget from a live data source, then arrange it for your team.'
-              : 'Ask a dashboard manager to choose the KPIs this team should monitor.'}
-          {:else}
-            {canManage
-              ? 'Create a dashboard to collect the KPI widgets your team needs to monitor.'
-              : 'Ask a dashboard manager to create and choose the KPIs this team should monitor.'}
-          {/if}
-        </p>
+      </div>
+    </section>
+  {:else}
+    <section class="home-empty">
+      <div class="home-empty-icon"><LayoutDashboard class="size-6" /></div>
+      <p class="home-eyebrow">{selectedId ? 'Build your view' : 'Start with what matters'}</p>
+      <h2>
+        {selectedId ? 'Give your team a clear first look' : 'Your first dashboard starts here'}
+      </h2>
+      <p>
         {#if canManage}
-          <Button
-            class="mt-5"
-            onclick={() => goto(selectedId ? `/dashboards/${selectedId}` : '/dashboards/new')}
-          >
-            {selectedId ? 'Add widget' : 'Create dashboard'}
-          </Button>
+          {selectedId
+            ? 'Add a widget to follow a metric, compare sites, or spot changes in your data.'
+            : 'Bring the metrics your team checks every day into one view. Create a dashboard, then add your first widget.'}
+        {:else}
+          Ask a dashboard manager to {selectedId
+            ? 'add the metrics'
+            : 'create a dashboard with the metrics'} your team needs to follow.
         {/if}
-      </section>
-    {/if}
-  </div>
+      </p>
+      {#if canManage}
+        <Button href={selectedId ? `/dashboards/${selectedId}` : '/dashboards/new'}>
+          <Plus class="size-4" />{selectedId ? 'Add first widget' : 'Create dashboard'}
+        </Button>
+      {/if}
+      <a class="home-text-link" href="/home/sites"
+        >View site findings <ArrowRight class="size-3.5" /></a
+      >
+    </section>
+  {/if}
 </div>

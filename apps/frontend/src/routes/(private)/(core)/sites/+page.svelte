@@ -10,14 +10,12 @@
     type DataTableColumn,
     type PaginationInput,
     type SignalStripApi,
+    type TableView,
   } from '$lib/components/data-table';
   import { numberColumn, textColumn } from '$lib/components/data-table/column-defs';
+  import SeverityRibbon from '$lib/components/panel/severity-ribbon.svelte';
   import SourceBadge from '$lib/components/domain/source-badge.svelte';
   import { toServerTableInput } from '$lib/components/domain/server-table';
-  import SignalStrip from '$lib/components/panel/signal-strip.svelte';
-  import SignalCell from '$lib/components/panel/signal-cell.svelte';
-  import SeverityRibbon from '$lib/components/panel/severity-ribbon.svelte';
-  import CoverageMeter from '$lib/components/panel/coverage-meter.svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   type SiteRow = {
@@ -38,14 +36,21 @@
   }));
 
   const columns: DataTableColumn<SiteRow>[] = [
-    textColumn<SiteRow>('name', 'Site'),
+    textColumn<SiteRow>('name', 'Site', undefined, undefined, {
+      cell: siteCell,
+      cellComponent: undefined,
+    }),
     {
       key: 'completenessScore',
       title: 'Completeness',
       sortable: true,
       cell: completenessCell,
       width: '130px',
-      filter: { label: 'Completeness', operators: ['eq', 'lt', 'gt', 'lte', 'gte'], type: 'number' },
+      filter: {
+        label: 'Completeness',
+        operators: ['eq', 'lt', 'gt', 'lte', 'gte'],
+        type: 'number',
+      },
     },
     numberColumn<SiteRow>('openFindingCount', 'Open Findings'),
     numberColumn<SiteRow>('assetCount', 'Assets'),
@@ -56,6 +61,22 @@
       cell: sourcesCell,
       width: '260px',
       filter: { label: 'Sources', operators: ['contains'], type: 'text' },
+    },
+  ];
+
+  const views: TableView<SiteRow>[] = [
+    { id: 'all', label: 'All sites', filters: [], isDefault: true },
+    {
+      id: 'needs-attention',
+      label: 'With open findings',
+      filters: [{ field: 'openFindingCount', operator: 'gt', value: 0 }],
+      sort: { field: 'openFindingCount', dir: 'desc' },
+    },
+    {
+      id: 'incomplete',
+      label: 'Incomplete profiles',
+      filters: [{ field: 'completenessScore', operator: 'lt', value: 100 }],
+      sort: { field: 'completenessScore', dir: 'asc' },
     },
   ];
 
@@ -78,11 +99,20 @@
   });
 </script>
 
+{#snippet siteCell({ row }: { row: SiteRow; value: string })}
+  <a class="sw-site-link" href={`/sites/${row.id}`} onclick={(event) => event.stopPropagation()}
+    >{row.name}</a
+  >
+  {#if row.description}<p class="mt-1 max-w-xs truncate text-xs text-muted-foreground">
+      {row.description}
+    </p>{/if}
+{/snippet}
+
 {#snippet sourcesCell({ row }: { row: SiteRow; value: string })}
   <span class="flex flex-wrap gap-1">
     {#each row.sources ?? [] as source}
       <SourceBadge {source} />
-    {/each}
+    {:else}<span class="text-xs text-muted-foreground">No sources linked</span>{/each}
   </span>
 {/snippet}
 
@@ -91,95 +121,67 @@
 {/snippet}
 
 {#snippet strip(api: SignalStripApi)}
-  <SignalStrip
-    code="01"
-    title="Portfolio Signal"
-    meta={overview.data ? `${overview.data.totalSites.toLocaleString()} sites` : 'loading'}
-  >
-    <SignalCell
-      code="C"
-      label="Connected"
-      value={overview.data ? overview.data.connectedSites.toLocaleString() : '—'}
-      detail={overview.data
-        ? `${connectedShare}% linked · ${overview.data.totalSites - overview.data.connectedSites} without sources`
-        : undefined}
-      tone="primary"
-    />
-    <SignalCell
-      code="F"
-      label="Open Findings"
-      onclick={() => api.setSort('openFindingCount', 'desc')}
-    >
-      {#if overview.data}
-        <div class="mt-0.5 flex items-baseline gap-2">
-          <span class="font-mono text-xl font-semibold tabular-nums text-foreground">
-            {openTotal.toLocaleString()}
-          </span>
-          <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            across {overview.data.sitesWithFindings} site{overview.data.sitesWithFindings === 1
-              ? ''
-              : 's'}
-          </span>
-        </div>
-        <div class="pt-1">
-          <SeverityRibbon buckets={overview.data.severity} />
-        </div>
-      {:else}
-        <div class="h-8"></div>
-      {/if}
-    </SignalCell>
-    <SignalCell code="P" label="Footprint">
-      {#if overview.data}
-        <div class="mt-0.5 flex items-baseline gap-3">
-          <span class="font-mono text-lg font-semibold tabular-nums text-foreground">
-            {overview.data.totalAssets.toLocaleString()}
-            <span class="text-[10px] font-normal uppercase tracking-wider text-muted-foreground"
-              >assets</span
-            >
-          </span>
-        </div>
-        <div class="pt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          {overview.data.totalSites > 0
-            ? `${Math.round(overview.data.totalAssets / overview.data.totalSites)} assets/site avg`
-            : '—'}
-        </div>
-      {:else}
-        <div class="h-8"></div>
-      {/if}
-    </SignalCell>
-    <SignalCell
-      code="H"
-      label="Hotspot"
-      href={overview.data?.hotspot ? `/sites/${overview.data.hotspot.id}` : undefined}
-    >
-      {#if overview.data?.hotspot}
-        <div class="mt-0.5 truncate font-mono text-sm font-semibold text-foreground">
-          {overview.data.hotspot.name}
-        </div>
-        <div class="pt-0.5 font-mono text-[10px] uppercase tracking-wider text-destructive">
-          {overview.data.hotspot.openFindingCount} open · needs triage
-        </div>
-      {:else if overview.data}
-        <div class="mt-0.5 font-mono text-sm text-muted-foreground">—</div>
-        <div class="pt-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          no open work
-        </div>
-      {:else}
-        <div class="h-8"></div>
-      {/if}
-    </SignalCell>
-  </SignalStrip>
+  {#if overview.isError}
+    <div class="sw-notice" role="alert">
+      Site totals could not be loaded. <button onclick={() => overview.refetch()}>Try again</button>
+    </div>
+  {:else}
+    <div class="sw-summary">
+      <div>
+        <span>Connected sites</span><strong
+          >{overview.data?.connectedSites.toLocaleString() ?? '—'}</strong
+        ><small
+          >{overview.data
+            ? `${connectedShare}% of ${overview.data.totalSites} sites have linked sources`
+            : 'Loading site totals…'}</small
+        >
+      </div>
+      <button onclick={() => api.setView('needs-attention')}
+        ><span>Open findings ↗</span><strong
+          >{overview.data ? openTotal.toLocaleString() : '—'}</strong
+        ><small
+          >{overview.data
+            ? `Across ${overview.data.sitesWithFindings} sites · View findings by site`
+            : 'Loading findings…'}</small
+        >{#if overview.data}<div class="w-full pt-1">
+            <SeverityRibbon buckets={overview.data.severity} />
+          </div>{/if}</button
+      >
+      <div>
+        <span>Managed assets</span><strong
+          >{overview.data?.totalAssets.toLocaleString() ?? '—'}</strong
+        ><small>Across your site portfolio</small>
+      </div>
+      <div class="sw-priority">
+        <span>Most open findings</span>{#if overview.data?.hotspot}<a
+            href={`/sites/${overview.data.hotspot.id}/findings`}>{overview.data.hotspot.name} ↗</a
+          ><small>{overview.data.hotspot.openFindingCount} open findings · Review this site</small
+          >{:else}<strong class="sw-summary-message"
+            >{overview.data ? 'No open findings' : '—'}</strong
+          ><small
+            >{overview.data
+              ? 'Your portfolio has no open findings.'
+              : 'Loading site activity…'}</small
+          >{/if}
+      </div>
+    </div>
+  {/if}
 {/snippet}
 
-<div class="flex size-full flex-col gap-4 overflow-hidden p-6">
-  <div>
-    <h1 class="text-2xl font-semibold tracking-normal">Sites</h1>
-    <p class="text-sm text-muted-foreground">Canonical client and sub-site structure.</p>
+<div class="sw-page sw-directory">
+  <div class="sw-section-heading">
+    <div>
+      <p class="sw-eyebrow">Client workspace</p>
+      <h1>Sites</h1>
+      <p>Find a client, review outstanding findings, and keep their profile up to date.</p>
+    </div>
   </div>
 
   <DataTable
     {fetchData}
     {columns}
+    {views}
+    enableRowSelection={false}
     defaultPageSize={25}
     defaultSort={{ field: 'openFindingCount', dir: 'desc' }}
     onrowclick={(row) => goto(`/sites/${row.id}`)}
