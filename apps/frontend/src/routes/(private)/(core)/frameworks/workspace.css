@@ -1,0 +1,305 @@
+@reference "../../../layout.css";
+
+/* Use the application's Tailwind/shadcn tokens. These rules only establish
+   framework-specific layout and density; there is no separate surface theme. */
+.framework-workspace {
+  color: var(--foreground);
+}
+.framework-page {
+  width: 100%;
+  max-width: 1440px;
+  margin-inline: auto;
+  padding: 24px 32px 32px;
+}
+.framework-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+.framework-eyebrow {
+  @apply text-xs font-medium text-muted-foreground;
+  margin-bottom: 6px;
+}
+.framework-heading h1 {
+  @apply text-2xl font-semibold tracking-tight;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.framework-description {
+  @apply text-sm text-muted-foreground;
+  line-height: 1.6;
+  max-width: 720px;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+.framework-icon {
+  @apply flex shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground;
+  width: 36px;
+  height: 36px;
+}
+.framework-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-block: 24px 16px;
+  flex-wrap: wrap;
+}
+.framework-toolbar h2,
+.framework-panel h2,
+.framework-list-panel h2 {
+  @apply text-base font-semibold tracking-tight;
+}
+.framework-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.framework-library-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px 120px 110px 16px;
+  align-items: center;
+  gap: 24px;
+  padding-inline: 20px;
+}
+.framework-library-labels {
+  @apply border-b bg-muted/30 text-xs font-medium text-muted-foreground;
+  padding-block: 10px;
+}
+.framework-library-row {
+  padding-block: 16px;
+  transition: background-color 0.15s;
+}
+.framework-library-row:hover {
+  @apply bg-muted/40;
+}
+.framework-library-row:focus-visible {
+  @apply outline-none ring-2 ring-inset ring-ring;
+}
+.framework-library-metric {
+  @apply text-sm;
+}
+.framework-panel {
+  @apply rounded-lg border bg-card text-card-foreground;
+  padding: 20px;
+  min-width: 0;
+}
+.framework-list-panel {
+  min-width: 0;
+}
+.framework-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.framework-panel-header p {
+  @apply text-xs text-muted-foreground;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+.framework-records {
+  @apply overflow-hidden rounded-lg border bg-card px-4;
+}
+.framework-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  align-items: start;
+  gap: 24px;
+}
+.framework-form {
+  display: grid;
+  gap: 20px;
+}
+.framework-field {
+  @apply text-sm font-medium;
+  display: grid;
+  gap: 8px;
+}
+.framework-field small {
+  @apply text-xs font-normal text-muted-foreground;
+  line-height: 1.6;
+}
+.framework-toggle {
+  @apply rounded-lg border bg-muted/30;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 14px;
+}
+.framework-toggle strong {
+  @apply text-sm font-medium;
+}
+.framework-toggle p {
+  @apply text-xs text-muted-foreground;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+.framework-savebar {
+  @apply border-t text-xs text-muted-foreground;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 16px;
+}
+.framework-checklist {
+  display: grid;
+  gap: 20px;
+}
+.framework-checklist li {
+  @apply text-sm;
+  display: flex;
+  gap: 12px;
+}
+.framework-checklist li > svg {
+  @apply text-muted-foreground;
+  flex-shrink: 0;
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+}
+.framework-checklist strong {
+  @apply font-medium;
+}
+.framework-checklist p {
+  @apply text-xs text-muted-foreground;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+.framework-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-block: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.framework-row:last-child {
+  border-bottom: 0;
+}
+.framework-row-title {
+  @apply text-sm font-medium;
+  overflow-wrap: anywhere;
+}
+.framework-row p {
+  @apply text-xs text-muted-foreground;
+  line-height: 1.6;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.framework-row a:hover {
+  color: var(--primary);
+}
+.framework-meta {
+  display: grid;
+  gap: 14px;
+  font-size: 12px;
+}
+.framework-meta > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.framework-meta dt {
+  color: var(--muted-foreground);
+}
+.framework-meta dd {
+  text-align: right;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.framework-tabs {
+  @apply border-b;
+  margin-bottom: 20px;
+  overflow-x: auto;
+}
+.framework-tabs [data-slot='tabs-list'] {
+  border-bottom: 0;
+}
+.framework-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  padding: 40px 20px;
+}
+.framework-state h2,
+.framework-state h3 {
+  @apply text-base font-semibold;
+}
+.framework-state p {
+  @apply text-sm text-muted-foreground;
+  max-width: 430px;
+  line-height: 1.6;
+}
+.framework-pagination {
+  @apply text-xs text-muted-foreground;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+@media (max-width: 1000px) {
+  .framework-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 767px) {
+  .framework-library-labels {
+    display: none;
+  }
+  .framework-library-columns {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    padding: 16px;
+  }
+  .framework-library-metric {
+    display: flex;
+    gap: 4px;
+    align-items: baseline;
+  }
+  .framework-library-metric:last-of-type {
+    justify-content: end;
+  }
+}
+@media (max-width: 600px) {
+  .framework-page {
+    padding: 20px 16px 28px;
+  }
+  .framework-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .framework-panel {
+    padding: 16px;
+  }
+  .framework-filters {
+    width: 100%;
+  }
+  .framework-row {
+    flex-wrap: wrap;
+  }
+  .framework-panel-header {
+    flex-wrap: wrap;
+  }
+  body:has(.framework-workspace) [data-slot='popover-content'] {
+    min-width: 0;
+    max-width: calc(100vw - 2rem);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .framework-library-row {
+    transition: none;
+  }
+}

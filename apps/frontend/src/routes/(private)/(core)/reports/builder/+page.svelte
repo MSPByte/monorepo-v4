@@ -611,9 +611,9 @@
   }
 </script>
 
-<div class="flex size-full flex-col overflow-hidden bg-muted/[0.02]">
+<div class="rw-builder flex size-full flex-col overflow-hidden bg-muted/[0.02]">
   <!-- Header -->
-  <div class="flex items-center justify-between gap-3 border-b bg-background px-6 py-3">
+  <div class="rw-builder-header flex items-center justify-between gap-3 border-b bg-background px-6 py-3">
     <div class="flex min-w-0 items-center gap-2">
       <Button
         variant="ghost"
@@ -662,10 +662,10 @@
   </div>
 
   <!-- Two-pane composer -->
-  <div class="flex min-h-0 flex-1">
+  <div class="rw-builder-body flex min-h-0 flex-1">
     <!-- Left: composition -->
     <aside
-      class="flex w-[460px] shrink-0 flex-col overflow-y-auto border-r bg-background"
+      class="rw-builder-aside flex w-[460px] shrink-0 flex-col overflow-y-auto border-r bg-background"
     >
       <!-- Identity block -->
       <div class="space-y-3 border-b px-5 pb-5 pt-5">
@@ -1038,7 +1038,7 @@
               <h3 class="text-sm font-semibold">Sort</h3>
             </div>
             <p class="text-muted-foreground text-[11px]">
-              Optional. Applied server-side before pagination.
+              Choose the order in which results appear.
             </p>
           </div>
         </div>
@@ -1132,7 +1132,7 @@
               </div>
               <h3 class="text-sm font-semibold">Start with a data source</h3>
               <p class="text-muted-foreground mt-1 text-xs">
-                Pick a vendor table on the left. The preview here will run automatically as you add
+                Choose a data source in the report settings. The preview here will run automatically as you add
                 columns and filters.
               </p>
             </div>
@@ -1145,7 +1145,7 @@
               </div>
               <h3 class="text-sm font-semibold">Add a column to see rows</h3>
               <p class="text-muted-foreground mt-1 text-xs">
-                Pick at least one field from the {currentSource?.label ?? 'source'} shape. The
+                Pick at least one field from the {currentSource?.label ?? 'source'} data source. The
                 columns you add appear in the order you pick them.
               </p>
             </div>

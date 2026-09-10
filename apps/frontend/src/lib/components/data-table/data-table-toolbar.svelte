@@ -53,7 +53,7 @@
   }: Props = $props();
 </script>
 
-<div class="space-y-4">
+<div data-slot="data-table-toolbar" class="space-y-4">
   <!-- Top row: Search and Actions -->
   <div class="flex items-center justify-between gap-4">
     <!-- Global Search + Refresh -->

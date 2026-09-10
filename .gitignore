@@ -14,6 +14,9 @@ node_modules
 
 # Testing
 coverage
+# Coverage is also an application route, not generated test output.
+!apps/frontend/src/routes/(private)/(core)/coverage/
+!apps/frontend/src/routes/(private)/(core)/coverage/**
 
 # Turbo
 .turbo

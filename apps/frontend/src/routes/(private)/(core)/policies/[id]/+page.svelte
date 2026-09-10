@@ -9,7 +9,8 @@
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
 
-  import SectionPanel from '$lib/components/panel/section-panel.svelte';
+  import SectionPanel from './_components/policy-panel.svelte';
+  import { authStore } from '$lib/stores/auth.store.svelte';
   import MetaRow from '$lib/components/panel/meta-row.svelte';
   import FindingSeverityBadge from '$lib/components/domain/finding-severity-badge.svelte';
   import FindingStatusBadge from '$lib/components/domain/finding-status-badge.svelte';
@@ -29,11 +30,16 @@
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
+  const canWrite = $derived(authStore.isAllowed('Policies.Write'));
   const id = $derived(page.params.id ?? '');
 
   const policyQuery = createQuery(() => ({
     queryKey: ['policies.byId', id],
     queryFn: () => trpc.policies.byId.query({ id }),
+  }));
+  const statsQuery = createQuery(() => ({
+    queryKey: ['policies.tableData', id],
+    queryFn: () => trpc.policies.tableData.query({ page: 1, pageSize: 1, filters: [{ column: 'id', operator: 'eq', value: id }] }),
   }));
   const findingsQuery = createQuery(() => ({
     queryKey: ['findings.list', { policyId: id }],
@@ -159,7 +165,8 @@
     if (!condition || typeof condition !== 'object') return null;
     const record = condition as Record<string, unknown>;
     const value = 'value' in record ? ` ${String(record.value)}` : '';
-    return `${String(record.field ?? 'field')} ${String(record.op ?? 'matches')}${value}`;
+    const operators: Record<string, string> = { eq: 'equals', ne: 'does not equal', gt: 'is greater than', gte: 'is at least', lt: 'is less than', lte: 'is at most', withinDays: 'is within the last (days)', olderThanDays: 'is older than (days)', exists: 'exists', missing: 'is missing', containsAny: 'contains any of', notContainsAny: 'contains none of', notContains: 'does not contain' };
+    return `${prettyText(String(record.field ?? 'field'))} ${operators[String(record.op)] ?? String(record.op ?? 'matches')}${value}`;
   }
 
   function policyOrigin(policy: unknown) {
@@ -308,8 +315,8 @@
       ? (definition.filter as { conditions: unknown[] }).conditions
       : []}
   {@const assignments = assignmentsQuery.data ?? []}
-  {@const findings = findingsQuery.data ?? policy.exampleFindings ?? []}
-  {@const openFindingCount = findings.length || policy.openFindingCount}
+  {@const findings = (findingsQuery.data ?? policy.exampleFindings ?? []).filter(finding => ['open', 'acknowledged', 'regressed'].includes(finding.status))}
+  {@const openFindingCount = statsQuery.data?.rows[0]?.openFindingCount ?? null}
   <FadeIn class="size-full overflow-auto">
     <PolicyBriefing
       id={policy.id}
@@ -325,33 +332,38 @@
       frameworkCount={(policy.frameworks ?? []).length}
       assignmentCount={assignments.length}
       lastEvaluation={policy.lastEvaluation}
-      updatedAt={policy.lastEvaluation}
+
     />
 
     <div class="mx-auto max-w-[1400px] space-y-4 p-4 lg:p-6">
+      {#if !policy.enabled}
+        <div class="pw-guidance"><p>This policy is disabled. Enable it in the builder to allow evaluation.</p></div>
+      {:else if !assignmentsQuery.isPending && !assignmentsQuery.isError && assignments.length === 0}
+        <div class="pw-guidance"><p>No direct assignments. Add a target below, or include this policy in an assigned framework.</p><a href="#assignments">Review assignments ↓</a></div>
+      {/if}
       <!-- Top legend strip -->
       <div
         class="flex flex-wrap items-center justify-between gap-3 border-l-2 border-primary bg-card px-3 py-2"
       >
-        <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+        <div class="text-[10px] tracking-normal text-muted-foreground">
           POLICY DEFINITION
           {#if policy.lastEvaluation}
             <span class="ml-2 text-foreground/70">·</span>
-            <span class="ml-2">evaluated {formatRelativeDate(policy.lastEvaluation)}</span>
+            <span class="ml-2">updated {formatRelativeDate(policy.lastEvaluation)}</span>
           {/if}
         </div>
-        <a
+        {#if canWrite}<a
           href={`/policies/builder?id=${encodeURIComponent(policy.id)}`}
-          class="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground"
+          class="inline-flex items-center gap-1 text-[10px] tracking-normal text-muted-foreground hover:text-foreground"
         >
-          <Pencil class="size-3" /> edit in builder
-        </a>
+          <Pencil class="size-3" /> Edit policy
+        </a>{/if}
       </div>
 
       <div class="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(340px,1fr)]">
         <!-- LEFT COLUMN -->
         <div class="space-y-4">
-          <SectionPanel code="01" title="EVALUATION">
+          <SectionPanel title="Evaluation">
             {#snippet aside()}
               {definitionKindLabel(definition?.kind)}
             {/snippet}
@@ -359,17 +371,17 @@
               <div class="grid gap-3 md:grid-cols-3">
                 <div>
                   <div
-                    class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                    class="text-[10px] tracking-normal text-muted-foreground"
                   >
                     Table
                   </div>
-                  <div class="mt-0.5 truncate font-mono text-[13px] tabular-nums">
+                  <div class="mt-0.5 truncate text-[13px] tabular-nums">
                     {String(definition?.table ?? '—')}
                   </div>
                 </div>
                 <div>
                   <div
-                    class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                    class="text-[10px] tracking-normal text-muted-foreground"
                   >
                     Resource
                   </div>
@@ -380,11 +392,11 @@
                 {#if definition?.threshold !== undefined}
                   <div>
                     <div
-                      class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                      class="text-[10px] tracking-normal text-muted-foreground"
                     >
                       Threshold
                     </div>
-                    <div class="mt-0.5 font-mono text-[13px] tabular-nums">
+                    <div class="mt-0.5 text-[13px] tabular-nums">
                       {String(definition.threshold)}
                     </div>
                   </div>
@@ -393,20 +405,20 @@
 
               <div>
                 <div
-                  class="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                  class="mb-1.5 text-[10px] tracking-normal text-muted-foreground"
                 >
                   Row expectations
                 </div>
                 <div class="grid gap-1.5">
                   {#each expectations as condition}
                     <div
-                      class="border border-border/60 bg-muted/20 px-2.5 py-1.5 font-mono text-[11.5px] tabular-nums"
+                      class="border border-border/60 bg-muted/20 px-2.5 py-1.5 text-[11.5px] tabular-nums"
                     >
                       {conditionLabel(condition)}
                     </div>
                   {:else}
                     <p
-                      class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70"
+                      class="text-[11px] tracking-normal text-muted-foreground/70"
                     >
                       no row expectations defined
                     </p>
@@ -416,20 +428,20 @@
 
               <div>
                 <div
-                  class="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                  class="mb-1.5 text-[10px] tracking-normal text-muted-foreground"
                 >
                   Candidate filters
                 </div>
                 <div class="grid gap-1.5">
                   {#each filters as condition}
                     <div
-                      class="border border-border/60 bg-muted/20 px-2.5 py-1.5 font-mono text-[11.5px] tabular-nums"
+                      class="border border-border/60 bg-muted/20 px-2.5 py-1.5 text-[11.5px] tabular-nums"
                     >
                       {conditionLabel(condition)}
                     </div>
                   {:else}
                     <p
-                      class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70"
+                      class="text-[11px] tracking-normal text-muted-foreground/70"
                     >
                       all scoped rows are evaluated
                     </p>
@@ -440,7 +452,7 @@
               <div class="grid gap-3 border-t border-border/50 pt-3 md:grid-cols-2">
                 <div>
                   <div
-                    class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                    class="text-[10px] tracking-normal text-muted-foreground"
                   >
                     Finding title
                   </div>
@@ -450,7 +462,7 @@
                 </div>
                 <div>
                   <div
-                    class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                    class="text-[10px] tracking-normal text-muted-foreground"
                   >
                     Summary template
                   </div>
@@ -463,7 +475,7 @@
               <div class="flex items-center justify-between gap-3 border-t border-border/50 pt-3">
                 <button
                   type="button"
-                  class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground"
+                  class="text-[10px] tracking-normal text-muted-foreground hover:text-foreground"
                   onclick={() => (showRawDefinition = !showRawDefinition)}
                 >
                   {showRawDefinition ? '− hide' : '+ show'} raw definition JSON
@@ -471,7 +483,7 @@
               </div>
               {#if showRawDefinition}
                 <pre
-                  class="max-h-[420px] overflow-auto border border-border/60 bg-muted/40 p-3 font-mono text-[11px] leading-relaxed">{JSON.stringify(
+                  class="max-h-[420px] overflow-auto border border-border/60 bg-muted/40 p-3 text-[11px] leading-relaxed">{JSON.stringify(
                     definition,
                     null,
                     2
@@ -480,18 +492,19 @@
             </div>
           </SectionPanel>
 
-          <SectionPanel code="02" title="FRAMEWORK MEMBERSHIP">
+          <div id="frameworks"></div>
+          <SectionPanel title="Framework membership">
             {#snippet aside()}
               {(policy.frameworks ?? []).length} in
             {/snippet}
             <div class="space-y-3 text-sm">
               <div class="grid gap-2">
                 <span
-                  class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                  class="text-[10px] tracking-normal text-muted-foreground"
                 >
                   Frameworks that include this policy
                 </span>
-                <MultiSelect
+                <MultiSelect disabled={!canWrite}
                   options={frameworkOptions}
                   bind:selected={selectedFrameworkIds}
                   placeholder="Add frameworks"
@@ -502,7 +515,7 @@
                     class="flex items-center justify-between gap-3 border-t border-border/50 pt-2"
                   >
                     <span
-                      class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                      class="text-[10px] tracking-normal text-muted-foreground"
                     >
                       {selectedFrameworkIds.length} selected · audit-logged on save
                     </span>
@@ -510,11 +523,11 @@
                       <Button
                         variant="outline"
                         onclick={discardMembership}
-                        disabled={savingFrameworks}
+                        disabled={!canWrite || savingFrameworks}
                       >
                         Discard
                       </Button>
-                      <Button onclick={saveFrameworkMembership} disabled={savingFrameworks}>
+                      <Button onclick={saveFrameworkMembership} disabled={!canWrite || savingFrameworks}>
                         <Save class="size-4" /> Save
                       </Button>
                     </div>
@@ -532,7 +545,7 @@
                       <div class="truncate">{framework.name}</div>
                       {#if framework.description}
                         <div
-                          class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground"
+                          class="truncate text-[10.5px] tracking-normal text-muted-foreground"
                         >
                           {framework.description}
                         </div>
@@ -540,7 +553,7 @@
                     </div>
                     <div class="flex shrink-0 items-center gap-2">
                       <span
-                        class={`inline-flex items-center rounded-[3px] border px-1.5 py-px font-mono text-[10.5px] uppercase tracking-[0.14em] ${
+                        class={`inline-flex items-center rounded-md border px-1.5 py-px text-[10.5px] tracking-normal ${
                           framework.enabled
                             ? 'border-foreground/15 bg-foreground/4 text-foreground/90'
                             : 'border-border/60 bg-muted/40 text-muted-foreground'
@@ -553,7 +566,7 @@
                   </a>
                 {:else}
                   <p
-                    class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70"
+                    class="text-[11px] tracking-normal text-muted-foreground/70"
                   >
                     not included in any framework
                   </p>
@@ -562,7 +575,7 @@
             </div>
           </SectionPanel>
 
-          <SectionPanel code="03" title="DEPENDENCIES">
+          <SectionPanel title="Dependencies">
             {#snippet aside()}
               {(policy.dependencyChildren ?? []).length} child · {(policy.dependencyParents ?? []).length} parent
             {/snippet}
@@ -570,19 +583,19 @@
               <div class="space-y-2 border border-border/60 bg-muted/20 p-3">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <div class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <div class="text-[10px] tracking-normal text-muted-foreground">
                       Parent-managed child policies
                     </div>
                     <p class="mt-1 text-sm text-muted-foreground">
                       When this policy is failing, selected child policies stop creating new findings until the parent is healthy again.
                     </p>
                   </div>
-                  <span class="rounded-[3px] border border-foreground/15 bg-foreground/4 px-1.5 py-px font-mono text-[10.5px] uppercase tracking-[0.14em] text-foreground/90">
+                  <span class="rounded-md border border-foreground/15 bg-foreground/4 px-1.5 py-px text-[10.5px] tracking-normal text-foreground/90">
                     BLOCKS
                   </span>
                 </div>
 
-                <MultiSelect
+                <MultiSelect disabled={!canWrite}
                   options={childPolicyOptions}
                   bind:selected={selectedChildPolicyIds}
                   placeholder="Add child policies"
@@ -591,18 +604,18 @@
 
                 {#if dependenciesDirty}
                   <div class="flex items-center justify-between gap-3 border-t border-border/50 pt-2">
-                    <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <span class="text-[10px] tracking-normal text-muted-foreground">
                       {selectedChildPolicyIds.length} child policies selected
                     </span>
                     <div class="flex items-center gap-2">
                       <Button
                         variant="outline"
                         onclick={discardDependencies}
-                        disabled={savingDependencies}
+                        disabled={!canWrite || savingDependencies}
                       >
                         Discard
                       </Button>
-                      <Button onclick={saveDependencies} disabled={savingDependencies}>
+                      <Button onclick={saveDependencies} disabled={!canWrite || savingDependencies}>
                         <Save class="size-4" /> Save
                       </Button>
                     </div>
@@ -619,11 +632,11 @@
                     <div class="min-w-0">
                       <div class="flex min-w-0 items-center gap-2">
                         <span class="truncate">{child.name}</span>
-                        <span class="rounded-[3px] border border-foreground/15 bg-foreground/4 px-1.5 py-px font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/90">
+                        <span class="rounded-md border border-foreground/15 bg-foreground/4 px-1.5 py-px text-[10px] tracking-normal text-foreground/90">
                           {relationshipBadge(child.relationshipType)}
                         </span>
                       </div>
-                      <div class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+                      <div class="truncate text-[10.5px] tracking-normal text-muted-foreground">
                         {prettyText(child.category ?? 'Operational')} · {child.openFindingCount} open
                       </div>
                     </div>
@@ -633,7 +646,7 @@
                     </div>
                   </a>
                 {:else}
-                  <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
+                  <p class="text-[11px] tracking-normal text-muted-foreground/70">
                     no child policies linked
                   </p>
                 {/each}
@@ -641,7 +654,7 @@
 
               {#if (policy.dependencyParents ?? []).length > 0}
                 <div class="border-t border-border/50 pt-3">
-                  <div class="mb-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <div class="mb-2 text-[10px] tracking-normal text-muted-foreground">
                     Managed by parent policies
                   </div>
                   <div class="space-y-1">
@@ -652,7 +665,7 @@
                       >
                         <div class="min-w-0">
                           <div class="truncate">{parent.name}</div>
-                          <div class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+                          <div class="truncate text-[10.5px] tracking-normal text-muted-foreground">
                             remove from parent policy · {parent.openFindingCount} open
                           </div>
                         </div>
@@ -668,17 +681,19 @@
             </div>
           </SectionPanel>
 
-          <SectionPanel code="04" title="OPEN FINDINGS">
+          <SectionPanel title="Open findings">
             {#snippet aside()}
               <a
                 href={`/findings?policyId=${policy.id}`}
                 class="inline-flex items-center gap-1 hover:text-foreground"
               >
-                view all <ArrowUpRight class="size-3" />
+                View all <ArrowUpRight class="size-3" />
               </a>
             {/snippet}
             <div>
-              {#each findings as finding}
+              {#if findingsQuery.isError}<p role="alert" class="text-sm text-destructive">Findings could not be loaded. <button class="underline" onclick={() => findingsQuery.refetch()}>Retry</button></p>
+              {:else if findingsQuery.isPending}<p class="text-sm text-muted-foreground">Loading findings…</p>{/if}
+              {#each findings.slice(0, 8) as finding}
                 <a
                   href={`/findings/${finding.id}`}
                   class="grid gap-3 border-b border-border/40 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] lg:items-center"
@@ -687,7 +702,7 @@
                     <div class="truncate">{finding.title}</div>
                     {#if finding.evidenceSummary}
                       <div
-                        class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground"
+                        class="truncate text-[10.5px] tracking-normal text-muted-foreground"
                       >
                         {finding.evidenceSummary}
                       </div>
@@ -695,7 +710,7 @@
                   </div>
                   <div class="min-w-0 text-sm text-muted-foreground">
                     {#if finding.lastSeenAt}
-                      <div class="font-mono text-[10.5px] uppercase tracking-wider">
+                      <div class="text-[10.5px] tracking-normal">
                         last seen {formatRelativeDate(finding.lastSeenAt)}
                       </div>
                     {/if}
@@ -708,9 +723,9 @@
                 </a>
               {:else}
                 <p
-                  class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70"
+                  class="text-[11px] tracking-normal text-muted-foreground/70"
                 >
-                  no open findings
+                  {findingsQuery.isPending || findingsQuery.isError ? '' : 'No recent open findings. Use View all to review the full history.'}
                 </p>
               {/each}
             </div>
@@ -719,14 +734,14 @@
 
         <!-- RIGHT COLUMN -->
         <aside class="space-y-4">
-          <SectionPanel code="@" title="POLICY FACTS">
+          <SectionPanel title="Policy facts">
             <dl>
               <MetaRow label="Category" value={policy.category ? prettyText(policy.category) : 'Operational'} />
               <MetaRow label="Target" value={prettyText(policy.scope)} />
               <MetaRow label="Data source" value={policy.dataSource ?? policy.source} />
               <MetaRow label="Origin" value={policyOrigin(policy)} />
               <MetaRow
-                label="Evaluated"
+                label="Updated"
                 value={policy.lastEvaluation ? formatRelativeDate(policy.lastEvaluation) : null}
                 mono
               />
@@ -734,29 +749,33 @@
           </SectionPanel>
 
           {#if policy.recommendation}
-            <SectionPanel code="!" title="RECOMMENDATION">
+            <SectionPanel title="Recommendation">
               <p class="text-sm leading-relaxed text-foreground/90">{policy.recommendation}</p>
             </SectionPanel>
           {/if}
 
-          <SectionPanel code="#" title="ASSIGNMENTS">
+          <div id="assignments"></div>
+          <SectionPanel title="Assignments">
             {#snippet aside()}
-              {assignments.length} active
+              {assignments.filter(assignment => assignment.enabled).length} enabled
             {/snippet}
             <div class="space-y-3 text-sm">
               <div class="space-y-2 border border-border/60 bg-muted/20 p-3">
                 <div
-                  class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                  class="text-[10px] tracking-normal text-muted-foreground"
                 >
                   Add assignment
                 </div>
                 <label class="grid gap-1 text-sm">
                   <span
-                    class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                    class="text-[10px] tracking-normal text-muted-foreground"
                   >
                     Scope
                   </span>
                   <SingleSelect
+                    aria-label="Assignment scope"
+                    allowClear={false}
+                    disabled={!canWrite}
                     options={scopeOptions}
                     bind:selected={scopeType}
                     onchange={() => (targetId = '')}
@@ -765,11 +784,13 @@
                 {#if scopeType !== 'global'}
                   <label class="grid gap-1 text-sm">
                     <span
-                      class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                      class="text-[10px] tracking-normal text-muted-foreground"
                     >
                       Target
                     </span>
                     <SingleSelect
+                      aria-label="Assignment target"
+                      disabled={!canWrite}
                       options={targetOptions}
                       bind:selected={targetId}
                       placeholder="Choose target"
@@ -780,16 +801,18 @@
                   class="flex items-center justify-between gap-3 border-t border-border/50 pt-2"
                 >
                   <label class="flex items-center gap-2 text-sm">
-                    <Switch bind:checked={assignmentEnabled} />
+                    <Switch disabled={!canWrite} bind:checked={assignmentEnabled} />
                     <span>Enabled on save</span>
                   </label>
-                  <Button onclick={saveAssignment} disabled={savingAssignment}>
+                  <Button onclick={saveAssignment} disabled={!canWrite || savingAssignment || (scopeType !== 'global' && !targetId)}>
                     <Plus class="size-4" /> Add
                   </Button>
                 </div>
               </div>
 
               <div>
+                {#if assignmentsQuery.isError}<p role="alert" class="text-sm text-destructive">Assignments could not be loaded. <button class="underline" onclick={() => assignmentsQuery.refetch()}>Retry</button></p>
+                {:else if assignmentsQuery.isPending}<p class="text-sm text-muted-foreground">Loading assignments…</p>{/if}
                 {#each assignments as assignment}
                   <div
                     class="flex items-center justify-between gap-3 border-b border-border/40 py-2 last:border-b-0"
@@ -801,7 +824,7 @@
                       <div class="min-w-0">
                         <div class="truncate text-sm">{assignmentTarget(assignment)}</div>
                         <div
-                          class="truncate font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground"
+                          class="truncate text-[10.5px] tracking-normal text-muted-foreground"
                         >
                           {scopeShort[assignment.scopeType] ?? assignment.scopeType}
                         </div>
@@ -809,7 +832,7 @@
                     </div>
                     <div class="flex shrink-0 items-center gap-2">
                       <span
-                        class={`inline-flex items-center rounded-[3px] border px-1.5 py-px font-mono text-[10.5px] uppercase tracking-[0.14em] ${
+                        class={`inline-flex items-center rounded-md border px-1.5 py-px text-[10.5px] tracking-normal ${
                           assignment.enabled
                             ? 'border-foreground/15 bg-foreground/4 text-foreground/90'
                             : 'border-border/60 bg-muted/40 text-muted-foreground'
@@ -822,7 +845,7 @@
                         size="icon"
                         title="Remove assignment"
                         onclick={() => deleteAssignment(assignment.id)}
-                        disabled={deletingAssignmentId === assignment.id}
+                        disabled={!canWrite || deletingAssignmentId !== null}
                       >
                         <Trash2 class="size-4" />
                       </Button>
@@ -830,9 +853,9 @@
                   </div>
                 {:else}
                   <p
-                    class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70"
+                    class="text-[11px] tracking-normal text-muted-foreground/70"
                   >
-                    no assignments — this policy evaluates nowhere
+                    {assignmentsQuery.isPending || assignmentsQuery.isError ? '' : 'No direct assignments. Framework assignments may still apply.'}
                   </p>
                 {/each}
               </div>
@@ -842,6 +865,10 @@
       </div>
     </div>
   </FadeIn>
-{:else}
+{:else if policyQuery.isError}
+  <div class="pw-empty" role="alert"><h1>Policy could not be loaded</h1><p>Try again or return to the policy library.</p><Button onclick={() => policyQuery.refetch()}>Try again</Button><a href="/policies">All policies</a></div>
+{:else if policyQuery.isPending}
   <Loader />
+{:else}
+  <div class="pw-empty"><h1>Policy not found</h1><p>It may have been removed or you may no longer have access.</p><a href="/policies">All policies</a></div>
 {/if}

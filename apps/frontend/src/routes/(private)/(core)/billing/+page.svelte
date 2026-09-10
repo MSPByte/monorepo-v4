@@ -6,8 +6,9 @@
   import { toast } from 'svelte-sonner';
 
   import { STALE } from '$lib/query';
+  import ScopeBar from '../reports/_components/scope-bar.svelte';
   import * as Card from '$lib/components/ui/card';
-  import * as Tabs from '$lib/components/ui/tabs';
+  import * as Sheet from '$lib/components/ui/sheet';
   import { Button } from '$lib/components/ui/button';
   import SingleSelect from '$lib/components/single-select.svelte';
   import { Input } from '$lib/components/ui/input';
@@ -21,8 +22,8 @@
   } from '$lib/components/data-table';
   import Loader from '$lib/components/transition/loader.svelte';
   import { toServerTableInput } from '$lib/components/domain/server-table';
-  import SignalStrip from '$lib/components/panel/signal-strip.svelte';
-  import SignalCell from '$lib/components/panel/signal-cell.svelte';
+  import * as AlertDialog from '$lib/components/ui/alert-dialog';
+  import './workspace.css';
 
   import Plus from '@lucide/svelte/icons/plus';
   import Search from '@lucide/svelte/icons/search';
@@ -34,8 +35,6 @@
   import CircleAlert from '@lucide/svelte/icons/circle-alert';
   import CircleCheck from '@lucide/svelte/icons/circle-check';
   import FileWarning from '@lucide/svelte/icons/file-warning';
-  import Sigma from '@lucide/svelte/icons/sigma';
-  import WandSparkles from '@lucide/svelte/icons/wand-sparkles';
 
   import RuleEditorSheet from './_components/rule-editor-sheet.svelte';
   import RuleCard from './_components/rule-card.svelte';
@@ -64,6 +63,8 @@
     mutationFn: (id: string) => trpc.billing.deleteRule.mutate({ id }),
     onSuccess: () => {
       toast.success('Rule deleted');
+      ruleToDelete = null;
+      refreshReport();
       qc.invalidateQueries({ queryKey: ['billing.rules'] });
       qc.invalidateQueries({ queryKey: ['billing.report'] });
     },
@@ -83,14 +84,41 @@
     unitPrice: number;
   };
 
+  let ruleToDelete = $state<Rule | null>(null);
+  let reportRevision = $state(0);
+  let reportLoading = $state(true);
+  let reportError = $state(false);
+  let requestId = 0;
+
+  function refreshReport() {
+    detailRow = null;
+    reportSnapshot = null;
+    reportRevision += 1;
+  }
+
+  let reportSnapshot = $state<ReportResponse | null>(null);
+  let detailRow = $state<ReportRow | null>(null);
+  const detailIndex = $derived(
+    reportSnapshot?.rows.findIndex(
+      (row) =>
+        row.psaItemId === detailRow?.psaItemId &&
+        row.ruleId === detailRow?.ruleId &&
+        row.siteId === detailRow?.siteId
+    ) ?? -1
+  );
+  function moveDetail(offset: number) {
+    detailRow = reportSnapshot?.rows[detailIndex + offset] ?? detailRow;
+  }
   let sheetOpen = $state(false);
   let editingRule = $state<any>(null);
   let creationSeed = $state<RuleCreationSeed | null>(null);
   let activeTab = $state('reconciliation');
 
-  // Scope filters are compound and forwarded to the server as report input
-  let siteFilter = $state<string>('all');
-  let siteGroupFilter = $state<string>('all');
+  const prefsQuery = createQuery(() => ({
+    queryKey: ['reports.getMyPrefs'],
+    queryFn: () => trpc.reports.getMyPrefs.query(),
+    staleTime: STALE.PAGE,
+  }));
 
   // Rules tab state
   type RuleSortKey = 'name' | 'matched' | 'enabled' | 'delta';
@@ -100,16 +128,15 @@
   let ruleEnabledFilter = $state<'all' | 'enabled' | 'disabled'>('all');
   let ruleFacetFilter = $state<string>('all');
 
-  let reportSnapshot = $state<ReportResponse | null>(null);
-  // Bump this whenever a query dependency changes so DataTable re-runs fetchData.
-  // Scope filters are the only external input the DataTable can't see natively;
-  // hashing them into a stable number keeps the effect-based refresh out of the file.
-  const refreshKey = $derived(hashScope(siteFilter, siteGroupFilter));
+  const refreshKey = $derived(
+    hashScope(
+      `${prefsQuery.data?.scopeKind}|${prefsQuery.data?.scopeIds?.join(',')}|${reportRevision}`
+    )
+  );
 
-  function hashScope(site: string, group: string): number {
+  function hashScope(scope: string): number {
     let h = 0;
-    const s = `${site}|${group}`;
-    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    for (let i = 0; i < scope.length; i++) h = (h * 31 + scope.charCodeAt(i)) | 0;
     return h;
   }
 
@@ -159,19 +186,30 @@
   }
 
   async function fetchData(input: PaginationInput) {
-    const base = toServerTableInput(input, ['siteName', 'psaItemName', 'ruleName']);
-    const response = await trpc.billing.report.query({
-      ...base,
-      scopeSiteId: siteFilter !== 'all' ? siteFilter : undefined,
-      scopeSiteGroupId: siteGroupFilter !== 'all' ? siteGroupFilter : undefined,
-    });
-    reportSnapshot = response;
-    const rows: EnrichedRow[] = response.rows.map((row, idx) => ({
-      ...row,
-      id: row.psaItemId ?? `${row.ruleId ?? 'x'}-${row.siteId ?? 'unmapped'}-${idx}`,
-      vendorFacetLabel: row.vendorFacetLabel ?? 'No rule',
-    }));
-    return { rows, total: response.total };
+    const currentRequest = ++requestId;
+    reportLoading = true;
+    reportError = false;
+    try {
+      const base = toServerTableInput(input, ['siteName', 'psaItemName', 'ruleName']);
+      const response = await trpc.billing.report.query({
+        ...base,
+      });
+      if (currentRequest === requestId) reportSnapshot = response;
+      const rows: EnrichedRow[] = response.rows.map((row, idx) => ({
+        ...row,
+        id: row.psaItemId ?? `${row.ruleId ?? 'x'}-${row.siteId ?? 'unmapped'}-${idx}`,
+        vendorFacetLabel: row.vendorFacetLabel ?? 'No rule',
+      }));
+      return { rows, total: response.total };
+    } catch (error) {
+      if (currentRequest === requestId) {
+        reportSnapshot = null;
+        reportError = true;
+      }
+      throw error;
+    } finally {
+      if (currentRequest === requestId) reportLoading = false;
+    }
   }
 
   const matchedRowsByRule = $derived.by(() => {
@@ -197,7 +235,6 @@
       overCount: 0,
     }
   );
-  const filteredRowCount = $derived(reportSnapshot?.total ?? 0);
 
   function openNewRule() {
     editingRule = null;
@@ -209,7 +246,7 @@
     creationSeed = null;
     sheetOpen = true;
   }
-  function openRuleFromLine(row: EnrichedRow) {
+  function openRuleFromLine(row: ReportRow) {
     if (!row.psaItemId || row.status !== 'missing_rule') return;
     editingRule = null;
     creationSeed = {
@@ -241,15 +278,13 @@
   function statusLabel(status: ReportRow['status']) {
     switch (status) {
       case 'missing_rule':
-        return 'no rule';
+        return 'Missing rule';
       case 'missing_psa_line':
-        return 'no PSA line';
+        return 'Missing PSA line';
       default:
-        return status;
+        return status.charAt(0).toUpperCase() + status.slice(1);
     }
   }
-
-  const summary = $derived(reportSnapshot?.summary);
 
   const facetSelectOptions = $derived([
     { label: 'No rule', value: 'No rule' },
@@ -275,7 +310,8 @@
       title: 'PSA item',
       sortable: true,
       searchable: true,
-      width: '20%',
+      width: '32%',
+      cell: itemCell,
       filter: {
         type: 'text',
         operators: ['contains', 'eq'],
@@ -285,6 +321,7 @@
     {
       key: 'vendorFacetLabel',
       title: 'Category',
+      defaultHidden: true,
       sortable: true,
       searchable: true,
       width: '150px',
@@ -298,6 +335,7 @@
     {
       key: 'ruleName',
       title: 'Rule',
+      defaultHidden: true,
       sortable: true,
       searchable: true,
       cell: ruleNameCell,
@@ -305,6 +343,7 @@
     {
       key: 'billedQuantity',
       title: 'Billed',
+      width: '76px',
       sortable: true,
       filter: {
         type: 'number',
@@ -315,33 +354,38 @@
     {
       key: 'actualQuantity',
       title: 'Actual',
+      width: '76px',
       sortable: true,
       filter: {
         type: 'number',
         operators: ['eq', 'gt', 'gte', 'lt', 'lte'],
       },
-      cell: numberCell,
+      cell: actualCell,
+      exportValue: ({ row, value }) => (row.status === 'missing_rule' ? null : Number(value)),
     },
     {
       key: 'diffQuantity',
-      title: 'Δ Qty',
+      title: 'Quantity gap',
+      width: '110px',
       sortable: true,
       filter: {
         type: 'number',
         operators: ['eq', 'gt', 'gte', 'lt', 'lte'],
       },
       cell: diffCell,
+      exportValue: ({ row, value }) => (row.status === 'missing_rule' ? null : Number(value)),
     },
     {
       key: 'monthlyDelta',
-      title: 'Δ MRR',
+      title: 'Monthly impact',
+      width: '135px',
       sortable: true,
       filter: {
         type: 'number',
         operators: ['eq', 'gt', 'gte', 'lt', 'lte'],
       },
       cell: mrrCell,
-      exportValue: ({ value }) => Number(value) || 0,
+      exportValue: ({ row, value }) => (row.status === 'missing_rule' ? null : Number(value) || 0),
     },
     {
       key: 'status',
@@ -361,20 +405,19 @@
       },
       cell: statusCell,
     },
-    {
-      key: 'createRule',
-      title: '',
-      width: '132px',
-      hideable: false,
-      cell: createRuleCell,
-    },
   ]);
 
   const views: TableView<EnrichedRow>[] = [
+    { id: 'all', label: 'All lines', filters: [] },
+    {
+      id: 'matched',
+      label: 'Matched',
+      filters: [{ field: 'status', operator: 'eq', value: 'matched' }],
+    },
     {
       id: 'actionable',
-      label: 'Actionable',
-      description: 'Underbilled and overbilled rows — the ones with recoverable MRR',
+      label: 'Differences',
+      description: 'Review quantity differences before updating billing in your PSA',
       isDefault: true,
       filters: [
         { field: 'status', operator: 'neq', value: 'matched' },
@@ -410,23 +453,6 @@
       sort: { field: 'actualQuantity', dir: 'desc' },
     },
   ];
-
-  const siteFilterOptions = $derived([
-    { value: 'all', label: 'All sites' },
-    { value: 'unmapped', label: 'Unmapped' },
-    ...sites.map((site) => ({ value: site.id, label: site.name })),
-  ]);
-  const siteGroupFilterOptions = $derived([
-    { value: 'all', label: 'All groups' },
-    ...siteGroups.map((group) => ({ value: group.id, label: group.name })),
-  ]);
-
-  function onSiteFilterChange(v: string) {
-    siteFilter = v || 'all';
-  }
-  function onSiteGroupFilterChange(v: string) {
-    siteGroupFilter = v || 'all';
-  }
 
   const filteredRules = $derived.by(() => {
     const q = ruleSearch.trim().toLowerCase();
@@ -473,7 +499,7 @@
   });
 
   const ruleSortOptions = [
-    { value: 'matched', label: 'Matched rows' },
+    { value: 'matched', label: 'Report lines' },
     { value: 'delta', label: 'MRR impact' },
     { value: 'name', label: 'Name' },
     { value: 'enabled', label: 'Enabled state' },
@@ -503,7 +529,18 @@
 </script>
 
 {#snippet siteCell({ value }: { row: EnrichedRow; value: string })}
-  <span class="font-medium">{value}</span>
+  <span class="bw-site-name" title={value}>{value}</span>
+{/snippet}
+
+{#snippet itemCell({ row, value }: { row: EnrichedRow; value: string })}
+  <button
+    class="bw-item-name"
+    title={value}
+    onclick={(event) => {
+      event.stopPropagation();
+      detailRow = row;
+    }}>{value}</button
+  >
 {/snippet}
 
 {#snippet categoryCell({ row, value }: { row: EnrichedRow; value: string | null })}
@@ -522,29 +559,22 @@
   {/if}
 {/snippet}
 
-{#snippet createRuleCell({ row }: { row: EnrichedRow; value: unknown })}
-  {#if row.status === 'missing_rule' && row.psaItemId}
-    <Button
-      size="sm"
-      variant="outline"
-      class="h-7 gap-1.5 px-2 text-xs"
-      onclick={(event) => {
-        event.stopPropagation();
-        openRuleFromLine(row);
-      }}
-    >
-      <WandSparkles class="size-3.5" />
-      Create rule
-    </Button>
-  {/if}
-{/snippet}
-
 {#snippet numberCell({ value }: { row: EnrichedRow; value: number })}
   <span class="font-mono tabular-nums">{value}</span>
 {/snippet}
 
-{#snippet diffCell({ value }: { row: EnrichedRow; value: number })}
-  {#if value > 0}
+{#snippet actualCell({ row, value }: { row: EnrichedRow; value: number })}
+  {#if row.status === 'missing_rule'}
+    <span class="text-muted-foreground" title="No inventory rule configured">—</span>
+  {:else}
+    <span class="font-mono tabular-nums">{value}</span>
+  {/if}
+{/snippet}
+
+{#snippet diffCell({ row, value }: { row: EnrichedRow; value: number })}
+  {#if row.status === 'missing_rule'}
+    <span class="text-muted-foreground" title="Create a rule to calculate this comparison">—</span>
+  {:else if value > 0}
     <span class="font-mono tabular-nums text-amber-600 dark:text-amber-400">+{value}</span>
   {:else if value < 0}
     <span class="font-mono tabular-nums text-rose-600 dark:text-rose-400">{value}</span>
@@ -553,8 +583,10 @@
   {/if}
 {/snippet}
 
-{#snippet mrrCell({ value }: { row: EnrichedRow; value: number })}
-  {#if value > 0}
+{#snippet mrrCell({ row, value }: { row: EnrichedRow; value: number })}
+  {#if row.status === 'missing_rule'}
+    <span class="text-muted-foreground" title="Create a rule to calculate this comparison">—</span>
+  {:else if value > 0}
     <span class="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
       {formatMoney(value)}
     </span>
@@ -568,107 +600,36 @@
 {/snippet}
 
 {#snippet reconciliationStrip(api: SignalStripApi)}
-  <SignalStrip
-    code="01"
-    title="Revenue Signal"
-    meta={summary
-      ? `${(summary.totalRows ?? 0).toLocaleString()} rows`
-      : 'loading'}
-  >
-    <SignalCell
-      code="U"
-      label="Underbilled MRR"
-      tone="warning"
-      onclick={() => api.addFilter({ field: 'status', operator: 'eq', value: 'underbilled' })}
-    >
-      {#if summary}
-        <div class="mt-0.5 flex items-baseline gap-2">
-          <span class="font-mono text-xl font-semibold tabular-nums text-amber-600 dark:text-amber-400">
-            {formatMoney(summary.underbilledMrr)}
-          </span>
-        </div>
-        <div class="pt-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          {summary.underbilledRows ?? 0} rows to fix
-        </div>
-      {:else}
-        <div class="h-8"></div>
-      {/if}
-    </SignalCell>
-    <SignalCell
-      code="O"
-      label="Overbilled MRR"
-      tone="destructive"
-      onclick={() => api.addFilter({ field: 'status', operator: 'eq', value: 'overbilled' })}
-    >
-      {#if summary}
-        <div class="mt-0.5 flex items-baseline gap-2">
-          <span class="font-mono text-xl font-semibold tabular-nums text-rose-600 dark:text-rose-400">
-            {formatMoney(summary.overbilledMrr)}
-          </span>
-        </div>
-        <div class="pt-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          {summary.overbilledRows ?? 0} rows to refund
-        </div>
-      {:else}
-        <div class="h-8"></div>
-      {/if}
-    </SignalCell>
-    <SignalCell code="Δ" label="Net MRR Delta">
-      {#if summary}
-        {@const net = summary.netMrrDelta ?? 0}
-        <div class="mt-0.5 flex items-baseline gap-2">
-          <span
-            class={`font-mono text-xl font-semibold tabular-nums ${net > 0 ? 'text-emerald-600 dark:text-emerald-400' : net < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-foreground'}`}
-          >
-            {formatMoney(net)}
-          </span>
-        </div>
-        <div class="pt-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          {net > 0 ? 'recoverable revenue' : net < 0 ? 'net refund exposure' : 'balanced'}
-        </div>
-      {:else}
-        <div class="h-8"></div>
-      {/if}
-    </SignalCell>
-    <SignalCell
-      code="C"
-      label="Coverage Gaps"
-      onclick={() => api.addFilter({ field: 'status', operator: 'eq', value: 'missing_rule' })}
-    >
-      {#if summary}
-        <div class="mt-0.5 flex items-baseline gap-2">
-          <span class="font-mono text-xl font-semibold tabular-nums text-foreground">
-            {(summary.missingRuleRows ?? 0).toLocaleString()}
-          </span>
-          <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            missing rule
-          </span>
-        </div>
-        <div class="pt-0.5 flex flex-wrap gap-x-3 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          <button
-            type="button"
-            class="hover:text-foreground"
-            onclick={(e) => {
-              e.stopPropagation();
-              api.addFilter({ field: 'status', operator: 'eq', value: 'missing_psa_line' });
-            }}
-          >
-            no PSA line
-            <span class="tabular-nums text-foreground">
-              {(summary.missingPsaLineRows ?? 0).toLocaleString()}
-            </span>
-          </button>
-        </div>
-      {:else}
-        <div class="h-8"></div>
-      {/if}
-    </SignalCell>
-  </SignalStrip>
+  <div class="bw-review-bar" aria-label="Billing review views">
+    {#each views as view}
+      <button
+        class:active={api.activeViewId === view.id}
+        aria-pressed={api.activeViewId === view.id}
+        onclick={() => api.setView(view.id)}>{view.label}</button
+      >
+    {/each}
+    {#if reportSnapshot}
+      <span
+        class="bw-impact"
+        title="Monthly impact of lines with rules in the current filtered view"
+        >Monthly impact <strong>{formatMoney(filteredTotals.mrr)}</strong></span
+      >
+    {/if}
+  </div>
+  {#if rulesQuery.isSuccess && rules.length === 0}
+    <div class="bw-start">
+      <span>Create a rule to compare PSA items with inventory.</span><Button
+        variant="ghost"
+        size="sm"
+        onclick={openNewRule}>Create first rule</Button
+      >
+    </div>
+  {/if}
 {/snippet}
 
-{#snippet statusCell({ value }: { row: EnrichedRow; value: ReportRow['status'] })}
+{#snippet statusCell({ row, value }: { row: EnrichedRow; value: ReportRow['status'] })}
   <span
-    class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider {statusClass(
+    class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium {statusClass(
       value
     )}"
   >
@@ -687,164 +648,210 @@
   </span>
 {/snippet}
 
-<RuleEditorSheet bind:open={sheetOpen} {editingRule} {creationSeed} {sites} {siteGroups} />
+<RuleEditorSheet
+  bind:open={sheetOpen}
+  {editingRule}
+  {creationSeed}
+  {sites}
+  {siteGroups}
+  onSaved={refreshReport}
+/>
 
-<div class="flex size-full flex-col overflow-hidden">
-  <div class="flex flex-col gap-5 border-b p-6 pb-4">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">Billing Reconciliation</h1>
-        <p class="text-sm text-muted-foreground">
-          Compare PSA billing lines against vendor inventory and surface revenue drift.
-        </p>
-      </div>
-      <Button class="gap-2" onclick={openNewRule}>
-        <Plus class="size-4" />
-        New rule
+<AlertDialog.Root
+  open={ruleToDelete !== null}
+  onOpenChange={(open) => {
+    if (!open && !deleteRule.isPending) ruleToDelete = null;
+  }}
+>
+  <AlertDialog.Content>
+    <AlertDialog.Header>
+      <AlertDialog.Title>Delete reconciliation rule?</AlertDialog.Title>
+      <AlertDialog.Description>
+        “{ruleToDelete?.name}” will be removed. Billing lines covered only by this rule will need a
+        new rule. This does not change billing in your PSA.
+      </AlertDialog.Description>
+    </AlertDialog.Header>
+    <AlertDialog.Footer>
+      <AlertDialog.Cancel disabled={deleteRule.isPending}>Keep rule</AlertDialog.Cancel>
+      <Button
+        variant="destructive"
+        disabled={deleteRule.isPending}
+        onclick={() => {
+          if (ruleToDelete) deleteRule.mutate(ruleToDelete.id);
+        }}
+      >
+        {deleteRule.isPending ? 'Deleting…' : 'Delete rule'}
       </Button>
+    </AlertDialog.Footer>
+  </AlertDialog.Content>
+</AlertDialog.Root>
+
+<Sheet.Root
+  open={detailRow !== null}
+  onOpenChange={(open) => {
+    if (!open) detailRow = null;
+  }}
+>
+  <Sheet.Content side="right" class="bw-detail flex w-full! flex-col gap-0 p-0 sm:max-w-lg!">
+    <Sheet.Header class="border-b p-5 pr-12">
+      <Sheet.Title>Billing item</Sheet.Title>
+      <Sheet.Description>Review quantities and the rule behind this comparison.</Sheet.Description>
+    </Sheet.Header>
+    {#if detailRow}
+      {@const rule = rules.find((rule) => rule.id === detailRow?.ruleId)}
+      <div class="bw-detail-body">
+        <p class="text-sm text-muted-foreground">{detailRow.siteName}</p>
+        <h2>{detailRow.psaItemName}</h2>
+        <span
+          class="inline-flex rounded-full border px-2 py-1 text-xs {statusClass(detailRow.status)}"
+          >{statusLabel(detailRow.status)}</span
+        >
+        <dl class="bw-detail-quantities">
+          <div>
+            <dt>Billed quantity</dt>
+            <dd>{detailRow.billedQuantity}</dd>
+          </div>
+          <div>
+            <dt>Actual quantity</dt>
+            <dd>{detailRow.status === 'missing_rule' ? '—' : detailRow.actualQuantity}</dd>
+          </div>
+          <div>
+            <dt>Quantity gap</dt>
+            <dd>{detailRow.status === 'missing_rule' ? '—' : detailRow.diffQuantity}</dd>
+          </div>
+          <div>
+            <dt>Monthly impact</dt>
+            <dd>
+              {detailRow.status === 'missing_rule' ? '—' : formatMoney(detailRow.monthlyDelta)}
+            </dd>
+          </div>
+        </dl>
+        <div class="bw-detail-rule">
+          <h3>Reconciliation rule</h3>
+          <p>{detailRow.ruleName ?? 'No rule configured'}</p>
+          <p class="text-muted-foreground">
+            {detailRow.vendorFacetLabel ?? 'Choose which inventory to count by creating a rule.'}
+          </p>
+        </div>
+        <p class="text-sm leading-6 text-muted-foreground">
+          {detailRow.status === 'missing_rule'
+            ? 'This line has not been compared with inventory. Create a rule to calculate the actual quantity.'
+            : detailRow.status === 'missing_psa_line'
+              ? 'Inventory is covered by a rule, but no PSA billing line matches. Check the rule and your PSA agreement.'
+              : detailRow.status === 'matched'
+                ? 'The billed quantity matches the inventory counted by this rule.'
+                : 'Check the inventory counted by the rule, then update the billing quantity in your PSA if needed. This report does not change invoices.'}
+        </p>
+        {#if detailRow.status === 'missing_rule' && detailRow.psaItemId}
+          <Button
+            onclick={() => {
+              if (detailRow) openRuleFromLine(detailRow);
+              detailRow = null;
+            }}><Plus class="size-4" /> Create rule for this item</Button
+          >
+        {:else if rule}
+          <Button
+            variant="outline"
+            onclick={() => {
+              detailRow = null;
+              openEditRule(rule);
+            }}>Edit reconciliation rule</Button
+          >
+        {/if}
+      </div>
+      <Sheet.Footer class="flex-row items-center justify-between border-t p-4">
+        <span class="text-xs text-muted-foreground"
+          >Item {detailIndex + 1} of {reportSnapshot?.rows.length ?? 0} on this page</span
+        >
+        <div class="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={detailIndex <= 0}
+            onclick={() => moveDetail(-1)}>Previous</Button
+          ><Button
+            variant="outline"
+            size="sm"
+            disabled={detailIndex < 0 || detailIndex >= (reportSnapshot?.rows.length ?? 0) - 1}
+            onclick={() => moveDetail(1)}>Next</Button
+          >
+        </div>
+      </Sheet.Footer>
+    {/if}
+  </Sheet.Content>
+</Sheet.Root>
+
+<div class="billing-workspace">
+  <header class="bw-header">
+    <h1>{activeTab === 'reconciliation' ? 'Billing items' : 'Reconciliation rules'}</h1>
+    {#if activeTab === 'reconciliation'}
+      <div class="bw-scope">
+        <ScopeBar />
+      </div>
+    {/if}
+    <div class="bw-actions">
+      <Button
+        variant="outline"
+        size="sm"
+        onclick={() => (activeTab = activeTab === 'rules' ? 'reconciliation' : 'rules')}
+        >{activeTab === 'rules' ? 'Back to billing items' : `Rules (${rules.length})`}</Button
+      >
+      <Button size="sm" onclick={openNewRule}><Plus class="size-4" /> New rule</Button>
     </div>
-  </div>
-
-  <div class="flex min-h-0 flex-1 flex-col overflow-hidden p-6 pt-4">
-    <Tabs.Root bind:value={activeTab} class="flex min-h-0 flex-1 flex-col gap-4">
-      <Tabs.List>
-        <Tabs.Trigger value="reconciliation">Reconciliation</Tabs.Trigger>
-        <Tabs.Trigger value="rules">
-          Rules
-          <Badge variant="secondary" class="ml-1.5 h-5 px-1.5 text-[10px]">
-            {rules.length}
-          </Badge>
-        </Tabs.Trigger>
-      </Tabs.List>
-
-      <Tabs.Content value="reconciliation" class="mt-0 flex min-h-0 flex-1 flex-col">
-        <div class="flex flex-wrap items-center gap-2 border-b p-3">
-          <span class="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Scope
-          </span>
-          <div class="w-48">
-            <SingleSelect
-              options={siteFilterOptions}
-              selected={siteFilter}
-              onchange={onSiteFilterChange}
-              placeholder="All sites"
-              searchPlaceholder="Search sites…"
-            />
-          </div>
-          <div class="w-48">
-            <SingleSelect
-              options={siteGroupFilterOptions}
-              selected={siteGroupFilter}
-              onchange={onSiteGroupFilterChange}
-              placeholder="All groups"
-              searchPlaceholder="Search groups…"
-            />
-          </div>
-          {#if siteFilter !== 'all' || siteGroupFilter !== 'all'}
-            <Button
+  </header>
+  <div class="bw-body">
+    {#if activeTab === 'reconciliation'}
+      <div class="bw-reconciliation">
+        {#if filterOptionsQuery.isError}
+          <div class="bw-notice" role="alert">
+            Site filters could not be loaded. <Button
               variant="ghost"
               size="sm"
-              class="text-xs"
-              onclick={() => {
-                siteFilter = 'all';
-                siteGroupFilter = 'all';
-              }}
+              onclick={() => filterOptionsQuery.refetch()}>Retry filters</Button
             >
-              Clear scope
-            </Button>
-          {/if}
-        </div>
-
-        <div class="flex min-h-0 flex-1 flex-col p-3">
+          </div>
+        {/if}
+        {#if reportError}
+          <div class="bw-notice" role="alert">
+            Billing report could not be loaded. <Button
+              variant="outline"
+              size="sm"
+              onclick={refreshReport}>Retry report</Button
+            >
+          </div>
+        {/if}
+        <div class="bw-table flex min-h-0 flex-1 flex-col">
           <DataTable
             {fetchData}
             {columns}
             {views}
             {refreshKey}
+            enableRowSelection={false}
+            enableViewSelector={false}
+            onrowclick={(row) => (detailRow = row)}
             defaultPageSize={50}
             defaultSort={{ field: 'monthlyDelta', dir: 'desc' }}
             globalSearchFields={['siteName', 'psaItemName', 'ruleName']}
             signalStrip={reconciliationStrip}
           />
         </div>
-
-        <div
-          class="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/30 px-4 py-2.5"
-        >
-          <div
-            class="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
+      </div>
+    {:else}
+      <div class="bw-rules">
+        <div class="bw-section-heading">
+          <div>
+            <p>
+              Define which PSA items to compare, what inventory to count, and which sites to
+              include.
+            </p>
+          </div>
+          <span class="bw-context"
+            >{rules.filter((rule) => rule.enabled).length} enabled · {rules.filter(
+              (rule) => !rule.enabled
+            ).length} disabled</span
           >
-            <Sigma class="size-3.5" />
-            Totals · {filteredRowCount} row{filteredRowCount === 1 ? '' : 's'}
-            {#if filteredTotals.underCount > 0 || filteredTotals.overCount > 0}
-              <span class="ml-1 flex items-center gap-1 normal-case">
-                {#if filteredTotals.underCount > 0}
-                  <span class="text-amber-600 dark:text-amber-400">
-                    {filteredTotals.underCount} under
-                  </span>
-                {/if}
-                {#if filteredTotals.underCount > 0 && filteredTotals.overCount > 0}
-                  <span class="text-muted-foreground/60">·</span>
-                {/if}
-                {#if filteredTotals.overCount > 0}
-                  <span class="text-rose-600 dark:text-rose-400">
-                    {filteredTotals.overCount} over
-                  </span>
-                {/if}
-              </span>
-            {/if}
-          </div>
-          <div class="flex flex-wrap items-center gap-4 font-mono text-xs tabular-nums">
-            <div class="flex items-baseline gap-1.5">
-              <span class="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Billed
-              </span>
-              <span class="font-semibold">{filteredTotals.billed}</span>
-            </div>
-            <div class="flex items-baseline gap-1.5">
-              <span class="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Actual
-              </span>
-              <span class="font-semibold">{filteredTotals.actual}</span>
-            </div>
-            <div class="flex items-baseline gap-1.5">
-              <span class="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Δ Qty
-              </span>
-              {#if filteredTotals.diff > 0}
-                <span class="font-semibold text-amber-600 dark:text-amber-400">
-                  +{filteredTotals.diff}
-                </span>
-              {:else if filteredTotals.diff < 0}
-                <span class="font-semibold text-rose-600 dark:text-rose-400">
-                  {filteredTotals.diff}
-                </span>
-              {:else}
-                <span class="font-semibold text-muted-foreground">0</span>
-              {/if}
-            </div>
-            <div class="flex items-baseline gap-1.5">
-              <span class="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Δ MRR
-              </span>
-              {#if filteredTotals.mrr > 0}
-                <span class="font-semibold text-emerald-600 dark:text-emerald-400">
-                  {formatMoney(filteredTotals.mrr)}
-                </span>
-              {:else if filteredTotals.mrr < 0}
-                <span class="font-semibold text-rose-600 dark:text-rose-400">
-                  {formatMoney(filteredTotals.mrr)}
-                </span>
-              {:else}
-                <span class="font-semibold text-muted-foreground">{formatMoney(0)}</span>
-              {/if}
-            </div>
-          </div>
         </div>
-      </Tabs.Content>
-
-      <Tabs.Content value="rules" class="mt-0 flex min-h-0 flex-1 flex-col">
-        <Card.Root class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg">
+        <Card.Root class="bw-rules-panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg">
           <div class="flex flex-wrap items-center gap-2 border-b p-3">
             <div class="relative min-w-[220px] flex-1">
               <Search
@@ -852,13 +859,15 @@
               />
               <Input
                 class="pl-8"
-                placeholder="Search by name, PSA match value…"
+                aria-label="Search reconciliation rules"
+                placeholder="Search rules or PSA items…"
                 bind:value={ruleSearch}
               />
             </div>
 
             <div class="w-44">
               <SingleSelect
+                aria-label="Filter rules by status"
                 options={ruleEnabledOptions}
                 selected={ruleEnabledFilter}
                 onchange={onRuleEnabledFilterChange}
@@ -868,6 +877,7 @@
 
             <div class="w-56">
               <SingleSelect
+                aria-label="Filter rules by category"
                 options={ruleFacetOptions}
                 selected={ruleFacetFilter}
                 onchange={onRuleFacetFilterChange}
@@ -879,6 +889,7 @@
             <div class="flex items-center gap-1">
               <div class="w-44">
                 <SingleSelect
+                  aria-label="Sort rules by"
                   options={ruleSortOptions}
                   selected={ruleSortKey}
                   onchange={onRuleSortKeyChange}
@@ -890,7 +901,9 @@
                 size="icon"
                 class="size-9 shrink-0"
                 onclick={toggleRuleSortDir}
-                aria-label={ruleSortDir === 'asc' ? 'Sort ascending' : 'Sort descending'}
+                aria-label={ruleSortDir === 'asc'
+                  ? 'Switch to descending order'
+                  : 'Switch to ascending order'}
                 title={ruleSortDir === 'asc' ? 'Ascending' : 'Descending'}
               >
                 {#if ruleSortDir === 'asc'}
@@ -908,10 +921,20 @@
             </div>
           </div>
 
+          <p class="px-4 pt-3 text-xs text-muted-foreground">
+            Rule results reflect your saved scope. Disabled rules are excluded from the report.
+          </p>
           <div class="min-h-0 flex-1 overflow-auto p-4">
             {#if rulesQuery.isLoading}
               <div class="flex h-40 items-center justify-center">
                 <Loader />
+              </div>
+            {:else if rulesQuery.isError}
+              <div class="bw-empty" role="alert">
+                <CircleAlert class="size-7 text-destructive" />
+                <h3>Rules could not be loaded</h3>
+                <p>Try again to load your reconciliation rules.</p>
+                <Button variant="outline" onclick={() => rulesQuery.refetch()}>Retry rules</Button>
               </div>
             {:else if rules.length === 0}
               <div class="flex h-full flex-col items-center justify-center gap-3 p-10 text-center">
@@ -933,7 +956,7 @@
                 <div>
                   <div class="text-sm font-medium">No rules match your search</div>
                   <p class="text-xs text-muted-foreground">
-                    Adjust the search or enabled filter to see more rules.
+                    Clear your search, status, and category filters to see all rules.
                   </p>
                 </div>
                 <Button
@@ -942,6 +965,7 @@
                   onclick={() => {
                     ruleSearch = '';
                     ruleEnabledFilter = 'all';
+                    ruleFacetFilter = 'all';
                   }}
                 >
                   Clear filters
@@ -954,10 +978,10 @@
                     rule={rule as any}
                     scopeSummary={summarizeScopes(rule.scopes ?? [])}
                     facetLabel={facetLabelById.get(rule.vendorFacet) ?? rule.vendorFacet}
-                    matchedRows={matchedRowsByRule.get(rule.id) ?? 0}
-                    mrrDelta={mrrDeltaByRule.get(rule.id) ?? 0}
+                    matchedRows={reportSnapshot ? (matchedRowsByRule.get(rule.id) ?? 0) : undefined}
+                    mrrDelta={reportSnapshot ? (mrrDeltaByRule.get(rule.id) ?? 0) : undefined}
                     onEdit={() => openEditRule(rule)}
-                    onDelete={() => deleteRule.mutate(rule.id)}
+                    onDelete={() => (ruleToDelete = rule)}
                     deletePending={deleteRule.isPending}
                   />
                 {/each}
@@ -965,7 +989,7 @@
             {/if}
           </div>
         </Card.Root>
-      </Tabs.Content>
-    </Tabs.Root>
+      </div>
+    {/if}
   </div>
 </div>

@@ -1,9 +1,26 @@
 <script lang="ts">
-  import { getContext } from 'svelte';
-  import { goto } from '$app/navigation';
+  import './builder.css';
+  import { getContext, tick } from 'svelte';
+  import { goto, beforeNavigate } from '$app/navigation';
   import { page } from '$app/state';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
-  import { ArrowLeft, Plus, Save, Trash2 } from '@lucide/svelte';
+  import {
+    ArrowLeft,
+    ArrowRight,
+    Plus,
+    Save,
+    Trash2,
+    Copy,
+    Undo2,
+    ShieldCheck,
+    SlidersHorizontal,
+    Filter,
+    ListChecks,
+    FileText,
+    Check,
+    CircleAlert,
+    ChevronRight,
+  } from '@lucide/svelte';
   import { toast } from 'svelte-sonner';
   import { showErrorToast } from '$lib/utils/errors';
   import type { AppRouter } from '@mspbyte/trpc';
@@ -22,6 +39,8 @@
   import MultiSelect from '$lib/components/multi-select.svelte';
   import ReferenceMultiSelect from '$lib/components/reference-multi-select.svelte';
   import ReferenceSingleSelect from '$lib/components/reference-single-select.svelte';
+  import { authStore } from '$lib/stores/auth.store.svelte';
+  import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import TagInserter from '$lib/components/tag-inserter.svelte';
 
   type FlatField = {
@@ -48,6 +67,7 @@
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const queryClient = useQueryClient();
   const policyId = $derived(page.url.searchParams.get('id') ?? '');
+  const canWrite = $derived(authStore.isAllowed('Policies.Write'));
   const editing = $derived(Boolean(policyId));
   const policyQuery = createQuery(() => ({
     queryKey: ['policies.byId', policyId],
@@ -74,6 +94,55 @@
   let nextId = 1;
   let loadedPolicyId = $state('');
   let saving = $state(false);
+  let saved = $state(false);
+  let initialDraft = $state('');
+  let leaveOpen = $state(false);
+  let pendingNavigation: (() => void) | null = null;
+  let pendingTable = $state('');
+  type EditorSection = 'setup' | 'scope' | 'rules' | 'finding' | 'review';
+  let activeSection = $state<EditorSection>('setup');
+  let showIssues = $state(false);
+  let createdPolicyId = $state('');
+  let removedCondition = $state<{
+    kind: ConditionKind;
+    condition: ConditionDraft;
+    index: number;
+  } | null>(null);
+  let editorPane = $state<HTMLElement | null>(null);
+
+  function selectSection(section: EditorSection) {
+    activeSection = section;
+    void tick().then(() => {
+      editorPane?.scrollTo({ top: 0 });
+    });
+  }
+
+  function issueSection(issue: string): EditorSection {
+    if (issue.startsWith('Filter')) return 'scope';
+    if (issue.startsWith('Rule') || issue.startsWith('Add at least') || issue.startsWith('Minimum'))
+      return 'rules';
+    if (issue.includes('finding title')) return 'finding';
+    return 'setup';
+  }
+
+  async function fixIssue(issue: string) {
+    selectSection(issueSection(issue));
+    await tick();
+    if (issue.includes('policy a name')) document.getElementById('policy-name')?.focus();
+    else if (issue.includes('finding title')) titleRef?.focus();
+    else if (issue.startsWith('Minimum')) document.getElementById('policy-threshold')?.focus();
+    else {
+      const index = Number(issue.match(/^(?:Filter|Rule) (\d+)/)?.[1] ?? 1) - 1;
+      editorPane
+        ?.querySelectorAll<HTMLElement>('.pb-condition')
+        [index]?.scrollIntoView({ block: 'nearest' });
+      editorPane
+        ?.querySelectorAll<HTMLElement>('.pb-condition')
+        [index]?.querySelector<HTMLElement>('[role="combobox"]')
+        ?.focus();
+    }
+  }
+
   let name = $state('');
   let description = $state('');
   let category = $state('Operational');
@@ -93,13 +162,89 @@
   let summaryRef = $state<HTMLTextAreaElement | null>(null);
   let recommendationRef = $state<HTMLTextAreaElement | null>(null);
 
+  const draftSnapshot = $derived(
+    JSON.stringify({
+      name,
+      description,
+      category,
+      enabled,
+      severity,
+      table,
+      mode,
+      candidateConditions,
+      expectationConditions,
+      threshold,
+      titleTemplate,
+      summary,
+      recommendation,
+      linkedArticleIds,
+    })
+  );
+  const dirty = $derived(!!initialDraft && initialDraft !== draftSnapshot && !saved);
+  $effect(() => {
+    if (
+      !initialDraft &&
+      (!editing || (loadedPolicyId === policyId && loadedLinksPolicyId === policyId))
+    )
+      initialDraft = draftSnapshot;
+  });
+  beforeNavigate((navigation) => {
+    if (!dirty) return;
+    if (navigation.willUnload) {
+      navigation.cancel();
+      return;
+    }
+    navigation.cancel();
+    pendingNavigation = () => {
+      saved = true;
+      void goto(navigation.to?.url.href ?? '/policies');
+    };
+    leaveOpen = true;
+  });
+
+  function conditionIssue(condition: ConditionDraft): string | null {
+    const field = fieldFor(condition.field);
+    if (!field) return 'Choose a field.';
+    if (!operatorOptions(field).some((option) => option.value === condition.op))
+      return 'Choose a valid comparison.';
+    if (!opNeedsValue(condition.op)) return null;
+    if (isSetOp(condition.op))
+      return condition.values?.some((value) => value.trim()) ? null : 'Add at least one value.';
+    if (!condition.value.trim()) return 'Enter a value.';
+    if (
+      (field.field.type === 'number' || ['olderThanDays', 'withinDays'].includes(condition.op)) &&
+      !Number.isFinite(Number(condition.value))
+    )
+      return 'Enter a valid number.';
+    return null;
+  }
+  const validationIssues = $derived([
+    ...(!name.trim() ? ['Give this policy a name.'] : []),
+    ...(!titleTemplate.trim() ? ['Add a finding title.'] : []),
+    ...candidateConditions.flatMap((condition, index) => {
+      const issue = conditionIssue(condition);
+      return issue ? [`Filter ${index + 1}: ${issue}`] : [];
+    }),
+    ...expectationConditions.flatMap((condition, index) => {
+      const issue = conditionIssue(condition);
+      return issue ? [`Rule ${index + 1}: ${issue}`] : [];
+    }),
+    ...(mode === 'rowExpectation' && !expectationConditions.length
+      ? ['Add at least one rule.']
+      : []),
+    ...(mode === 'tableThreshold' &&
+    (!threshold.trim() || !Number.isInteger(Number(threshold)) || Number(threshold) < 0)
+      ? ['Minimum matching rows must be a whole number of zero or more.']
+      : []),
+  ]);
+
   const articleOptions = $derived(
     (articlesQuery.data ?? [])
       .filter((article) => article.status !== 'archived')
       .map((article) => ({
         value: article.id,
         label: `${article.kbId} — ${article.title}`,
-      })),
+      }))
   );
 
   const selectedTable = $derived.by<PolicyTableShape>(() => {
@@ -134,10 +279,6 @@
     value: shape.table,
     label: shape.label,
   }));
-  const modeOptions = [
-    { value: 'rowExpectation', label: 'Every matching row must pass' },
-    { value: 'tableThreshold', label: 'Matching row count threshold' },
-  ];
   const booleanOptions = [
     { value: 'true', label: 'True' },
     { value: 'false', label: 'False' },
@@ -266,7 +407,47 @@
     else expectationConditions = [...expectationConditions, newCondition()];
   }
 
+  function duplicateCondition(kind: ConditionKind, condition: ConditionDraft) {
+    const conditions = kind === 'candidates' ? candidateConditions : expectationConditions;
+    const index = conditions.findIndex((item) => item.id === condition.id);
+    const copy = {
+      ...condition,
+      id: newCondition().id,
+      values: condition.values ? [...condition.values] : undefined,
+    };
+    const next = [...conditions.slice(0, index + 1), copy, ...conditions.slice(index + 1)];
+    if (kind === 'candidates') candidateConditions = next;
+    else expectationConditions = next;
+  }
+
+  function undoRemove() {
+    if (!removedCondition) return;
+    const { kind, condition, index } = removedCondition;
+    const conditions = kind === 'candidates' ? candidateConditions : expectationConditions;
+    const next = [...conditions.slice(0, index), condition, ...conditions.slice(index)];
+    if (kind === 'candidates') candidateConditions = next;
+    else expectationConditions = next;
+    removedCondition = null;
+  }
+
+  function conditionSummary(condition: ConditionDraft) {
+    const field = fieldFor(condition.field);
+    if (!field) return 'Choose a field to begin';
+    const operator =
+      operatorOptions(field)
+        .find((option) => option.value === condition.op)
+        ?.label.toLowerCase() ?? condition.op;
+    const value = isSetOp(condition.op)
+      ? condition.values?.join(', ')
+      : (field.field.options?.find((option) => option.value === condition.value)?.label ??
+        condition.value);
+    return `${field.label} ${operator}${opNeedsValue(condition.op) ? ` ${value || '…'}` : ''}`;
+  }
+
   function removeCondition(kind: ConditionKind, id: string) {
+    const conditions = kind === 'candidates' ? candidateConditions : expectationConditions;
+    const index = conditions.findIndex((condition) => condition.id === id);
+    if (index >= 0) removedCondition = { kind, index, condition: conditions[index]! };
     if (kind === 'candidates') {
       candidateConditions = candidateConditions.filter((condition) => condition.id !== id);
     } else {
@@ -275,6 +456,7 @@
   }
 
   function resetForTable() {
+    removedCondition = null;
     candidateConditions = [];
     expectationConditions = [newCondition()];
   }
@@ -363,6 +545,12 @@
   });
 
   async function savePolicy() {
+    if (!canWrite || saving) return;
+    if (validationIssues.length) {
+      showIssues = true;
+      selectSection('review');
+      return;
+    }
     if (!name.trim()) {
       toast.error('Policy name is required');
       return;
@@ -378,7 +566,7 @@
     saving = true;
     try {
       const payload = {
-        name,
+        name: name.trim(),
         description: description || null,
         category: category || null,
         providerId: selectedTable.providerId ?? null,
@@ -388,11 +576,12 @@
         recommendation: recommendation || null,
         definition: buildDefinition(),
       };
-      if (editing) {
-        await trpc.policies.update.mutate({ id: policyId, ...payload });
+      if (editing || createdPolicyId) {
+        const targetPolicyId = policyId || createdPolicyId;
+        await trpc.policies.update.mutate({ id: targetPolicyId, ...payload });
         await trpc.wiki.articleLinks.setForTarget.mutate({
           targetType: 'policy',
-          targetId: policyId,
+          targetId: targetPolicyId,
           articleIds: linkedArticleIds,
         });
         await Promise.all([
@@ -401,10 +590,12 @@
           queryClient.invalidateQueries({ queryKey: ['policies.tableData'] }),
           queryClient.invalidateQueries({ queryKey: ['wiki.articleLinks.forPolicy', policyId] }),
         ]);
+        saved = true;
         toast.success('Policy saved');
-        await goto(`/policies/${policyId}`);
+        await goto(`/policies/${targetPolicyId}`);
       } else {
         const created = await trpc.policies.create.mutate(payload);
+        createdPolicyId = created.id;
         if (linkedArticleIds.length > 0) {
           await trpc.wiki.articleLinks.setForTarget.mutate({
             targetType: 'policy',
@@ -412,272 +603,769 @@
             articleIds: linkedArticleIds,
           });
         }
+        saved = true;
         toast.success('Policy created');
         await goto(`/policies/${created.id}`);
       }
     } catch (error) {
-      showErrorToast(error, 'Failed to save policy.');
+      showErrorToast(
+        error,
+        createdPolicyId
+          ? 'The policy was created, but reference articles could not be saved. Try saving again to finish.'
+          : 'Failed to save policy.'
+      );
     } finally {
       saving = false;
     }
   }
+  const sections = $derived([
+    {
+      id: 'setup' as const,
+      label: 'Policy setup',
+      icon: SlidersHorizontal,
+      summary: `${selectedTable.label} · ${severityOptions.find((option) => option.value === severity)?.label ?? 'High'} severity`,
+      complete: !!name.trim(),
+    },
+    {
+      id: 'scope' as const,
+      label: 'Records to evaluate',
+      icon: Filter,
+      summary: candidateConditions.length
+        ? `${candidateConditions.length} filters · Match all`
+        : 'All records in assigned scope',
+      complete: candidateConditions.every((condition) => !conditionIssue(condition)),
+    },
+    {
+      id: 'rules' as const,
+      label: 'Healthy behavior',
+      icon: ListChecks,
+      summary: `${expectationConditions.length} ${expectationConditions.length === 1 ? 'rule' : 'rules'} · ${mode === 'rowExpectation' ? 'Check each record' : `Minimum ${threshold || '…'} records`}`,
+      complete: !validationIssues.some((issue) => issueSection(issue) === 'rules'),
+    },
+    {
+      id: 'finding' as const,
+      label: 'Finding & guidance',
+      icon: FileText,
+      summary: recommendation.trim()
+        ? 'Remediation guidance included'
+        : 'Tell your team what to do next',
+      complete: !!titleTemplate.trim(),
+    },
+  ]);
+  const sectionTitle = $derived(
+    sections.find((section) => section.id === activeSection)?.label ?? 'Review your policy'
+  );
+  const sectionHelp = {
+    setup:
+      'Choose the data and evaluation method. Give your team enough context to understand the policy.',
+    scope: 'Filter the records to check. All filters must match before a record is evaluated.',
+    rules: 'Describe what healthy looks like. Every rule must pass for a record to be healthy.',
+    finding: 'Write the finding your team will receive and the guidance they need to resolve it.',
+    review: 'Check the behavior and finish any required fields before saving.',
+  };
 </script>
 
-{#snippet conditionEditor(kind: ConditionKind, condition: ConditionDraft)}
+{#snippet conditionEditor(kind: ConditionKind, condition: ConditionDraft, index: number)}
   {@const selectedField = fieldFor(condition.field)}
   {@const ops = operatorOptions(selectedField)}
-  <div class="grid gap-2 rounded-lg border bg-card p-3 md:grid-cols-[minmax(0,1fr)_190px_minmax(0,1fr)_36px]">
-    <SingleSelect
-      options={fieldOptions}
-      selected={condition.field}
-      placeholder="Select field"
-      onchange={(field) => {
-        const selected = fieldFor(field);
-        updateCondition(kind, condition.id, {
-          field,
-          op: operatorOptions(selected)[0]?.value ?? 'eq',
-          value: '',
-        });
-      }}
-    />
-    <SingleSelect
-      options={ops}
-      selected={condition.op}
-      disabled={!selectedField}
-      onchange={(op) => updateCondition(kind, condition.id, { op, value: '', values: [] })}
-    />
-    {#if selectedField && opNeedsValue(condition.op)}
-      {#if isSetOp(condition.op) && selectedField.field.reference}
-        <ReferenceMultiSelect
-          ref={selectedField.field.reference}
-          selected={condition.values ?? []}
-          placeholder="Select values"
-          onchange={(values) => updateCondition(kind, condition.id, { values })}
-        />
-      {:else if !isSetOp(condition.op) && selectedField.field.reference}
-        <ReferenceSingleSelect
-          ref={selectedField.field.reference}
-          selected={condition.value}
-          placeholder="Select value"
-          onchange={(value) => updateCondition(kind, condition.id, { value })}
-        />
-      {:else if selectedField.field.type === 'boolean'}
-        <SingleSelect
-          options={booleanOptions}
-          selected={condition.value}
-          placeholder="Select value"
-          onchange={(value) => updateCondition(kind, condition.id, { value })}
-        />
-      {:else if selectedField.field.options}
-        <SingleSelect
-          options={selectedField.field.options}
-          selected={condition.value}
-          placeholder="Select value"
-          onchange={(value) => updateCondition(kind, condition.id, { value })}
-        />
-      {:else}
-        <Input
-          value={condition.value}
-          type={selectedField.field.type === 'number' ? 'number' : 'text'}
-          placeholder="Value"
-          oninput={(event) =>
-            updateCondition(kind, condition.id, { value: event.currentTarget.value })}
-        />
-      {/if}
-    {:else}
-      <div></div>
-    {/if}
-    <Button variant="ghost" size="icon" onclick={() => removeCondition(kind, condition.id)}>
-      <Trash2 class="size-4" />
-    </Button>
-  </div>
-{/snippet}
-
-<div class="flex size-full flex-col overflow-hidden">
-  <!-- Header bar -->
-  <header class="border-b bg-background">
-    <div class="flex flex-wrap items-center gap-3 px-6 py-3">
-      <button
-        type="button"
-        class="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-        onclick={() => goto(editing ? `/policies/${policyId}` : '/policies')}
-      >
-        <ArrowLeft class="size-3.5" />
-        {editing ? 'Back to policy' : 'All policies'}
-      </button>
-
-      <div class="mx-2 h-5 w-px bg-border"></div>
-
-      <Input
-        placeholder="Policy name"
-        bind:value={name}
-        class="h-9 w-full max-w-sm text-base font-semibold"
-      />
-
-      <div class="ml-auto flex items-center gap-3">
-        <label class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground select-none">
-          <Switch bind:checked={enabled} />
-          {enabled ? 'Enabled' : 'Disabled'}
-        </label>
+  {@const issue = conditionIssue(condition)}
+  <section
+    class="pb-condition"
+    class:pb-condition-incomplete={showIssues && !!issue}
+    aria-label={`${kind === 'candidates' ? 'Filter' : 'Rule'} ${index + 1}`}
+  >
+    <header>
+      <div>
+        <span class="pb-rule-number">{index + 1}</span><strong
+          >{selectedField?.label ?? (kind === 'candidates' ? 'New filter' : 'New rule')}</strong
+        >{#if selectedField}<span class="pb-type">{selectedField.field.type}</span>{/if}
+      </div>
+      <div>
         <Button
-          onclick={savePolicy}
-          disabled={saving || (editing && policyQuery.isLoading)}
-          class="gap-2"
+          variant="ghost"
+          size="icon"
+          aria-label="Duplicate condition"
+          title="Duplicate condition"
+          onclick={() => duplicateCondition(kind, condition)}><Copy size={14} /></Button
+        ><Button
+          variant="ghost"
+          size="icon"
+          aria-label={kind === 'candidates' ? 'Remove filter' : 'Remove rule'}
+          title="Remove condition"
+          onclick={() => removeCondition(kind, condition.id)}><Trash2 size={14} /></Button
         >
-          <Save class="size-4" />
-          {editing ? 'Save Policy' : 'Create Policy'}
-        </Button>
       </div>
-    </div>
-  </header>
-
-  <!-- Two-pane body: info left, rules right -->
-  <div class="grid min-h-0 flex-1 grid-cols-[360px_1fr]">
-
-    <!-- Left: policy information -->
-    <aside class="flex min-h-0 flex-col overflow-y-auto border-r">
-
-      <!-- Identity -->
-      <div class="border-b px-4 py-3 bg-muted/30">
-        <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Identity</p>
+    </header>
+    <div class="pb-condition-fields">
+      <div>
+        <span class="pb-field-label">Field</span>
+        <SingleSelect
+          aria-label="Condition field"
+          options={fieldOptions}
+          selected={condition.field}
+          placeholder="Select field"
+          onchange={(field) => {
+            const selected = fieldFor(field);
+            updateCondition(kind, condition.id, {
+              field,
+              op: operatorOptions(selected)[0]?.value ?? 'eq',
+              value: '',
+              values: [],
+            });
+          }}
+        />
       </div>
-      <div class="space-y-4 p-4">
-        <div class="grid grid-cols-2 gap-3">
-          <div class="space-y-1.5">
-            <label class="text-sm font-medium">Category</label>
-            <Input bind:value={category} placeholder="Operational" />
-          </div>
-          <div class="space-y-1.5">
-            <label class="text-sm font-medium">Severity</label>
-            <SingleSelect options={severityOptions} bind:selected={severity} />
-          </div>
-        </div>
-        <div class="space-y-1.5">
-          <label class="text-sm font-medium">Description</label>
-          <Textarea bind:value={description} placeholder="What does this policy enforce?" rows={3} />
-        </div>
+      <div>
+        <span class="pb-field-label">Comparison</span>
+        <SingleSelect
+          aria-label="Comparison"
+          allowClear={false}
+          options={ops}
+          selected={condition.op}
+          disabled={!selectedField}
+          onchange={(op) => updateCondition(kind, condition.id, { op, value: '', values: [] })}
+        />
       </div>
-
-      <!-- Finding copy -->
-      <div class="border-b border-t px-4 py-3 bg-muted/30">
-        <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Finding Copy</p>
-        <p class="mt-0.5 text-xs text-muted-foreground">Shown on every finding this policy creates.</p>
-      </div>
-      <div class="space-y-4 p-4">
-        <div class="space-y-1.5">
-          <div class="flex items-center justify-between">
-            <label class="text-sm font-medium">Title template</label>
-            <TagInserter groups={tagGroups} target={titleRef} bind:value={titleTemplate} />
-          </div>
-          <Input bind:ref={titleRef} bind:value={titleTemplate} />
-        </div>
-        <div class="space-y-1.5">
-          <div class="flex items-center justify-between">
-            <label class="text-sm font-medium">Summary</label>
-            <TagInserter groups={tagGroups} target={summaryRef} bind:value={summary} />
-          </div>
-          <Textarea bind:ref={summaryRef} bind:value={summary} rows={3} />
-        </div>
-        <div class="space-y-1.5">
-          <div class="flex items-center justify-between">
-            <label class="text-sm font-medium">Recommendation</label>
-            <TagInserter groups={tagGroups} target={recommendationRef} bind:value={recommendation} />
-          </div>
-          <Textarea bind:ref={recommendationRef} bind:value={recommendation} rows={3} />
-        </div>
-        <div class="space-y-1.5">
-          <label class="text-sm font-medium">Linked Wiki articles</label>
-          <MultiSelect
-            options={articleOptions}
-            bind:selected={linkedArticleIds}
-            placeholder="Attach reference articles"
-            searchPlaceholder="Search articles..."
-            maxDisplay={3}
-          />
-          <p class="text-xs text-muted-foreground">Surfaced on findings for quick tech reference.</p>
-        </div>
-      </div>
-    </aside>
-
-    <!-- Right: rule logic -->
-    <div class="flex min-h-0 flex-col overflow-y-auto">
-
-      <!-- Data source -->
-      <div class="border-b px-4 py-3 bg-muted/30">
-        <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Data Source</p>
-      </div>
-      <div class="grid grid-cols-2 gap-4 p-4 border-b">
-        <div class="space-y-1.5">
-          <label class="text-sm font-medium">Source table</label>
-          <SingleSelect options={tableOptions} bind:selected={table} onchange={resetForTable} />
-          <p class="text-xs text-muted-foreground">Changing this resets all filters and rules.</p>
-        </div>
-        <div class="space-y-1.5">
-          <label class="text-sm font-medium">Evaluation mode</label>
-          <SingleSelect options={modeOptions} bind:selected={mode} />
-          <p class="text-xs text-muted-foreground">
-            {#if mode === 'rowExpectation'}
-              A finding fires for each row that fails any rule.
-            {:else}
-              A finding fires when the matching row count falls below the threshold.
-            {/if}
-          </p>
-        </div>
-      </div>
-
-      <!-- Candidate filter -->
-      <div class="flex items-center justify-between border-b px-4 py-3 bg-muted/30">
-        <div>
-          <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Candidate Filter</p>
-          <p class="mt-0.5 text-xs text-muted-foreground">
-            Narrows which {selectedTable.label} rows are evaluated. Leave empty to include all.
-          </p>
-        </div>
-        <Button variant="outline" size="sm" class="shrink-0 gap-2" onclick={() => addCondition('candidates')}>
-          <Plus class="size-4" /> Add Filter
-        </Button>
-      </div>
-      <div class="space-y-2 p-4 border-b">
-        {#each candidateConditions as condition (condition.id)}
-          {@render conditionEditor('candidates', condition)}
+      <div class="pb-condition-value">
+        <span class="pb-field-label">Value</span>
+        {#if selectedField && opNeedsValue(condition.op)}
+          {#if isSetOp(condition.op) && selectedField.field.reference}
+            <ReferenceMultiSelect
+              ref={selectedField.field.reference}
+              selected={condition.values ?? []}
+              placeholder="Select values"
+              onchange={(values) => updateCondition(kind, condition.id, { values })}
+            />
+          {:else if !isSetOp(condition.op) && selectedField.field.reference}
+            <ReferenceSingleSelect
+              ref={selectedField.field.reference}
+              selected={condition.value}
+              placeholder="Select value"
+              onchange={(value) => updateCondition(kind, condition.id, { value })}
+            />
+          {:else if isSetOp(condition.op)}
+            <Input
+              aria-label="Values separated by commas"
+              value={(condition.values ?? []).join(', ')}
+              placeholder="Values, separated by commas"
+              oninput={(event) =>
+                updateCondition(kind, condition.id, {
+                  values: event.currentTarget.value.split(',').map((value) => value.trim()),
+                })}
+            />
+          {:else if selectedField.field.type === 'boolean'}
+            <SingleSelect
+              aria-label="Condition value"
+              options={booleanOptions}
+              selected={condition.value}
+              placeholder="Select value"
+              onchange={(value) => updateCondition(kind, condition.id, { value })}
+            />
+          {:else if selectedField.field.options}
+            <SingleSelect
+              aria-label="Condition value"
+              options={selectedField.field.options}
+              selected={condition.value}
+              placeholder="Select value"
+              onchange={(value) => updateCondition(kind, condition.id, { value })}
+            />
+          {:else}
+            <Input
+              aria-label="Condition value"
+              value={condition.value}
+              type={selectedField.field.type === 'number' ||
+              ['olderThanDays', 'withinDays'].includes(condition.op)
+                ? 'number'
+                : 'text'}
+              placeholder="Value"
+              oninput={(event) =>
+                updateCondition(kind, condition.id, { value: event.currentTarget.value })}
+            />
+          {/if}
         {:else}
-          <div class="rounded-lg border border-dashed py-5 text-center text-sm text-muted-foreground">
-            All rows in scope are included.
-          </div>
-        {/each}
-      </div>
-
-      <!-- Rules -->
-      <div class="flex items-center justify-between border-b px-4 py-3 bg-muted/30">
-        <div>
-          <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Rules</p>
-          <p class="mt-0.5 text-xs text-muted-foreground">
-            {mode === 'tableThreshold'
-              ? 'Conditions a row must satisfy to count toward the threshold.'
-              : 'Conditions each row must satisfy. A finding fires for each row that fails.'}
+          <p class="pb-value-hint">
+            {selectedField
+              ? 'No value needed for this comparison.'
+              : 'Choose a field to see its values.'}
           </p>
-        </div>
-        <Button variant="outline" size="sm" class="shrink-0 gap-2" onclick={() => addCondition('expectations')}>
-          <Plus class="size-4" /> Add Rule
-        </Button>
-      </div>
-      <div class="space-y-2 p-4">
-        {#each expectationConditions as condition (condition.id)}
-          {@render conditionEditor('expectations', condition)}
-        {:else}
-          <div class="rounded-lg border border-dashed py-5 text-center text-sm text-muted-foreground">
-            {mode === 'tableThreshold' ? 'Every scoped row counts toward the threshold.' : 'Add at least one rule.'}
-          </div>
-        {/each}
-        {#if mode === 'tableThreshold'}
-          <div class="flex items-center gap-3 rounded-lg border bg-muted/20 px-4 py-3 mt-2">
-            <label class="shrink-0 text-sm font-medium">Minimum matching rows</label>
-            <Input bind:value={threshold} type="number" min="0" class="w-28" />
-            <p class="text-xs text-muted-foreground">A finding fires when the count drops below this.</p>
-          </div>
         {/if}
       </div>
-
     </div>
+    {#if showIssues && issue}<p class="pb-condition-message" role="status">
+        <CircleAlert size={13} />{issue}
+      </p>
+    {:else if selectedField && !issue}<p class="pb-condition-summary">
+        <Check size={13} />{conditionSummary(condition)}
+      </p>{/if}
+  </section>
+{/snippet}
+
+{#if !canWrite}
+  <div class="pw-empty">
+    <h1>Policy editing is unavailable</h1>
+    <p>You need policy write access to create or edit a policy.</p>
+    <a href="/policies">All policies</a>
   </div>
-</div>
+{:else if editing && policyQuery.isPending}
+  <div class="pw-empty" role="status">Loading policy…</div>
+{:else if editing && (policyQuery.isError || !policyQuery.data)}
+  <div class="pw-empty" role="alert">
+    <h1>Policy could not be loaded</h1>
+    <p>Try again before making changes.</p>
+    <Button onclick={() => policyQuery.refetch()}>Try again</Button><a href="/policies"
+      >All policies</a
+    >
+  </div>
+{:else}
+  <div class="pb-studio">
+    <header class="pb-header">
+      <div class="pb-header-main">
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={editing ? 'Back to policy' : 'All policies'}
+          disabled={saving}
+          onclick={() => goto(editing ? `/policies/${policyId}` : '/policies')}
+          ><ArrowLeft size={17} /></Button
+        >
+        <div class="pb-title">
+          <span class="pw-eyebrow">{editing ? 'Edit policy' : 'New policy'}</span><Input
+            id="policy-name"
+            aria-label="Policy name"
+            placeholder="Name your policy"
+            bind:value={name}
+            disabled={saving}
+            class="pb-name-input"
+          />
+        </div>
+        <div class="pb-header-actions">
+          <span class="pb-save-state" role="status"
+            >{saving
+              ? 'Saving…'
+              : dirty
+                ? 'Unsaved changes'
+                : editing
+                  ? 'All changes saved'
+                  : 'Not saved yet'}</span
+          ><Button
+            onclick={savePolicy}
+            disabled={saving ||
+              (editing && (existingLinksQuery.isPending || existingLinksQuery.isError))}
+            class="gap-2"
+            ><Save size={15} />{saving
+              ? 'Saving…'
+              : editing || createdPolicyId
+                ? 'Save changes'
+                : 'Create policy'}</Button
+          >
+        </div>
+      </div>
+      <div class="pb-context">
+        <span><ShieldCheck size={15} />Policy builder</span>
+        <p>Define the check. Guide the response.</p>
+        <button
+          type="button"
+          disabled={saving}
+          onclick={() => {
+            showIssues = true;
+            selectSection('review');
+          }}
+          >{#if validationIssues.length}<CircleAlert size={14} />{validationIssues.length} to finish{:else}<Check
+              size={14}
+            />Ready to save{/if}<ChevronRight size={14} /></button
+        >
+      </div>
+    </header>
+
+    <fieldset class="pb-body" disabled={saving}>
+      <legend class="sr-only">Policy configuration</legend>
+      <aside class="pb-plan" aria-label="Policy plan">
+        <div class="pb-plan-intro">
+          <p class="pw-eyebrow">The policy</p>
+          <h1>Define healthy behavior</h1>
+          <p>Choose a section to edit. Your changes stay here as you move between sections.</p>
+        </div>
+        <nav aria-label="Builder sections" class="pb-sections">
+          {#each sections as section}
+            <button
+              type="button"
+              aria-controls="policy-editor"
+              aria-current={activeSection === section.id ? 'step' : undefined}
+              onclick={() => selectSection(section.id)}
+            >
+              <span class="pb-nav-icon"><section.icon size={17} /></span><span
+                ><strong>{section.label}</strong><small>{section.summary}</small></span
+              >
+              {#if showIssues && validationIssues.some((issue) => issueSection(issue) === section.id)}<CircleAlert
+                  class="text-warning"
+                  size={15}
+                />{:else if section.complete}<Check class="text-muted-foreground" size={14} />{/if}
+            </button>
+          {/each}
+        </nav>
+        <div class="pb-plan-behavior">
+          <p class="pw-eyebrow">When this policy runs</p>
+          <p>
+            Evaluate <strong>{selectedTable.label.toLowerCase()}</strong>{candidateConditions.length
+              ? ` that match all ${candidateConditions.length} filters`
+              : ' in the assigned scope'}.
+          </p>
+          <div>
+            <ListChecks size={16} />
+            <p>
+              {mode === 'rowExpectation'
+                ? 'Create a finding for each record that fails any rule.'
+                : `Create a finding when fewer than ${threshold || '…'} records pass all rules.`}
+            </p>
+          </div>
+          <span>{enabled ? 'Enabled when saved' : 'Disabled when saved'}</span>
+        </div>
+        <Button
+          variant={activeSection === 'review' ? 'secondary' : 'outline'}
+          class="w-full justify-between"
+          onclick={() => {
+            showIssues = true;
+            selectSection('review');
+          }}>Review policy<ArrowRight size={15} /></Button
+        >
+      </aside>
+
+      <div
+        id="policy-editor"
+        class="pb-editor"
+        role="region"
+        aria-labelledby="policy-editor-title"
+        bind:this={editorPane}
+      >
+        <header class="pb-editor-heading">
+          <p class="pw-eyebrow">
+            {activeSection === 'review' ? 'Before you save' : `Policy / ${sectionTitle}`}
+          </p>
+          <h2 id="policy-editor-title">{sectionTitle}</h2>
+          <p>{sectionHelp[activeSection]}</p>
+        </header>
+        <div class="pb-form">
+          {#if activeSection === 'setup'}
+            <section class="pb-form-section">
+              <div class="pb-field-heading">
+                <h3>What should this policy check?</h3>
+                <p>Choose the records available from your connected tools.</p>
+              </div>
+              <SingleSelect
+                aria-label="Data to evaluate"
+                allowClear={false}
+                options={tableOptions}
+                selected={table}
+                onchange={(value) => {
+                  if (value === table) return;
+                  if (
+                    [...candidateConditions, ...expectationConditions].some(
+                      (condition) => condition.field
+                    )
+                  )
+                    pendingTable = value;
+                  else {
+                    table = value;
+                    resetForTable();
+                  }
+                }}
+              />
+            </section>
+            <section class="pb-form-section">
+              <div class="pb-field-heading"><h3>How should records be evaluated?</h3></div>
+              <div class="pb-mode-options" role="group" aria-label="Evaluation mode">
+                <button
+                  type="button"
+                  aria-pressed={mode === 'rowExpectation'}
+                  onclick={() => (mode = 'rowExpectation')}
+                  ><ListChecks size={19} /><strong>Check each record</strong><span
+                    >Every matching record must pass all rules. Each failing record creates a
+                    finding.</span
+                  ></button
+                >
+                <button
+                  type="button"
+                  aria-pressed={mode === 'tableThreshold'}
+                  onclick={() => (mode = 'tableThreshold')}
+                  ><Filter size={19} /><strong>Require a minimum count</strong><span
+                    >Count the records that pass all rules. Create a finding if too few pass.</span
+                  ></button
+                >
+              </div>
+            </section>
+            <section class="pb-form-section">
+              <div class="pb-field-heading">
+                <h3>Context & priority</h3>
+                <p>Help your team understand why this check matters.</p>
+              </div>
+              <div class="pb-two-fields">
+                <div>
+                  <label for="policy-category">Category</label><Input
+                    id="policy-category"
+                    bind:value={category}
+                    placeholder="Operational"
+                  />
+                </div>
+                <div>
+                  <span class="pb-field-label">Finding severity</span><SingleSelect
+                    aria-label="Severity"
+                    allowClear={false}
+                    options={severityOptions}
+                    bind:selected={severity}
+                    disableSort
+                  />
+                </div>
+              </div>
+              <div class="mt-5">
+                <label for="policy-description"
+                  >Description <span class="pb-optional">Optional</span></label
+                ><Textarea
+                  id="policy-description"
+                  bind:value={description}
+                  placeholder="Explain the risk this policy helps prevent…"
+                  rows={3}
+                />
+              </div>
+            </section>
+            <section class="pb-enable">
+              <div>
+                <h3>Enable evaluation</h3>
+                <p>
+                  {enabled
+                    ? 'This policy can evaluate wherever it is assigned.'
+                    : 'Save the policy without evaluating it. Enable it when you are ready.'}
+                </p>
+              </div>
+              <Switch aria-label="Enable evaluation" bind:checked={enabled} />
+            </section>
+          {:else if activeSection === 'scope' || activeSection === 'rules'}
+            {@const kind = activeSection === 'scope' ? 'candidates' : 'expectations'}
+            {@const conditions =
+              kind === 'candidates' ? candidateConditions : expectationConditions}
+            <div class="pb-rules-heading">
+              <div>
+                <h3>
+                  {kind === 'candidates'
+                    ? 'Include records that match'
+                    : 'A healthy record must match'}
+                </h3>
+                <p>
+                  {conditions.length > 1
+                    ? 'All conditions must match (AND).'
+                    : kind === 'candidates'
+                      ? 'No filters means all records in the assigned scope.'
+                      : 'Choose a field, comparison, and expected value.'}
+                </p>
+              </div>
+              <span class="pb-count"
+                >{conditions.length}
+                {kind === 'candidates'
+                  ? conditions.length === 1
+                    ? 'filter'
+                    : 'filters'
+                  : conditions.length === 1
+                    ? 'rule'
+                    : 'rules'}</span
+              >
+            </div>
+            {#each conditions as condition, index (condition.id)}
+              {#if index > 0}<div class="pb-and"><span>AND</span></div>{/if}
+              {@render conditionEditor(kind, condition, index)}
+            {:else}
+              <div class="pb-empty">
+                {#if kind === 'candidates'}<Filter size={24} />{:else}<ListChecks size={24} />{/if}
+                <h3>
+                  {kind === 'candidates'
+                    ? 'Start with all records'
+                    : mode === 'tableThreshold'
+                      ? 'All matching records count'
+                      : 'What should a healthy record look like?'}
+                </h3>
+                <p>
+                  {kind === 'candidates'
+                    ? 'Add a filter only when this policy should apply to a subset, such as a device type or status.'
+                    : mode === 'tableThreshold'
+                      ? 'Add rules to count only records that meet your requirements.'
+                      : 'Add the first rule to define the expected state.'}
+                </p>
+              </div>
+            {/each}
+            <Button variant="outline" class="pb-add-condition" onclick={() => addCondition(kind)}
+              ><Plus size={16} />{kind === 'candidates' ? 'Add filter' : 'Add rule'}</Button
+            >
+            {#if removedCondition?.kind === kind}<div class="pb-undo" role="status">
+                <span>{kind === 'candidates' ? 'Filter' : 'Rule'} removed</span><button
+                  type="button"
+                  onclick={undoRemove}><Undo2 size={14} />Undo</button
+                >
+              </div>{/if}
+            {#if activeSection === 'rules' && mode === 'tableThreshold'}<section
+                class="pb-threshold"
+              >
+                <label for="policy-threshold">Minimum passing records</label>
+                <p>A finding is created if fewer than this number of records pass all rules.</p>
+                <Input
+                  id="policy-threshold"
+                  value={threshold}
+                  oninput={(event) => (threshold = event.currentTarget.value)}
+                  type="number"
+                  min="0"
+                  step="1"
+                  class="max-w-40"
+                />
+              </section>{/if}
+            {#if activeSection === 'scope'}<div class="pb-note">
+                <ShieldCheck size={17} />
+                <p>
+                  Filters choose records within an assignment. After saving, use the policy page to
+                  assign sites or include it in an assigned framework.
+                </p>
+              </div>{/if}
+          {:else if activeSection === 'finding'}
+            <section class="pb-form-section">
+              <div class="pb-field-heading">
+                <h3>Make the finding actionable</h3>
+                <p>Insert field tags to personalize findings with the affected record’s details.</p>
+              </div>
+              <div class="pb-label-row">
+                <label for="finding-title">Finding title</label><TagInserter
+                  groups={tagGroups}
+                  target={titleRef}
+                  bind:value={titleTemplate}
+                />
+              </div>
+              <Input id="finding-title" bind:ref={titleRef} bind:value={titleTemplate} />
+              <div class="pb-label-row mt-5">
+                <label for="finding-summary"
+                  >Summary <span class="pb-optional">Optional</span></label
+                ><TagInserter groups={tagGroups} target={summaryRef} bind:value={summary} />
+              </div>
+              <Textarea
+                id="finding-summary"
+                bind:ref={summaryRef}
+                bind:value={summary}
+                placeholder="Explain what failed and why it matters…"
+                rows={3}
+              />
+              <div class="pb-label-row mt-5">
+                <label for="finding-recommendation"
+                  >Recommended action <span class="pb-optional">Optional</span></label
+                ><TagInserter
+                  groups={tagGroups}
+                  target={recommendationRef}
+                  bind:value={recommendation}
+                />
+              </div>
+              <Textarea
+                id="finding-recommendation"
+                bind:ref={recommendationRef}
+                bind:value={recommendation}
+                placeholder="What should the technician check or fix first?"
+                rows={4}
+              />
+            </section>
+            <section class="pb-form-section">
+              <div class="pb-field-heading">
+                <h3>Reference articles <span class="pb-optional">Optional</span></h3>
+                <p>Attach supporting instructions your team can open from a finding.</p>
+              </div>
+              {#if existingLinksQuery.isError || articlesQuery.isError}<p
+                  class="pb-load-error"
+                  role="alert"
+                >
+                  Reference articles could not be loaded. <button
+                    type="button"
+                    onclick={() => {
+                      void articlesQuery.refetch();
+                      void existingLinksQuery.refetch();
+                    }}>Try again</button
+                  >
+                </p>{/if}<MultiSelect
+                options={articleOptions}
+                bind:selected={linkedArticleIds}
+                placeholder="Attach reference articles"
+                searchPlaceholder="Search articles…"
+                disabled={existingLinksQuery.isError || (editing && existingLinksQuery.isPending)}
+                maxDisplay={3}
+              />
+            </section>
+            <section class="pb-finding-preview">
+              <header>
+                <FileText size={16} />
+                <h3>Finding preview</h3>
+                <span
+                  >{severityOptions.find((option) => option.value === severity)?.label} severity</span
+                >
+              </header>
+              <strong>{titleTemplate || 'Your finding title'}</strong>{#if summary}<p>
+                  {summary}
+                </p>{/if}{#if recommendation}<div>
+                  <h4>Recommended action</h4>
+                  <p>{recommendation}</p>
+                </div>{/if}
+              <footer>
+                Template tags are replaced with actual values when a finding is created.
+              </footer>
+            </section>
+          {:else}
+            <section class="pb-review-status" class:pb-review-ready={!validationIssues.length}>
+              <div>
+                {#if validationIssues.length}<CircleAlert size={20} />{:else}<Check
+                    size={20}
+                  />{/if}
+                <h3>
+                  {validationIssues.length
+                    ? `${validationIssues.length} things to finish`
+                    : 'Ready to save'}
+                </h3>
+              </div>
+              <p>
+                {validationIssues.length
+                  ? 'Select an item below to finish its setup.'
+                  : 'Review the behavior below, then save your policy.'}
+              </p>
+              {#each validationIssues as issue}<button type="button" onclick={() => fixIssue(issue)}
+                  >{issue}<ArrowRight size={15} /></button
+                >{/each}
+            </section>
+            {#if existingLinksQuery.isError}<p class="pb-load-error" role="alert">
+                Reference articles must load before you can save. <button
+                  type="button"
+                  onclick={() => existingLinksQuery.refetch()}>Try again</button
+                >
+              </p>{/if}
+            <section class="pb-review-section">
+              <header>
+                <h3>{name || 'Untitled policy'}</h3>
+                <button type="button" onclick={() => selectSection('setup')}>Edit setup</button>
+              </header>
+              <dl>
+                <div>
+                  <dt>Data</dt>
+                  <dd>{selectedTable.label}</dd>
+                </div>
+                <div>
+                  <dt>Evaluation</dt>
+                  <dd>
+                    {mode === 'rowExpectation'
+                      ? 'Every record must pass'
+                      : `At least ${threshold || '…'} passing records`}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Status</dt>
+                  <dd>
+                    {enabled ? 'Enabled' : 'Disabled'} · {severityOptions.find(
+                      (option) => option.value === severity
+                    )?.label} severity
+                  </dd>
+                </div>
+              </dl>
+            </section>
+            {#each [{ kind: 'candidates' as const, label: 'Records to evaluate', section: 'scope' as const, conditions: candidateConditions }, { kind: 'expectations' as const, label: 'Healthy behavior', section: 'rules' as const, conditions: expectationConditions }] as group}<section
+                class="pb-review-section"
+              >
+                <header>
+                  <h3>{group.label}</h3>
+                  <button type="button" onclick={() => selectSection(group.section)}>Edit</button>
+                </header>
+                <ul>
+                  {#each group.conditions as condition}<li>
+                      {conditionSummary(condition)}
+                    </li>{:else}<li>
+                      {group.kind === 'candidates'
+                        ? 'All records in the assigned scope'
+                        : mode === 'tableThreshold'
+                          ? 'All matching records count toward the minimum'
+                          : 'No rules defined'}
+                    </li>{/each}
+                </ul>
+              </section>{/each}
+            <section class="pb-review-section">
+              <header>
+                <h3>Finding & response</h3>
+                <button type="button" onclick={() => selectSection('finding')}>Edit</button>
+              </header>
+              <p>{titleTemplate || 'A finding title is required.'}</p>
+              {#if recommendation}<p class="mt-3">{recommendation}</p>{:else}<p
+                  class="pb-value-hint mt-3"
+                >
+                  No recommended action yet. Adding one helps technicians resolve the finding.
+                </p>{/if}
+              <p class="pb-value-hint mt-3">
+                {linkedArticleIds.length} reference articles attached
+              </p>
+            </section>
+            <div class="pb-note">
+              <ShieldCheck size={17} />
+              <p>
+                {enabled
+                  ? 'Saving makes these rules available for evaluation wherever this policy is assigned. Manage direct and framework assignments on the policy page.'
+                  : 'This policy will remain disabled. You can assign it and enable evaluation when you are ready.'}
+              </p>
+            </div>
+          {/if}
+          <footer class="pb-editor-footer">
+            <span
+              >{activeSection === 'review'
+                ? 'Your changes are saved only when you choose Save or Create.'
+                : 'Move freely between sections. Your edits are kept.'}</span
+            >{#if activeSection !== 'review'}<Button
+                variant="outline"
+                onclick={() => {
+                  const index = sections.findIndex((section) => section.id === activeSection);
+                  selectSection(sections[index + 1]?.id ?? 'review');
+                }}
+              >
+                {activeSection === 'finding' ? 'Review policy' : 'Continue'}<ArrowRight
+                  size={14}
+                /></Button
+              >{/if}
+          </footer>
+        </div>
+      </div>
+    </fieldset>
+  </div>
+{/if}
+
+<AlertDialog.Root bind:open={leaveOpen}>
+  <AlertDialog.Content
+    ><AlertDialog.Header
+      ><AlertDialog.Title>Discard unsaved changes?</AlertDialog.Title><AlertDialog.Description
+        >Your policy changes have not been saved.</AlertDialog.Description
+      ></AlertDialog.Header
+    ><AlertDialog.Footer
+      ><AlertDialog.Cancel>Keep editing</AlertDialog.Cancel><Button
+        variant="destructive"
+        onclick={() => {
+          leaveOpen = false;
+          pendingNavigation?.();
+        }}>Discard changes</Button
+      ></AlertDialog.Footer
+    ></AlertDialog.Content
+  >
+</AlertDialog.Root>
+<AlertDialog.Root
+  open={!!pendingTable}
+  onOpenChange={(open) => {
+    if (!open) pendingTable = '';
+  }}
+>
+  <AlertDialog.Content
+    ><AlertDialog.Header
+      ><AlertDialog.Title>Change the data being evaluated?</AlertDialog.Title
+      ><AlertDialog.Description
+        >This clears your filters and rules because the available fields will change. Your policy
+        name and finding details will be kept.</AlertDialog.Description
+      ></AlertDialog.Header
+    ><AlertDialog.Footer
+      ><AlertDialog.Cancel>Keep current data</AlertDialog.Cancel><Button
+        onclick={() => {
+          table = pendingTable;
+          resetForTable();
+          pendingTable = '';
+        }}>Change data and reset rules</Button
+      ></AlertDialog.Footer
+    ></AlertDialog.Content
+  >
+</AlertDialog.Root>

@@ -13,7 +13,6 @@
     type TableView,
   } from '$lib/components/data-table';
   import { numberColumn, textColumn } from '$lib/components/data-table/column-defs';
-  import SeverityRibbon from '$lib/components/panel/severity-ribbon.svelte';
   import SourceBadge from '$lib/components/domain/source-badge.svelte';
   import { toServerTableInput } from '$lib/components/domain/server-table';
 
@@ -65,7 +64,6 @@
   ];
 
   const views: TableView<SiteRow>[] = [
-    { id: 'all', label: 'All sites', filters: [], isDefault: true },
     {
       id: 'needs-attention',
       label: 'With open findings',
@@ -126,55 +124,36 @@
       Site totals could not be loaded. <button onclick={() => overview.refetch()}>Try again</button>
     </div>
   {:else}
-    <div class="sw-summary">
-      <div>
-        <span>Connected sites</span><strong
-          >{overview.data?.connectedSites.toLocaleString() ?? '—'}</strong
-        ><small
-          >{overview.data
-            ? `${connectedShare}% of ${overview.data.totalSites} sites have linked sources`
-            : 'Loading site totals…'}</small
-        >
-      </div>
-      <button onclick={() => api.setView('needs-attention')}
-        ><span>Open findings ↗</span><strong
-          >{overview.data ? openTotal.toLocaleString() : '—'}</strong
-        ><small
-          >{overview.data
-            ? `Across ${overview.data.sitesWithFindings} sites · View findings by site`
-            : 'Loading findings…'}</small
-        >{#if overview.data}<div class="w-full pt-1">
-            <SeverityRibbon buckets={overview.data.severity} />
-          </div>{/if}</button
+    <div class="sw-directory-summary" aria-label="Portfolio summary">
+      <span title={overview.data ? `${connectedShare}% of sites have linked sources` : undefined}
+        ><strong>{overview.data?.connectedSites.toLocaleString() ?? '—'}</strong> connected sites</span
       >
-      <div>
-        <span>Managed assets</span><strong
-          >{overview.data?.totalAssets.toLocaleString() ?? '—'}</strong
-        ><small>Across your site portfolio</small>
-      </div>
-      <div class="sw-priority">
-        <span>Most open findings</span>{#if overview.data?.hotspot}<a
-            href={`/sites/${overview.data.hotspot.id}/findings`}>{overview.data.hotspot.name} ↗</a
-          ><small>{overview.data.hotspot.openFindingCount} open findings · Review this site</small
-          >{:else}<strong class="sw-summary-message"
-            >{overview.data ? 'No open findings' : '—'}</strong
-          ><small
-            >{overview.data
-              ? 'Your portfolio has no open findings.'
-              : 'Loading site activity…'}</small
-          >{/if}
-      </div>
+      <span><strong>{overview.data?.totalAssets.toLocaleString() ?? '—'}</strong> assets</span>
+      <button
+        onclick={() => api.setView('needs-attention')}
+        title={overview.data
+          ? `${overview.data.severity.critical} critical · ${overview.data.severity.high} high · ${overview.data.severity.medium} medium · ${overview.data.severity.low} low`
+          : undefined}
+        ><strong>{overview.data ? openTotal.toLocaleString() : '—'}</strong> open findings ↗</button
+      >
+      {#if overview.data?.hotspot}
+        <a
+          class="sw-directory-priority"
+          href={`/sites/${overview.data.hotspot.id}/findings`}
+          title={`Review ${overview.data.hotspot.openFindingCount} open findings at ${overview.data.hotspot.name}`}
+        >
+          Most findings: <span>{overview.data.hotspot.name}</span>
+          <strong>{overview.data.hotspot.openFindingCount}</strong> ↗
+        </a>
+      {/if}
     </div>
   {/if}
 {/snippet}
 
 <div class="sw-page sw-directory">
-  <div class="sw-section-heading">
-    <div>
-      <p class="sw-eyebrow">Client workspace</p>
-      <h1>Sites</h1>
-      <p>Find a client, review outstanding findings, and keep their profile up to date.</p>
-    </div>
+  <div class="sw-directory-heading">
+    <h1>Sites</h1>
+    {#if overview.data}<span>{overview.data.totalSites.toLocaleString()} total</span>{/if}
   </div>
 
   <DataTable

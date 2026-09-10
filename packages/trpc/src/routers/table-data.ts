@@ -46,7 +46,7 @@ export async function queryTableData<T extends Record<string, unknown>>(
   }
 }
 
-async function querySqlTableData<T extends Record<string, unknown>>(
+export async function querySqlTableData<T extends Record<string, unknown>>(
   db: Db,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   table: any,

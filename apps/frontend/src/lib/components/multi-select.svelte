@@ -26,6 +26,7 @@
     loading = false,
     onchange = (_selected: string[]) => {},
     onsearch,
+    'aria-label': ariaLabel = undefined,
   }: {
     options: Option[];
     selected?: string[];
@@ -37,6 +38,7 @@
     loading?: boolean;
     onchange?: (selected: string[]) => void;
     onsearch?: (query: string) => void;
+    'aria-label'?: string;
   } = $props();
 
   let open = $state(false);
@@ -113,6 +115,7 @@
         variant="outline"
         role="combobox"
         aria-expanded={open}
+        aria-label={ariaLabel}
         class={cn('w-full justify-between overflow-hidden', className)}
         {disabled}
       >

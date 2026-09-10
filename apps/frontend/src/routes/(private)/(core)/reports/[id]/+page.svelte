@@ -178,7 +178,7 @@
         filters: [...(definition.filters ?? []), ...adHocFilters],
         sort,
       },
-      table: { page: Math.max(1, input.page), pageSize: input.pageSize },
+      table: { page: Math.max(1, input.page), pageSize: input.pageSize, globalSearch: input.globalSearch },
     });
 
     return { rows: result.rows as ReportRow[], total: result.total };
@@ -197,16 +197,16 @@
   <div class="flex size-full items-center justify-center">
     <p class="text-muted-foreground text-sm">Loading...</p>
   </div>
-{:else if reportQuery.isError || !report}
+{:else if reportQuery.isError || sourcesQuery.isError || !report}
   <div class="flex size-full flex-col items-center justify-center gap-3">
-    <p class="text-muted-foreground text-sm">Report not found.</p>
+    <p class="text-muted-foreground text-sm">This report couldn’t be loaded. It may be unavailable or you may not have access.</p>
     <Button variant="outline" size="sm" onclick={() => goto('/reports')}>Back to reports</Button>
   </div>
 {:else}
-  <div class="flex size-full flex-col gap-4 overflow-hidden p-6">
-    <div class="flex items-start justify-between gap-4">
+  <div class="rw-detail flex size-full flex-col gap-4 overflow-hidden p-6">
+    <div class="rw-detail-heading flex items-start justify-between gap-4">
       <div class="flex items-center gap-3">
-        <Button variant="ghost" size="icon" onclick={() => goto('/reports')}>
+        <Button variant="ghost" size="icon" aria-label="Back to reports" onclick={() => goto('/reports')}>
           <ArrowLeft class="size-4" />
         </Button>
         <div>
@@ -232,13 +232,15 @@
       </div>
     </div>
 
+    <div class="rw-detail-context">{sourceMeta?.label ?? report.source} · {columns.length} columns · {definition?.filters?.length ?? 0} saved filters. Use column filters to refine this view without changing the saved report.</div>
+
     {#if columns.length > 0}
       <DataTable
         {fetchData}
         {columns}
         {refreshKey}
         {defaultSort}
-        enableGlobalSearch={false}
+        enableGlobalSearch={true}
         enableExport={true}
         enableURLState={true}
         defaultPageSize={25}

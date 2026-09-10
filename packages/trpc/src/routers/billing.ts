@@ -6,6 +6,7 @@ import {
   billingReconciliationRuleScopes,
   billingReconciliationRules,
   customerLogs,
+  userReportPrefs,
   integrationLinks,
   siteGroupMembers,
   siteGroups,
@@ -29,6 +30,8 @@ import {
 } from '@mspbyte/shared';
 import type { BillingFilterColumn } from '@mspbyte/shared';
 import { t, authProcedure } from '../trpc.js';
+import { loadGroupTargets } from './group-targets.js';
+import { restrictBillingSites } from './billing-scope.js';
 import { tableDataInputSchema } from './table-data.js';
 
 const psaItemMatchSchema = z.object({
@@ -262,7 +265,7 @@ async function loadFacetCountsBySite(
   return map;
 }
 
-async function buildReport(db: any, input: ReportInput): Promise<BillingReportOutput> {
+async function buildReport(db: any, input: ReportInput, permittedSiteIds: Set<string> | null): Promise<BillingReportOutput> {
   const [items, rules, ruleScopes, siteRows, allGroupMemberRows, groupMemberRows] =
     await Promise.all([
       db.select().from(billingPsaItems).where(isNull(billingPsaItems.deletedAt)),
@@ -457,11 +460,13 @@ async function buildReport(db: any, input: ReportInput): Promise<BillingReportOu
     });
   }
 
-  // MetricCards + Rules tab show unfiltered, tenant-wide numbers — freeze
-  // them here before scope/user filters narrow the set.
-  const summary = summarizeRows(rows);
+  // Apply permission and saved workspace scope before totals and pagination.
+  const visibleRows = permittedSiteIds === null
+    ? rows
+    : rows.filter((row) => row.siteId !== null && permittedSiteIds.has(row.siteId));
+  const summary = summarizeRows(visibleRows);
   const ruleAggregates: Record<string, RuleAggregate> = {};
-  for (const row of rows) {
+  for (const row of visibleRows) {
     if (!row.ruleId) continue;
     const agg = (ruleAggregates[row.ruleId] ??= { matchedRows: 0, mrrDelta: 0 });
     if (row.status !== 'missing_rule') agg.matchedRows += 1;
@@ -472,7 +477,7 @@ async function buildReport(db: any, input: ReportInput): Promise<BillingReportOu
     ? new Set((groupMemberRows as { siteId: string }[]).map((r) => r.siteId))
     : null;
 
-  const scoped = rows.filter((row) => {
+  const scoped = visibleRows.filter((row) => {
     if (input.scopeSiteId === 'unmapped') {
       if (row.siteId) return false;
     } else if (input.scopeSiteId) {
@@ -917,11 +922,34 @@ export const billingRouter = t.router({
         ruleAggregates: {}
       };
     }
-    const result = await buildReport(ctx.db, input);
-    if (scope === 'all') return result;
-    const allowed = new Set(scope);
-    const filtered = result.rows.filter((r) => r.siteId != null && allowed.has(r.siteId));
-    return { ...result, rows: filtered, total: filtered.length };
+    const [prefs] = await ctx.db.select({
+      scopeKind: userReportPrefs.scopeKind,
+      scopeIds: userReportPrefs.scopeIds,
+    }).from(userReportPrefs).where(eq(userReportPrefs.userId, ctx.user.id)).limit(1);
+    const ids = prefs?.scopeIds ?? [];
+    let selectedSites: string[] | null = null;
+    if (prefs && prefs.scopeKind !== 'all') {
+      selectedSites = [];
+      let linkIds: string[] = [];
+      if (prefs.scopeKind === 'sites') selectedSites = ids;
+      else if (prefs.scopeKind === 'links') linkIds = ids;
+      else if (prefs.scopeKind === 'groups') {
+        const targets = await Promise.all(ids.map((id) => loadGroupTargets(ctx.db, id)));
+        selectedSites = targets.flatMap((target) => target.siteIds);
+        linkIds = targets.flatMap((target) => target.linkIds);
+      }
+      // PSA reconciliation is site-based: links select their attached sites,
+      // never a partial vendor count that could create false quantity gaps.
+      if (linkIds.length) {
+        const links = await ctx.db.select({ siteId: integrationLinks.siteId })
+          .from(integrationLinks).where(and(
+            inArray(integrationLinks.id, linkIds),
+            eq(integrationLinks.status, 'active'),
+          ));
+        selectedSites.push(...links.flatMap((link) => link.siteId ? [link.siteId] : []));
+      }
+    }
+    return buildReport(ctx.db, input, restrictBillingSites(scope, selectedSites));
   }),
 
   filterOptions: authProcedure.query(async ({ ctx }) => {

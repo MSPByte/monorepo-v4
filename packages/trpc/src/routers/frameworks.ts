@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, eq, inArray } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import {
   customerLogs,
   policies,
@@ -312,6 +312,7 @@ export const frameworksRouter = t.router({
     const providerName = row.providerId
       ? INTEGRATIONS[row.providerId as ProviderId]?.name ?? row.providerId
       : null;
+    // Include disabled members so membership edits cannot silently drop them.
     const containedPolicies = await ctx.db
       .select({
         id: policies.id,
@@ -326,7 +327,7 @@ export const frameworksRouter = t.router({
       })
       .from(policySetItems)
       .innerJoin(policies, eq(policySetItems.policyId, policies.id))
-      .where(and(eq(policySetItems.policySetId, input.id), eq(policies.enabled, true)))
+      .where(eq(policySetItems.policySetId, input.id))
       .orderBy(policies.name)
       .catch(() => []);
     return {

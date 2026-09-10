@@ -50,15 +50,6 @@
   let draftKind = $state<ScopeKind>('all');
   let draftIds = $state<string[]>([]);
   let saving = $state(false);
-  let hydrated = false;
-
-  $effect(() => {
-    if (prefsQuery.data && !hydrated) {
-      draftKind = (prefsQuery.data.scopeKind as ScopeKind) ?? 'all';
-      draftIds = [...(prefsQuery.data.scopeIds ?? [])];
-      hydrated = true;
-    }
-  });
 
   // -- derived ---------------------------------------------------------------
 
@@ -112,11 +103,12 @@
   // -- actions ---------------------------------------------------------------
 
   function pickKind(kind: ScopeKind) {
+    if (draftKind !== kind) draftIds = [];
     draftKind = kind;
-    if (kind === 'all') draftIds = [];
   }
 
   async function apply() {
+    if (saving || (draftKind !== 'all' && draftIds.length === 0)) return;
     saving = true;
     try {
       await trpc.reports.saveMyPrefs.mutate({
@@ -143,25 +135,41 @@
   }
 </script>
 
-<Popover.Root bind:open>
+<Popover.Root
+  bind:open
+  onOpenChange={(value) => {
+    if (value) {
+      draftKind = currentKind;
+      draftIds = [...currentIds];
+    }
+  }}
+>
   <Popover.Trigger>
     {#snippet child({ props })}
       <button
         {...props}
+        disabled={prefsQuery.isPending || prefsQuery.isError || saving}
         class="border-input bg-background hover:bg-accent inline-flex h-8 items-center gap-2 rounded-md border px-2.5 text-xs font-medium transition-colors"
       >
         <Filter class="size-3.5" />
         <span class="text-muted-foreground">Scope:</span>
-        <span class="text-foreground">{chipLabel}</span>
+        <span class="text-foreground"
+          >{prefsQuery.isPending
+            ? 'Loading…'
+            : prefsQuery.isError
+              ? 'Unavailable'
+              : chipLabel}</span
+        >
       </button>
     {/snippet}
   </Popover.Trigger>
-  <Popover.Content align="end" class="w-80 p-3">
+  <Popover.Content align="end" class="w-[min(24rem,calc(100vw-2rem))] p-4">
     <div class="space-y-3">
       <div>
-        <div class="text-xs font-medium">Filter reports by</div>
+        <div class="text-xs font-medium">Choose report scope</div>
         <p class="text-muted-foreground mt-0.5 text-[11px]">
-          Applies to every report and dashboard. Sticks across sessions.
+          Applies to your reports and dashboards, and is saved for your next session. It does not
+          change what teammates see.
         </p>
       </div>
 
@@ -170,6 +178,8 @@
           <button
             type="button"
             onclick={() => pickKind(kind as ScopeKind)}
+            aria-pressed={draftKind === kind}
+            disabled={saving}
             class="hover:bg-accent inline-flex items-center justify-center gap-1 rounded-md border px-2 py-1.5 text-[11px] font-medium capitalize transition-colors {draftKind ===
             kind
               ? 'border-primary bg-primary/5 text-foreground'
@@ -178,7 +188,7 @@
             {#if draftKind === kind}
               <Check class="size-3" />
             {/if}
-            {kind}
+            {kind === 'all' ? 'All sites' : kind === 'links' ? 'M365 links' : kind}
           </button>
         {/each}
       </div>
@@ -187,17 +197,51 @@
         <div>
           <MultiSelect
             options={draftOptions}
+            disabled={saving}
+            loading={draftKind === 'sites'
+              ? sitesQuery.isPending
+              : draftKind === 'groups'
+                ? groupsQuery.isPending
+                : linksQuery.isPending}
             bind:selected={draftIds}
             placeholder={`Choose ${draftKind}…`}
             searchPlaceholder={`Search ${draftKind}…`}
           />
+          {#if (draftKind === 'sites' && sitesQuery.isError) || (draftKind === 'groups' && groupsQuery.isError) || (draftKind === 'links' && linksQuery.isError)}
+            <p class="mt-2 text-xs text-destructive" role="alert">
+              Options couldn’t be loaded. Try again.
+            </p>
+            <Button
+              variant="ghost"
+              size="sm"
+              onclick={() =>
+                draftKind === 'sites'
+                  ? sitesQuery.refetch()
+                  : draftKind === 'groups'
+                    ? groupsQuery.refetch()
+                    : linksQuery.refetch()}>Retry</Button
+            >
+          {:else if draftIds.length === 0}
+            <p class="mt-2 text-xs text-muted-foreground">
+              Choose at least one {draftKind === 'links' ? 'Microsoft 365 link' : trimS(draftKind)} to
+              apply this scope.
+            </p>
+          {/if}
         </div>
       {/if}
 
       <div class="flex items-center justify-end gap-2 border-t pt-2">
-        <Button variant="ghost" size="sm" onclick={cancel}>Cancel</Button>
-        <Button size="sm" disabled={!dirty || saving} onclick={apply}>Apply</Button>
+        <Button variant="ghost" size="sm" disabled={saving} onclick={cancel}>Cancel</Button>
+        <Button
+          size="sm"
+          disabled={!dirty || saving || (draftKind !== 'all' && draftIds.length === 0)}
+          onclick={apply}>{saving ? 'Applying…' : 'Apply scope'}</Button
+        >
       </div>
     </div>
   </Popover.Content>
 </Popover.Root>
+
+{#if prefsQuery.isError}
+  <Button variant="ghost" size="sm" onclick={() => prefsQuery.refetch()}>Retry scope</Button>
+{/if}

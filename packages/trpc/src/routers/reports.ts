@@ -40,7 +40,8 @@ import {
 import { t, authProcedure } from '../trpc.js';
 import type { Context } from '../context.js';
 import { loadGroupTargets } from './group-targets.js';
-import { queryTableData, tableDataInputSchema, type TableDataInput } from './table-data.js';
+import { querySqlTableData, tableDataInputSchema, type TableDataInput } from './table-data.js';
+import { buildReportSearch, firewallLicenseMatch } from './reports-search.js';
 import { applyJoins, JoinCache, joinFieldsMeta } from './reports-joins.js';
 
 // -- permissions ------------------------------------------------------------
@@ -171,6 +172,10 @@ function isFirewallLicenseSetFilter(filter: ReportDefinition['filters'][number])
   return filter.column === 'licenses' && isLicenseSetFilter(filter);
 }
 
+function isFirewallLicenseTextFilter(filter: ReportDefinition['filters'][number]) {
+  return filter.column === 'licenses' && ['contains', 'eq', 'neq', 'is_null', 'is_not_null'].includes(filter.operator);
+}
+
 function isFirewallHasLicensesFilter(filter: ReportDefinition['filters'][number]) {
   return filter.column === 'hasLicenses';
 }
@@ -217,6 +222,13 @@ function validateDefinition(shape: PolicyTableShape, def: ReportDefinition): voi
         code: 'BAD_REQUEST',
         message: `Unknown filter column "${filter.column}" for source "${shape.table}"`
       });
+    }
+    if (isFirewallLicenseTextFilter(filter)) {
+      if (shape.table !== 'sophosFirewalls' ||
+          (!['is_null', 'is_not_null'].includes(filter.operator) && typeof filter.value !== 'string')) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Sophos firewall license filters require a license name' });
+      }
+      continue;
     }
     if (isFirewallLicenseSetFilter(filter)) {
       if (
@@ -310,6 +322,9 @@ function buildLicenseWhere(filters: ReportDefinition['filters']): SQL | undefine
     if (isLicenseSetFilter(filter) && filter.column === 'assignedLicenses') {
       const matches = sql`coalesce(${sql.identifier('assigned_licenses')}, array[]::text[]) && ${sqlTextArray(filter.value as string[])}`;
       conditions.push(filter.operator === 'has_any_of' ? matches : sql`not (${matches})`);
+    }
+    if (isFirewallLicenseTextFilter(filter)) {
+      conditions.push(firewallLicenseMatch(filter.operator, filter.value as string | undefined));
     }
     if (isFirewallLicenseSetFilter(filter)) {
       const matches = sql`exists (
@@ -747,6 +762,7 @@ async function prepareReportRun(
       message: `Unknown or unsupported source "${sourceName}"`
     });
   }
+  definition = { ...definition, filters: [...definition.filters, ...(input.table.filters ?? [])] };
   validateDefinition(entry.shape, definition);
 
   const prefs = await loadPrefs(ctx);
@@ -762,14 +778,17 @@ async function prepareReportRun(
 
   const merged: TableDataInput = {
     ...input.table,
+    // Search is built against known report columns, not arbitrary client identifiers.
+    globalSearch: undefined,
+    globalSearchColumns: undefined,
     filters: [
-      ...(input.table.filters ?? []),
       ...definition.filters
         .filter(
           (filter) =>
             !isRequirementFilter(filter) &&
             !isLicenseSetFilter(filter) &&
             !isFirewallLicenseSetFilter(filter) &&
+            !isFirewallLicenseTextFilter(filter) &&
             !isFirewallHasLicensesFilter(filter)
         )
         .map((filter) => ({
@@ -782,10 +801,10 @@ async function prepareReportRun(
   const defaultSort = definition.sort
     ? { column: definition.sort.column, direction: definition.sort.direction }
     : undefined;
-  const combinedWhere =
-    scopeWhere && requirementWhere
-      ? and(scopeWhere, requirementWhere)
-      : (scopeWhere ?? requirementWhere);
+  const searchWhere = buildReportSearch(
+    entry.table as Record<string, unknown>, entry.shape.table, definition.columns, input.table.globalSearch
+  );
+  const combinedWhere = and(scopeWhere, requirementWhere, searchWhere);
 
   return { empty: false, entry, merged, defaultSort, combinedWhere };
 }
@@ -946,11 +965,10 @@ export const reportsRouter = t.router({
     }
     const { entry, merged, defaultSort, combinedWhere } = prepared;
 
-    const result = await queryTableData<Record<string, unknown>>(
+    const result = await querySqlTableData<Record<string, unknown>>(
       ctx.db,
       entry.table,
       merged,
-      undefined,
       defaultSort,
       undefined,
       combinedWhere
@@ -984,11 +1002,10 @@ export const reportsRouter = t.router({
 
     while (true) {
       const pageInput = { ...merged, page, pageSize: BULK_PAGE_SIZE };
-      const result = await queryTableData<Record<string, unknown>>(
+      const result = await querySqlTableData<Record<string, unknown>>(
         ctx.db,
         entry.table,
         pageInput,
-        undefined,
         defaultSort,
         undefined,
         combinedWhere

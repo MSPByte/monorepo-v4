@@ -1,4 +1,6 @@
 <script lang="ts">
+  import '../workspace.css';
+  import { authStore } from '$lib/stores/auth.store.svelte';
   import { getContext } from 'svelte';
   import { page } from '$app/state';
   import { STALE } from '$lib/query';
@@ -9,7 +11,7 @@
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
 
-  import SectionPanel from '$lib/components/panel/section-panel.svelte';
+  import SectionPanel from '../_components/finding-panel.svelte';
   import MetaRow from '$lib/components/panel/meta-row.svelte';
   import FindingSeverityBadge from '$lib/components/domain/finding-severity-badge.svelte';
   import { formatRelativeDate, prettyText } from '$lib/utils/format';
@@ -21,15 +23,20 @@
   import { Button } from '$lib/components/ui/button';
   import Textarea from '$lib/components/ui/textarea/textarea.svelte';
 
-  import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
-  import ArrowLeft from '@lucide/svelte/icons/arrow-left';
-  import ArrowRight from '@lucide/svelte/icons/arrow-right';
-  import CircleCheckBig from '@lucide/svelte/icons/circle-check-big';
+  import { ArrowUpRight, ArrowLeft, ArrowRight, CircleCheckBig } from '@lucide/svelte';
   import FindingBriefing from './_components/finding-briefing.svelte';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const qc = useQueryClient();
   const id = $derived(page.params.id ?? '');
+  const canManage = $derived(authStore.isAllowed('Assets.Write'));
+  const returnTo = $derived.by(() => {
+    const value = page.url.searchParams.get('returnTo');
+    return value === '/findings' || value?.startsWith('/findings?') ? value : '/findings';
+  });
+  function queueHref(targetId: string) {
+    return `/findings/${targetId}?returnTo=${encodeURIComponent(returnTo)}`;
+  }
 
   type DataSource = NonNullable<typeof findingQuery.data>['dataSources'][number];
 
@@ -50,6 +57,7 @@
   const findingQuery = createQuery(() => ({
     queryKey: ['findings.byId', id],
     queryFn: () => trpc.findings.byId.query({ id }),
+    retry: false,
   }));
 
   const linkedPolicyId = $derived(findingQuery.data?.policyId ?? null);
@@ -90,13 +98,14 @@
 
   function invalidateLists() {
     void qc.invalidateQueries({ queryKey: ['findings.overview'] });
+    void qc.invalidateQueries({ queryKey: ['findings.neighbor'] });
   }
 
   let resolveBusy = $state(false);
 
   async function resolve() {
     const finding = findingQuery.data;
-    if (!finding) return;
+    if (!finding || !canManage || resolveBusy || lifecycleBusy) return;
     resolveBusy = true;
     try {
       await trpc.findings.resolve.mutate({ id: finding.id });
@@ -111,10 +120,10 @@
   }
 
   function goPrev() {
-    if (prevQuery.data?.id) goto(`/findings/${prevQuery.data.id}`);
+    if (canNavigateQueue && prevQuery.data?.id) goto(queueHref(prevQuery.data.id));
   }
   function goNext() {
-    if (nextQuery.data?.id) goto(`/findings/${nextQuery.data.id}`);
+    if (canNavigateQueue && nextQuery.data?.id) goto(queueHref(nextQuery.data.id));
   }
 
   // j/k + arrow-left/arrow-right walk the queue. Ignore when a form field is
@@ -132,7 +141,9 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (isEditableTarget(e)) return;
+    if (!canNavigateQueue || resolveBusy || lifecycleBusy || isEditableTarget(e)) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button, a, [role="dialog"], [role="listbox"], [role="combobox"], [role="grid"]')) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === 'k' || e.key === 'ArrowLeft') {
       if (prevQuery.data?.id) {
@@ -284,6 +295,7 @@
         suppressedUntil: suppressedUntil.toISOString(),
       });
       await findingQuery.refetch();
+      invalidateLists();
       toast.success('Finding suppressed');
     } catch (error) {
       lifecycleError = error instanceof Error ? error.message : 'Failed to suppress finding';
@@ -304,6 +316,7 @@
       suppressionReason = '';
       suppressDate = undefined;
       await findingQuery.refetch();
+      invalidateLists();
       toast.success('Finding returned to active tracking');
     } catch (error) {
       lifecycleError = error instanceof Error ? error.message : 'Failed to unsuppress finding';
@@ -316,7 +329,7 @@
 
 {#snippet relatedRow(item: Related)}
   <a
-    href={`/findings/${item.id}`}
+    href={queueHref(item.id)}
     class="flex items-center justify-between gap-3 border-b border-border/40 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/40"
   >
     <div class="min-w-0">
@@ -336,7 +349,8 @@
 
 {#if findingQuery.data}
   {@const finding = findingQuery.data}
-  <FadeIn class="flex flex-col size-full">
+  <FadeIn class="findings-workspace fq-detail">
+    <a href={returnTo} class="fq-back"><ArrowLeft class="size-4" /> Back to findings</a>
     <FindingBriefing
       id={finding.id}
       title={finding.title}
@@ -352,24 +366,36 @@
       evidenceSummary={finding.evidenceSummary}
     />
 
-    <div class="flex size-full items-center justify-center overflow-auto p-4">
-      <div class="flex flex-col h-full mx-auto max-w-[1400px] gap-4">
+    <div class="fq-detail-body">
+      <div class="flex min-w-0 flex-col gap-5">
         <!-- Top legend strip -->
         <div
-          class="flex flex-wrap items-center justify-between gap-3 border-l-2 border-primary bg-card px-3 py-2"
+          class="fq-detail-toolbar"
         >
           <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-            FINDING INTELLIGENCE
+            Finding review
             <span class="ml-2 text-foreground/70">·</span>
             <span class="ml-2">last seen {formatRelativeDate(finding.lastSeenAt)}</span>
           </div>
-          <div class="flex items-center gap-3">
+          <div class="flex flex-wrap items-center gap-3">
             <div class="hidden font-mono text-[10px] uppercase tracking-wider text-muted-foreground md:block">
               {finding.dataSources.length} data {finding.dataSources.length === 1
                 ? 'source'
                 : 'sources'}
               · {finding.relatedBySite.length + finding.relatedByPolicy.length} related
             </div>
+            {#if canManage && (finding.status === 'open' || finding.status === 'regressed' || finding.status === 'acknowledged')}
+                    <Button
+                      variant="default"
+                      size="sm"
+                      disabled={resolveBusy || lifecycleBusy}
+                      onclick={resolve}
+                      class="gap-1.5"
+                    >
+                      <CircleCheckBig class="size-3.5" />
+                      {resolveBusy ? 'Resolving…' : 'Mark resolved'}
+                    </Button>
+            {/if}
             {#if canNavigateQueue}
               <div class="flex items-center gap-1">
                 <button
@@ -378,7 +404,7 @@
                   disabled={!prevQuery.data?.id}
                   aria-label="Previous finding (k)"
                   title="Previous finding — k"
-                  class="inline-flex size-6 items-center justify-center rounded-sm border border-border/60 bg-background/60 text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border/60 disabled:hover:text-muted-foreground"
+                  class="inline-flex size-9 items-center justify-center rounded-sm border border-border/60 bg-background/60 text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border/60 disabled:hover:text-muted-foreground"
                 >
                   <ArrowLeft class="size-3.5" />
                 </button>
@@ -388,7 +414,7 @@
                   disabled={!nextQuery.data?.id}
                   aria-label="Next finding (j)"
                   title="Next finding — j"
-                  class="inline-flex size-6 items-center justify-center rounded-sm border border-border/60 bg-background/60 text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border/60 disabled:hover:text-muted-foreground"
+                  class="inline-flex size-9 items-center justify-center rounded-sm border border-border/60 bg-background/60 text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border/60 disabled:hover:text-muted-foreground"
                 >
                   <ArrowRight class="size-3.5" />
                 </button>
@@ -400,11 +426,14 @@
           </div>
         </div>
 
-        <div class="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+        <div class="grid grid-cols-[minmax(0,1fr)] gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
           <!-- LEFT COLUMN -->
-          <div class="space-y-4">
+          <div class="min-w-0 space-y-5">
+            <SectionPanel title="Recommended next step">
+              <p class="text-sm leading-relaxed text-foreground/90">{finding.recommendation || 'Review the evidence and source records, then confirm the affected resource meets the policy requirements before resolving.'}</p>
+            </SectionPanel>
             {#if finding.isBlockedByParent}
-              <SectionPanel code="00" title="ACTIVE PARENT POLICY">
+              <SectionPanel title="Blocked by a parent policy">
                 {#snippet aside()}
                   {finding.blockedByParents.length} blocking
                 {/snippet}
@@ -435,9 +464,9 @@
               </SectionPanel>
             {/if}
 
-            <SectionPanel code="01" title="EVIDENCE">
+            <SectionPanel title="Supporting evidence">
               {#snippet aside()}
-                {finding.evidenceSummary ? 'detail' : 'no detail'}
+                {buildEvidence(finding.evidence).length} details
               {/snippet}
               <div class="space-y-4 text-sm">
                 {#each buildEvidence(finding.evidence) as item}
@@ -489,7 +518,7 @@
               </div>
             </SectionPanel>
 
-            <SectionPanel code="02" title="DATA SOURCES">
+            <SectionPanel title="Source records">
               {#snippet aside()}
                 {finding.dataSources.length} record{finding.dataSources.length === 1 ? '' : 's'}
               {/snippet}
@@ -531,16 +560,15 @@
                       </span>
                     </div>
                   {/if}
+                {:else}
+                  <p class="text-sm text-muted-foreground">No source records are available for this finding.</p>
                 {/each}
               </div>
             </SectionPanel>
 
-            <SectionPanel code="03" title="RECOMMENDATION">
-              <p class="text-sm leading-relaxed text-foreground/90">{finding.recommendation}</p>
-            </SectionPanel>
 
             {#if linkedArticles.length > 0}
-              <SectionPanel code="04" title="RESOURCES">
+              <SectionPanel title="Related documentation">
                 {#snippet aside()}
                   {linkedArticles.length} article{linkedArticles.length === 1 ? '' : 's'}
                 {/snippet}
@@ -565,15 +593,14 @@
           </div>
 
           <!-- RIGHT COLUMN -->
-          <aside class="flex flex-col size-full space-y-4">
-            <SectionPanel code="@" title="CONTEXT">
+          <aside class="flex min-w-0 flex-col size-full space-y-5">
+            <SectionPanel title="Finding context">
               <dl>
                 <MetaRow
                   label="Site"
                   value={finding.siteName}
                   href={finding.siteId ? `/sites/${finding.siteId}` : undefined}
                 />
-                <MetaRow label="Link" value={finding.linkName} />
                 <MetaRow
                   label="Policy"
                   value={finding.policyName}
@@ -586,28 +613,11 @@
               </dl>
             </SectionPanel>
 
-            <SectionPanel code="!" title="LIFECYCLE">
+            <SectionPanel title="Manage finding">
               {#snippet aside()}
                 {finding.status}
               {/snippet}
               <div class="space-y-3 text-sm">
-                {#if finding.status === 'open' || finding.status === 'regressed'}
-                  <div class="flex flex-wrap items-center gap-1.5">
-                    <Button
-                      variant="default"
-                      size="sm"
-                      disabled={resolveBusy}
-                      onclick={resolve}
-                      class="gap-1.5"
-                    >
-                      <CircleCheckBig class="size-3.5" />
-                      Mark resolved
-                    </Button>
-                  </div>
-                  <p class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70">
-                    Or suppress temporarily below to hide until a chosen date
-                  </p>
-                {/if}
                 {#if finding.status === 'suppressed'}
                   <div class="border border-border/50 bg-muted/20 p-3">
                     <div
@@ -634,10 +644,15 @@
                       />
                     </dl>
                   </div>
-                  <Button variant="outline" disabled={lifecycleBusy} onclick={unsuppressFinding}>
-                    Return to active tracking
-                  </Button>
-                {:else}
+                  {#if canManage}<Button variant="outline" disabled={lifecycleBusy || resolveBusy} onclick={unsuppressFinding}>
+                    {lifecycleBusy ? 'Returning…' : 'Return to active tracking'}
+                  </Button>{/if}
+                {:else if finding.status === 'resolved'}
+                  <p class="text-sm text-muted-foreground">This finding is resolved. If the policy fails again, it will return to the queue as regressed.</p>
+                {:else if canManage}
+                  <details class="fq-suppression">
+                    <summary>Suppress temporarily</summary>
+                    <p class="mb-4 text-sm text-muted-foreground">Pause tracking for up to 180 days. Add a reason so your team knows why.</p>
                   <div class="space-y-1.5">
                     <label
                       class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
@@ -663,6 +678,7 @@
                         <button
                           type="button"
                           onclick={() => applyPreset(preset.days)}
+                          aria-pressed={isActivePreset(preset.days)}
                           class={[
                             'inline-flex items-center rounded-[3px] border px-2 py-0.5 font-mono text-[11px] tracking-wider transition-colors',
                             isActivePreset(preset.days)
@@ -680,13 +696,16 @@
                     maxValue={maxSuppressionDate}
                     bind:value={suppressDate}
                   />
-                  <Button disabled={!suppressDate || lifecycleBusy} onclick={suppressFinding}>
-                    Suppress finding
+                  <Button disabled={!suppressDate || suppressionReason.trim().length < 3 || lifecycleBusy || resolveBusy} onclick={suppressFinding}>
+                    {lifecycleBusy ? 'Suppressing…' : 'Suppress finding'}
                   </Button>
+                  </details>
+                {:else}
+                  <p class="text-sm text-muted-foreground">You have read-only access to this finding.</p>
                 {/if}
 
                 {#if lifecycleError}
-                  <p class="font-mono text-[11px] uppercase tracking-wider text-destructive">
+                  <p role="alert" class="text-sm text-destructive">
                     {lifecycleError}
                   </p>
                 {/if}
@@ -694,7 +713,7 @@
             </SectionPanel>
 
             {#if finding.relatedByPolicy.length}
-              <SectionPanel code="≡" title="SIMILAR · POLICY">
+              <SectionPanel title="Same policy">
                 {#snippet aside()}
                   {finding.relatedByPolicy.length} open
                 {/snippet}
@@ -707,7 +726,7 @@
             {/if}
 
             {#if finding.relatedBySite.length}
-              <SectionPanel code="↳" title="SAME SITE">
+              <SectionPanel title="More at this site">
                 {#snippet aside()}
                   {finding.relatedBySite.length} open
                 {/snippet}
@@ -723,6 +742,12 @@
       </div>
     </div>
   </FadeIn>
+{:else if findingQuery.isError}
+  <div class="findings-workspace fq-error" role="alert">
+    <h1>Unable to load this finding</h1>
+    <p>It may no longer exist, or you may not have access. Retry or return to the queue.</p>
+    <div class="flex gap-3"><Button variant="outline" href={returnTo}>Back to findings</Button><Button onclick={() => findingQuery.refetch()}>Try again</Button></div>
+  </div>
 {:else}
   <Loader />
 {/if}

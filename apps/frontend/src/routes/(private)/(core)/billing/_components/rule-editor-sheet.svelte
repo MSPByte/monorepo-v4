@@ -91,9 +91,11 @@
     open = $bindable(),
     editingRule,
     creationSeed = null,
+    onSaved,
     sites: siteList,
     siteGroups: siteGroupList,
   }: {
+    onSaved?: () => void;
     open: boolean;
     editingRule: EditingRule | null;
     creationSeed?: RuleCreationSeed | null;
@@ -107,12 +109,10 @@
   const facetsQuery = createQuery(() => ({
     queryKey: ['billing.facets'],
     queryFn: () => trpc.billing.facets.query(),
-    staleTime: STALE.PAGE
+    staleTime: STALE.PAGE,
   }));
 
-  const allFacets = $derived<FacetConfig[]>(
-    (facetsQuery.data ?? []) as FacetConfig[]
-  );
+  const allFacets = $derived<FacetConfig[]>((facetsQuery.data ?? []) as FacetConfig[]);
 
   let name = $state('');
   let enabled = $state(true);
@@ -140,9 +140,7 @@
     allFacets.filter((f) => !vendorProvider || f.providerId === vendorProvider)
   );
 
-  const facetOptions = $derived(
-    facetsForProvider.map((f) => ({ value: f.facet, label: f.label }))
-  );
+  const facetOptions = $derived(facetsForProvider.map((f) => ({ value: f.facet, label: f.label })));
 
   const selectedFacet = $derived<FacetConfig | null>(
     allFacets.find((f) => f.facet === vendorFacet) ?? null
@@ -172,14 +170,12 @@
     { value: 'true', label: 'true' },
     { value: 'false', label: 'false' },
   ];
-  const siteOptions = $derived(
-    siteList.map((site) => ({ value: site.id, label: site.name })),
-  );
+  const siteOptions = $derived(siteList.map((site) => ({ value: site.id, label: site.name })));
   const groupOptions = $derived(
     siteGroupList.map((group) => ({
       value: group.id,
       label: `${group.name}${group.siteIds ? ` (${group.siteIds.length})` : ''}`,
-    })),
+    }))
   );
 
   function makeFilterId() {
@@ -210,10 +206,7 @@
       id: makeFilterId(),
       column: filter.column,
       operator: filter.operator,
-      value:
-        filter.value === undefined || filter.value === null
-          ? undefined
-          : String(filter.value),
+      value: filter.value === undefined || filter.value === null ? undefined : String(filter.value),
     }));
   }
 
@@ -242,7 +235,7 @@
   function seedFromRule(
     rule: EditingRule | null,
     facets: FacetConfig[],
-    seed: RuleCreationSeed | null,
+    seed: RuleCreationSeed | null
   ) {
     if (rule) {
       editingId = rule.id;
@@ -312,7 +305,7 @@
   ]);
 
   const hasInclude = $derived(
-    includeAll || includeSiteIds.length > 0 || includeGroupIds.length > 0,
+    includeAll || includeSiteIds.length > 0 || includeGroupIds.length > 0
   );
 
   const ruleDraft = $derived<RuleInput>({
@@ -348,6 +341,7 @@
       toast.success(editingId ? 'Rule updated' : 'Rule created');
       qc.invalidateQueries({ queryKey: ['billing.rules'] });
       qc.invalidateQueries({ queryKey: ['billing.report'] });
+      onSaved?.();
       open = false;
     },
     onError: (e: unknown) => toast.error(e instanceof Error ? e.message : 'Save failed'),
@@ -424,19 +418,25 @@
   }
 
   const canSave = $derived(
-    name.trim().length > 0 &&
-      psaValue.trim().length > 0 &&
-      vendorFacet.length > 0 &&
-      hasInclude,
+    name.trim().length > 0 && psaValue.trim().length > 0 && vendorFacet.length > 0 && hasInclude
   );
 </script>
 
 <Sheet.Root bind:open>
   <Sheet.Portal>
     <Sheet.Overlay />
-    <Sheet.Content side="right" class="flex w-full flex-col gap-0 p-0 sm:max-w-3xl! md:max-w-4xl!">
+    <Sheet.Content
+      side="right"
+      class="bw-editor flex w-full flex-col gap-0 bg-card p-0 sm:max-w-3xl! md:max-w-4xl!"
+    >
       <Sheet.Header class="border-b p-5">
-        <Sheet.Title>{editingId ? 'Edit rule' : creationSeed ? 'Create rule from line' : 'New reconciliation rule'}</Sheet.Title>
+        <Sheet.Title
+          >{editingId
+            ? 'Edit rule'
+            : creationSeed
+              ? 'Create rule from line'
+              : 'New reconciliation rule'}</Sheet.Title
+        >
         <Sheet.Description>
           {editingId
             ? 'Refine how this PSA billing line is reconciled against vendor inventory.'
@@ -459,13 +459,17 @@
                     {creationSeed.billedQuantity} · {formatMoney(creationSeed.unitPrice)} per unit
                   </p>
                 </div>
-                <span class="rounded-full border border-primary/20 bg-background px-2.5 py-1 text-[11px] font-medium text-primary">
+                <span
+                  class="rounded-full border border-primary/20 bg-background px-2.5 py-1 text-[11px] font-medium text-primary"
+                >
                   Match seeded
                 </span>
               </div>
               <p class="mt-3 text-xs leading-5 text-muted-foreground">
-                We started with an exact item-name match{creationSeed.siteId ? ` at ${creationSeed.siteName}` : ''}.
-                Adjust it below only if this line should cover a wider set of billing items or sites.
+                We started with an exact item-name match{creationSeed.siteId
+                  ? ` at ${creationSeed.siteName}`
+                  : ''}. Adjust it below only if this line should cover a wider set of billing items
+                or sites.
               </p>
             </section>
           {/if}
@@ -496,7 +500,7 @@
               </p>
             </div>
 
-            <div class="grid grid-cols-[1fr_1fr_2fr] gap-3">
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_2fr]">
               <div class="space-y-1.5">
                 <Label>Field</Label>
                 <SingleSelect
@@ -524,7 +528,6 @@
                 <Input id="psa-value" bind:value={psaValue} placeholder="Sophos Endpoint" />
               </div>
             </div>
-
           </section>
 
           <Separator />
@@ -655,9 +658,7 @@
               <div class="space-y-2">
                 {#each vendorFilters as filter (filter.id)}
                   {@const columnMeta = findColumn(selectedFacet, filter.column)}
-                  {@const operatorMeta = VENDOR_OPERATORS.find(
-                    (o) => o.value === filter.operator
-                  )}
+                  {@const operatorMeta = VENDOR_OPERATORS.find((o) => o.value === filter.operator)}
                   <div
                     class="grid grid-cols-[1fr_1fr_1fr_auto] items-end gap-2 rounded-md border bg-muted/30 p-2.5"
                   >
@@ -729,6 +730,17 @@
                 <p class="text-center text-xs text-muted-foreground">
                   Enter a match value to see the preview.
                 </p>
+              {:else if !vendorFacet || !hasInclude}
+                <p class="text-center text-xs text-muted-foreground">
+                  Choose an inventory category and include at least one site to preview this rule.
+                </p>
+              {:else if previewQuery.isError}
+                <div class="text-center text-xs" role="alert">
+                  <p>Preview could not be loaded.</p>
+                  <Button variant="ghost" size="sm" onclick={() => previewQuery.refetch()}
+                    >Retry preview</Button
+                  >
+                </div>
               {:else if previewQuery.isLoading}
                 <div class="flex justify-center py-4">
                   <Loader />
@@ -742,7 +754,7 @@
                     : delta < 0
                       ? 'text-rose-600 dark:text-rose-400'
                       : 'text-muted-foreground'}
-                <div class="grid grid-cols-4 gap-3 text-center">
+                <div class="grid grid-cols-2 gap-3 text-center sm:grid-cols-4">
                   <div>
                     <div
                       class="text-[10px] font-medium uppercase tracking-wider text-muted-foreground"

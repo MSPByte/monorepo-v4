@@ -1,0 +1,358 @@
+/* The viewport belongs to billing items. Only the rows and rule list scroll. */
+.billing-workspace {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 12px 20px 0;
+  gap: 12px;
+  font-family: var(--font-sans);
+}
+.bw-header {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-shrink: 0;
+  min-height: 36px;
+}
+.bw-header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  white-space: nowrap;
+}
+.bw-scope {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.bw-scope > div {
+  width: 170px;
+  min-width: 100px;
+}
+.bw-scope button {
+  height: 32px;
+  font-size: 12px;
+}
+.bw-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.bw-body,
+.bw-reconciliation,
+.bw-rules,
+.bw-table {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.bw-table > div > div:first-child {
+  flex-shrink: 0;
+}
+.bw-table > div > div:has(> .bw-review-bar) {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  background: var(--card);
+  border-radius: 7px;
+}
+.bw-table > div > div:last-child:not(:has(> .bw-review-bar)) {
+  flex-shrink: 0;
+  margin-top: 0;
+  padding: 12px 0;
+}
+.bw-review-bar {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+  min-height: 42px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.bw-review-bar button {
+  white-space: nowrap;
+  padding: 11px 10px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted-foreground);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.bw-review-bar button:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+.bw-review-bar button.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  background: var(--accent);
+  font-weight: 600;
+}
+.bw-review-bar button:focus-visible,
+.bw-item-name:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+  border-radius: 3px;
+}
+.bw-impact {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding: 0 10px;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.bw-impact strong {
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground);
+  font-weight: 600;
+}
+.bw-table [data-slot='table-container'] {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.bw-table table {
+  table-layout: fixed;
+  min-width: 1000px;
+  font-size: 13px;
+}
+.bw-table [data-slot='table-head'] {
+  height: 38px;
+  font-size: 12px;
+  background: var(--muted);
+}
+.bw-table [data-slot='table-cell'] {
+  height: 44px;
+  padding: 0 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.bw-table [data-slot='table-cell'] .font-mono {
+  display: block;
+  text-align: right;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.bw-item-name,
+.bw-site-name {
+  display: block;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  line-height: 24px;
+  text-align: left;
+}
+.bw-item-name {
+  cursor: pointer;
+  font-weight: 500;
+}
+.bw-item-name:hover {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.bw-section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 0 0 12px;
+  flex-shrink: 0;
+}
+.bw-section-heading p {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted-foreground);
+}
+.bw-context {
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.billing-workspace .bw-rules-panel {
+  gap: 0;
+  padding: 0;
+  border-radius: 7px;
+}
+.bw-notice,
+.bw-start {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+.bw-empty {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+}
+.bw-empty h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.bw-empty p {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.bw-detail-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  overflow: auto;
+  padding: 24px;
+}
+.bw-detail-body h2 {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.bw-detail-quantities {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  width: 100%;
+  padding: 20px 0;
+  border-block: 1px solid var(--border);
+}
+.bw-detail-quantities dt {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.bw-detail-quantities dd {
+  margin-top: 6px;
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+.bw-detail-rule {
+  font-size: 13px;
+  line-height: 1.8;
+}
+.bw-detail-rule h3 {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.bw-editor [data-slot='sheet-header'] {
+  padding: 24px;
+}
+.bw-editor [data-slot='sheet-title'] {
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+}
+.bw-editor input {
+  background: var(--background);
+}
+@media (max-width: 1000px) {
+  .bw-header {
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .bw-scope {
+    order: 3;
+    width: 100%;
+  }
+  .bw-scope > div {
+    flex: 1;
+    max-width: 240px;
+  }
+  .bw-impact {
+    display: none;
+  }
+}
+@media (max-width: 650px) {
+  .billing-workspace {
+    padding: 8px 10px 0;
+    gap: 8px;
+  }
+  .bw-header h1 {
+    font-size: 16px;
+  }
+  .bw-actions {
+    gap: 4px;
+  }
+  .bw-actions button {
+    padding-inline: 8px;
+    font-size: 11px;
+  }
+  .bw-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .bw-editor,
+  .bw-detail {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  .bw-review-bar {
+    min-height: 38px;
+  }
+  .bw-review-bar button {
+    padding: 8px;
+  }
+}
+
+/* The final four quantity/amount columns keep headers aligned with their values. */
+.bw-table th:nth-last-child(n + 2):nth-last-child(-n + 5) > button {
+  margin-left: auto;
+}
+@media (max-width: 650px) {
+  .bw-table > div > div:first-child > div > div:first-child {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .bw-table > div > div:first-child > div > div:first-child > div:first-child {
+    flex-basis: 100%;
+    max-width: none;
+  }
+  .bw-table > div > div:first-child > div > div:first-child > div:last-child {
+    margin-left: auto;
+  }
+}
+
+.bw-scope > button {
+  max-width: 260px;
+}
+.bw-scope > button > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (min-width: 651px) {
+  .bw-scope {
+    order: initial;
+    width: auto;
+  }
+}

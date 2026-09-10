@@ -1,4 +1,10 @@
 <script lang="ts">
+  import './workspace.css';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/state';
+  import { authStore } from '$lib/stores/auth.store.svelte';
+  import { ShieldCheck, ArrowUpRight, RefreshCw } from '@lucide/svelte';
+  import { Button } from '$lib/components/ui/button';
   import { getContext } from 'svelte';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { STALE } from '$lib/query';
@@ -19,11 +25,7 @@
     textColumn,
   } from '$lib/components/data-table/column-defs';
   import FindingStatusBadge from '$lib/components/domain/finding-status-badge.svelte';
-  import FindingSheet from '$lib/components/domain/finding-sheet.svelte';
   import { toServerTableInput } from '$lib/components/domain/server-table';
-  import SignalStrip from '$lib/components/panel/signal-strip.svelte';
-  import SignalCell from '$lib/components/panel/signal-cell.svelte';
-  import SeverityRibbon from '$lib/components/panel/severity-ribbon.svelte';
 
   import CircleCheckBig from '@lucide/svelte/icons/circle-check-big';
 
@@ -39,12 +41,16 @@
     evidenceSummary: string;
     recommendation: string | null;
     lastSeenAt: string;
+    firstSeenAt: string;
   };
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   const qc = useQueryClient();
 
-  let selectedFindingId = $state<string | null>(null);
+  const canManage = $derived(authStore.isAllowed('Assets.Write'));
+  function findingHref(id: string) {
+    return `/findings/${id}?returnTo=${encodeURIComponent(typeof window === 'undefined' ? page.url.pathname + page.url.search : window.location.pathname + window.location.search)}`;
+  }
   let refreshKey = $state(0);
 
   const overview = createQuery(() => ({
@@ -104,26 +110,36 @@
         operators: ['eq'],
         options: [
           { label: 'Open', value: 'open' },
+          { label: 'Acknowledged', value: 'acknowledged' },
           { label: 'Regressed', value: 'regressed' },
           { label: 'Suppressed', value: 'suppressed' },
           { label: 'Resolved', value: 'resolved' },
         ],
       },
     },
-    textColumn<FindingRow>('policyName', 'Policy'),
-    textColumn<FindingRow>('title', 'Title', undefined, undefined, { width: '260px' }),
+    { ...textColumn<FindingRow>('title', 'Finding'), cellComponent: undefined, cell: findingCell, width: '340px' },
+    { ...textColumn<FindingRow>('policyName', 'Policy'), defaultHidden: true },
     textColumn<FindingRow>('siteName', 'Site'),
-    textColumn<FindingRow>('linkName', 'Link'),
+    { ...textColumn<FindingRow>('linkName', 'Integration'), defaultHidden: true },
     textColumn<FindingRow>('resourceName', 'Affected Resource'),
-    relativeDateColumn<FindingRow>('lastSeenAt', 'Last Seen'),
+    relativeDateColumn<FindingRow>('lastSeenAt', 'Last seen'),
+    { ...relativeDateColumn<FindingRow>('firstSeenAt', 'First seen'), defaultHidden: true },
   ];
 
   const views: TableView<FindingRow>[] = [
     {
       id: 'open-findings',
-      label: 'Open',
+      label: 'Needs attention',
       isDefault: true,
-      filters: [{ field: 'status', operator: 'eq', value: 'open' }],
+      filters: [
+        { field: 'status', operator: 'neq', value: 'resolved' },
+        { field: 'status', operator: 'neq', value: 'suppressed' },
+      ],
+    },
+    {
+      id: 'regressed',
+      label: 'Regressed',
+      filters: [{ field: 'status', operator: 'eq', value: 'regressed' }],
     },
     {
       id: 'suppressed',
@@ -167,10 +183,12 @@
       return;
     }
     let done = 0;
+    let succeeded = 0;
     for (const row of eligible) {
       ctx.setProgress(`Resolving ${++done} of ${eligible.length}…`);
       try {
         await trpc.findings.resolve.mutate({ id: row.id });
+        succeeded += 1;
       } catch (e) {
         toast.error(
           `Failed to resolve "${row.title}": ${e instanceof Error ? e.message : 'unknown error'}`,
@@ -179,7 +197,8 @@
     }
     invalidate();
     await refetch();
-    toast.success(`Resolved ${done} finding${done === 1 ? '' : 's'}`);
+    ctx.setProgress(null);
+    if (succeeded > 0) toast.success(`Resolved ${succeeded} finding${succeeded === 1 ? '' : 's'}`);
   }
 
   const rowActions: RowAction<FindingRow>[] = [
@@ -192,165 +211,54 @@
     },
   ];
 
-  const openTotal = $derived.by(() => {
-    const s = overview.data?.severity;
-    return s ? s.critical + s.high + s.medium + s.low : 0;
-  });
-
-  // Deferred count = findings actively hidden until a future date. That's the
-  // one lifecycle signal worth tracking at the queue level.
-  const suppressedCount = $derived(overview.data?.byStatus.suppressed ?? 0);
-  const resolvedCount = $derived(overview.data?.byStatus.resolved ?? 0);
-  const regressedCount = $derived(overview.data?.byStatus.regressed ?? 0);
 </script>
+
+{#snippet findingCell({ row }: { row: FindingRow; value: unknown })}
+  <div class="fq-finding-cell">
+    <a href={findingHref(row.id)} onclick={(event) => event.stopPropagation()}>{row.title}<ArrowUpRight class="size-3.5 shrink-0" /></a>
+    <span>{row.policyName}</span>
+  </div>
+{/snippet}
 
 {#snippet statusCell({ value }: { row: FindingRow; value: string })}
   <FindingStatusBadge status={value} />
 {/snippet}
 
 {#snippet strip(api: SignalStripApi)}
-  <SignalStrip
-    code="01"
-    title="Queue Signal"
-    meta={overview.data ? `${overview.data.totalOpen.toLocaleString()} open` : 'loading'}
-  >
-    <SignalCell
-      code="S"
-      label="Severity"
-      onclick={() => api.setSort('severity', 'desc')}
-    >
-      {#if overview.data}
-        <div class="mt-0.5 flex items-baseline gap-2">
-          <span class="font-mono text-xl font-semibold tabular-nums text-foreground">
-            {openTotal.toLocaleString()}
-          </span>
-          <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            {overview.data.severity.critical + overview.data.severity.high} elevated
-          </span>
-        </div>
-        <div class="pt-1">
-          <SeverityRibbon buckets={overview.data.severity} />
-        </div>
-      {:else}
-        <div class="h-8"></div>
-      {/if}
-    </SignalCell>
-    <SignalCell code="L" label="Lifecycle">
-      {#if overview.data}
-        <div class="mt-0.5 flex items-baseline gap-2">
-          <span class="font-mono text-xl font-semibold tabular-nums text-foreground">
-            {suppressedCount.toLocaleString()}
-          </span>
-          <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            suppressed
-          </span>
-        </div>
-        <div class="flex flex-wrap gap-x-3 pt-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          <button
-            type="button"
-            class="hover:text-foreground"
-            onclick={(e) => {
-              e.stopPropagation();
-              api.addFilter({ field: 'status', operator: 'eq', value: 'suppressed' });
-            }}
-          >
-            deferred <span class="tabular-nums text-foreground">{suppressedCount}</span>
-          </button>
-          <button
-            type="button"
-            class="hover:text-foreground"
-            onclick={(e) => {
-              e.stopPropagation();
-              api.addFilter({ field: 'status', operator: 'eq', value: 'resolved' });
-            }}
-          >
-            closed <span class="tabular-nums text-foreground">{resolvedCount}</span>
-          </button>
-          {#if regressedCount > 0}
-            <button
-              type="button"
-              class="text-destructive hover:text-destructive"
-              onclick={(e) => {
-                e.stopPropagation();
-                api.addFilter({ field: 'status', operator: 'eq', value: 'regressed' });
-              }}
-            >
-              regressed <span class="tabular-nums">{regressedCount}</span>
-            </button>
-          {/if}
-        </div>
-      {:else}
-        <div class="h-8"></div>
-      {/if}
-    </SignalCell>
-    <SignalCell
-      code="A"
-      label="Aged > 30d"
-      value={overview.data ? overview.data.agedOver30d.toLocaleString() : '—'}
-      detail={overview.data && overview.data.agedOver30d > 0 ? 'still open · needs closure' : 'queue is fresh'}
-      tone={overview.data && overview.data.agedOver30d > 0 ? 'warning' : 'muted'}
-      onclick={() => api.setSort('lastSeenAt', 'asc')}
-    />
-    <SignalCell
-      code="P"
-      label="Top Policy"
-    >
-      {#if overview.data?.topPolicy}
-        {@const tp = overview.data.topPolicy}
-        <div class="mt-0.5 truncate font-mono text-sm font-semibold text-foreground" title={tp.policyName}>
-          {tp.policyName}
-        </div>
-        <div class="pt-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          {tp.count} open · filter →
-        </div>
-        <button
-          type="button"
-          class="absolute inset-0"
-          aria-label={`Filter to ${tp.policyName}`}
-          onclick={(e) => {
-            e.stopPropagation();
-            api.addFilter({ field: 'policyName', operator: 'eq', value: tp.policyName });
-          }}
-        ></button>
-      {:else if overview.data}
-        <div class="mt-0.5 font-mono text-sm text-muted-foreground">—</div>
-        <div class="pt-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          no open policy work
-        </div>
-      {:else}
-        <div class="h-8"></div>
-      {/if}
-    </SignalCell>
-  </SignalStrip>
+  <nav class="fq-views" aria-label="Finding queues">
+    {#each views as view}
+      <button type="button" class:active={api.activeViewId === view.id} aria-pressed={api.activeViewId === view.id} onclick={() => api.setView(view.id)}>
+        {view.label}
+        {#if overview.data}<span>{view.id === 'open-findings' ? overview.data.totalOpen : overview.data.byStatus[view.id as 'regressed' | 'suppressed' | 'resolved']}</span>{/if}
+      </button>
+    {/each}
+    <button type="button" class:active={!api.activeViewId} aria-pressed={!api.activeViewId} onclick={() => api.setView(undefined)}>All findings</button>
+  </nav>
 {/snippet}
 
-<div class="flex size-full flex-col gap-4 overflow-hidden p-6">
-  <div>
-    <h1 class="text-2xl font-semibold tracking-normal">Findings</h1>
-    <p class="text-sm text-muted-foreground">
-      Technician queue for policy failures and operational gaps.
-    </p>
+<div class="findings-workspace fq-queue">
+  <header class="fq-heading">
+    <div class="flex items-start gap-4">
+      <span class="fq-icon"><ShieldCheck class="size-5" /></span>
+      <div><p class="fq-eyebrow">Operations / Findings</p><h1>Findings</h1><p>Review policy failures, investigate the evidence, and decide what needs attention.</p></div>
+    </div>
+    <Button variant="outline" size="sm" onclick={() => { refreshKey += 1; invalidate(); }}><RefreshCw class="size-3.5" /> Refresh</Button>
+  </header>
+
+  {#if overview.isError}
+    <div class="fq-notice" role="alert">The queue summary could not be loaded. <button onclick={() => overview.refetch()}>Try again</button></div>
+  {:else}
+    <div class="fq-overview" aria-label="Active findings overview" aria-busy={overview.isPending}>
+      <div><span>Needs attention</span><strong>{overview.data?.totalOpen.toLocaleString() ?? '—'}</strong><small>Open, acknowledged, and regressed</small></div>
+      <div><span>High priority</span><strong class:fq-urgent={overview.data && overview.data.severity.critical + overview.data.severity.high > 0}>{overview.data ? (overview.data.severity.critical + overview.data.severity.high).toLocaleString() : '—'}</strong><small>Critical and high severity</small></div>
+      <div><span>Open over 30 days</span><strong>{overview.data?.agedOver30d.toLocaleString() ?? '—'}</strong><small>Age measured from first detection</small></div>
+      <div class="fq-guidance"><ShieldCheck class="size-5 shrink-0" /><p>Start with the highest severity.<br /><span>Regressed findings have returned after resolution and need another review.</span></p></div>
+    </div>
+  {/if}
+
+  <div class="fq-table">
+    <DataTable {fetchData} {columns} {views} rowActions={canManage ? rowActions : []} {refreshKey}
+      enableRowSelection={canManage} enableViewSelector={false} defaultPageSize={25}
+      defaultSort={{ field: 'severity', dir: 'desc' }} onrowclick={(row) => goto(findingHref(row.id))} signalStrip={strip} />
   </div>
-
-  <DataTable
-    {fetchData}
-    {columns}
-    {views}
-    {rowActions}
-    {refreshKey}
-    enableRowSelection
-    defaultPageSize={25}
-    defaultSort={{ field: 'severity', dir: 'desc' }}
-    onrowclick={(row) => (selectedFindingId = row.id)}
-    signalStrip={strip}
-  />
 </div>
-
-<FindingSheet
-  findingId={selectedFindingId}
-  onclose={() => (selectedFindingId = null)}
-  onchange={() => {
-    refreshKey += 1;
-    invalidate();
-  }}
-/>

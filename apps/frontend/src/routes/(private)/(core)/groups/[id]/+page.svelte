@@ -8,27 +8,36 @@
   import type { AppRouter } from '@mspbyte/trpc';
   import type { TRPCClient } from '@trpc/client';
 
-  import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
-  import Ellipsis from '@lucide/svelte/icons/ellipsis';
-  import LoaderCircle from '@lucide/svelte/icons/loader-circle';
-  import Pencil from '@lucide/svelte/icons/pencil';
-  import Plus from '@lucide/svelte/icons/plus';
-  import Trash2 from '@lucide/svelte/icons/trash-2';
-  import X from '@lucide/svelte/icons/x';
+  import {
+    ArrowUpRight,
+    LoaderCircle,
+    Pencil,
+    Plus,
+    Trash2,
+    ArrowLeft,
+    Building2,
+    Link2,
+  } from '@lucide/svelte';
 
   import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
-  import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
   import Button from '$lib/components/ui/button/button.svelte';
   import { Input } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
-  import Separator from '$lib/components/ui/separator/separator.svelte';
-  import SectionPanel from '$lib/components/panel/section-panel.svelte';
   import MultiSelect from '$lib/components/multi-select.svelte';
+  import {
+    DataTable,
+    type DataTableColumn,
+    type PaginationInput,
+    type SignalStripApi,
+    type TableView,
+  } from '$lib/components/data-table';
+  import { relativeDateColumn } from '$lib/components/data-table/column-defs';
+  import SectionPanel from '$lib/components/panel/section-panel.svelte';
+  import Textarea from '$lib/components/ui/textarea/textarea.svelte';
   import Loader from '$lib/components/transition/loader.svelte';
-  import FadeIn from '$lib/components/transition/fade-in.svelte';
   import { authStore } from '$lib/stores/auth.store.svelte';
-  import { formatActionLabel } from '@mspbyte/shared';
+  import { ActionLabels, formatActionLabel } from '@mspbyte/shared';
   import { INTEGRATIONS, type ProviderId } from '@mspbyte/shared';
   import { formatRelativeDate } from '$lib/utils/format';
 
@@ -37,6 +46,7 @@
   const id = $derived(page.params.id ?? '');
 
   const canWrite = $derived(authStore.isAllowed('Sites.Write'));
+  let addOpen = $state(false);
 
   const groupQuery = createQuery(() => ({
     queryKey: ['siteGroups.byId', id],
@@ -53,10 +63,12 @@
   const sitesQuery = createQuery(() => ({
     queryKey: ['sites.list'],
     queryFn: () => trpc.sites.list.query(),
+    enabled: canWrite && addOpen,
   }));
   const tenantLinksQuery = createQuery(() => ({
     queryKey: ['integrationLinks.list.groupMembers'],
     queryFn: () => trpc.integrationLinks.list.query({ status: 'active' }),
+    enabled: canWrite && addOpen,
   }));
 
   const activityQuery = createQuery(() => ({
@@ -83,13 +95,16 @@
       }))
   );
 
+  let memberRefreshKey = $state(0);
   async function invalidateGroup() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['siteGroups.byId', id] }),
       queryClient.invalidateQueries({ queryKey: ['siteGroups.members', id] }),
       queryClient.invalidateQueries({ queryKey: ['siteGroups.recentActivity', id] }),
       queryClient.invalidateQueries({ queryKey: ['siteGroups.list'] }),
+      queryClient.invalidateQueries({ queryKey: ['siteGroups.tableData'] }),
     ]);
+    memberRefreshKey++;
   }
 
   // Rename dialog
@@ -141,6 +156,7 @@
       deleteOpen = false;
       toast.success('Group deleted');
       queryClient.invalidateQueries({ queryKey: ['siteGroups.list'] });
+      queryClient.invalidateQueries({ queryKey: ['siteGroups.tableData'] });
       goto('/groups');
     },
     onError: (e: unknown) => toast.error(e instanceof Error ? e.message : 'Delete failed'),
@@ -151,7 +167,6 @@
   );
 
   // Add members dialog
-  let addOpen = $state(false);
   let selectedSiteIds = $state<string[]>([]);
   let selectedLinkIds = $state<string[]>([]);
   let adding = $state(false);
@@ -162,57 +177,132 @@
     }
   });
 
+  let addError = $state('');
   async function addMembers() {
+    if (!canWrite || adding || !membersQuery.data || membersQuery.isError) return;
     const ids = selectedSiteIds.filter((sid) => !memberSiteIds.has(sid));
     const linkIds = selectedLinkIds.filter((lid) => !memberLinkIds.has(lid));
     if (!ids.length && !linkIds.length) return;
     adding = true;
+    addError = '';
     try {
-      await Promise.all(
-        ids.map((siteId) => trpc.siteGroups.addMember.mutate({ siteGroupId: id, siteId }))
-      );
-      await Promise.all(
-        linkIds.map((integrationLinkId) =>
+      const results = await Promise.allSettled([
+        ...ids.map((siteId) => trpc.siteGroups.addMember.mutate({ siteGroupId: id, siteId })),
+        ...linkIds.map((integrationLinkId) =>
           trpc.siteGroups.addLinkMember.mutate({ siteGroupId: id, integrationLinkId })
-        )
+        ),
+      ]);
+      selectedSiteIds = ids.filter((_, index) => results[index].status === 'rejected');
+      selectedLinkIds = linkIds.filter(
+        (_, index) => results[ids.length + index].status === 'rejected'
       );
+      const failed = selectedSiteIds.length + selectedLinkIds.length;
+      const succeeded = results.length - failed;
       await invalidateGroup();
-      selectedSiteIds = [];
-      selectedLinkIds = [];
-      addOpen = false;
-      const total = ids.length + linkIds.length;
-      toast.success(total === 1 ? 'Member added' : `${total} members added`);
-    } catch (error) {
-      showErrorToast(error, 'Failed to add group members.');
+      if (succeeded)
+        toast.success(`${succeeded} ${succeeded === 1 ? 'member added' : 'members added'}`);
+      if (failed)
+        addError = `${failed} ${failed === 1 ? 'member could' : 'members could'} not be added. Your remaining selections are kept. Try again.`;
+      else addOpen = false;
     } finally {
       adding = false;
     }
   }
 
-  // Remove members (per-row pending)
-  let removingSiteId = $state<string | null>(null);
-  async function removeMember(siteId: string) {
-    removingSiteId = siteId;
-    try {
-      await trpc.siteGroups.removeMember.mutate({ siteGroupId: id, siteId });
-      await invalidateGroup();
-    } catch (error) {
-      showErrorToast(error, 'Failed to remove site.');
-    } finally {
-      removingSiteId = null;
-    }
+  type Member = {
+    id: string;
+    name: string;
+    description: string;
+    kind: 'site' | 'link';
+    addedAt: string;
+  };
+  const members = $derived<Member[]>(
+    [
+      ...(membersQuery.data?.sites ?? []).map((member) => ({
+        ...member,
+        description: member.description ?? '',
+        kind: 'site' as const,
+      })),
+      ...(membersQuery.data?.links ?? []).map((member) => ({
+        ...member,
+        name: member.name ?? member.id,
+        description: member.integrationName,
+        kind: 'link' as const,
+      })),
+    ].sort((a, b) => a.name.localeCompare(b.name))
+  );
+  const memberColumns = $derived<DataTableColumn<Member>[]>([
+    { key: 'name', title: 'Member', sortable: true, cell: memberCell, hideable: false },
+    {
+      key: 'kind',
+      title: 'Type',
+      cell: typeCell,
+      width: '120px',
+      exportValue: ({ row }) => (row.kind === 'site' ? 'Site' : 'Tenant link'),
+    },
+    relativeDateColumn<Member>('addedAt', 'Added to group', { width: '160px' }),
+    ...(canWrite
+      ? [{ key: 'actions', title: '', cell: removeCell, width: '48px', hideable: false }]
+      : []),
+  ]);
+  const memberViews: TableView<Member>[] = [
+    { id: 'sites', label: 'Sites', filters: [{ field: 'kind', operator: 'eq', value: 'site' }] },
+    {
+      id: 'links',
+      label: 'Tenant links',
+      filters: [{ field: 'kind', operator: 'eq', value: 'link' }],
+    },
+  ];
+  async function fetchMembers(input: PaginationInput) {
+    const result = await membersQuery.refetch();
+    if (result.isError) throw result.error;
+    const currentMembers: Member[] = [
+      ...(result.data?.sites ?? []).map((member) => ({
+        ...member,
+        description: member.description ?? '',
+        kind: 'site' as const,
+      })),
+      ...(result.data?.links ?? []).map((member) => ({
+        ...member,
+        name: member.name ?? member.id,
+        description: member.integrationName,
+        kind: 'link' as const,
+      })),
+    ];
+    const search = input.globalSearch.trim().toLowerCase();
+    const filtered = currentMembers.filter(
+      (member) =>
+        `${member.name} ${member.description}`.toLowerCase().includes(search) &&
+        input.filters.every((filter) => filter.field !== 'kind' || member.kind === filter.value)
+    );
+    const field = input.sortField === 'addedAt' ? 'addedAt' : 'name';
+    filtered.sort((a, b) => a[field].localeCompare(b[field]) * (input.sortDir === 'desc' ? -1 : 1));
+    return {
+      rows: filtered.slice(input.page * input.pageSize, (input.page + 1) * input.pageSize),
+      total: filtered.length,
+    };
   }
-
-  let removingLinkId = $state<string | null>(null);
-  async function removeLinkMember(integrationLinkId: string) {
-    removingLinkId = integrationLinkId;
+  let memberToRemove = $state<Member | null>(null);
+  let removeMemberOpen = $state(false);
+  let removingMember = $state(false);
+  async function confirmRemoveMember() {
+    if (!canWrite || !memberToRemove || removingMember) return;
+    removingMember = true;
     try {
-      await trpc.siteGroups.removeLinkMember.mutate({ siteGroupId: id, integrationLinkId });
+      if (memberToRemove.kind === 'site')
+        await trpc.siteGroups.removeMember.mutate({ siteGroupId: id, siteId: memberToRemove.id });
+      else
+        await trpc.siteGroups.removeLinkMember.mutate({
+          siteGroupId: id,
+          integrationLinkId: memberToRemove.id,
+        });
       await invalidateGroup();
+      removeMemberOpen = false;
+      toast.success('Member removed from group');
     } catch (error) {
-      showErrorToast(error, 'Failed to remove tenant link.');
+      showErrorToast(error, 'Failed to remove member.');
     } finally {
-      removingLinkId = null;
+      removingMember = false;
     }
   }
 
@@ -220,6 +310,17 @@
   let logOpen = $state(false);
   const recentActivity = $derived((activityQuery.data ?? []).slice(0, 5));
   const hasMoreActivity = $derived((activityQuery.data ?? []).length > 5);
+
+  function activityLabel(label: string | null, action: string) {
+    const labels: Partial<Record<ActionLabels, string>> = {
+      [ActionLabels.SiteGroupCreate]: 'Group created',
+      [ActionLabels.SiteGroupUpdate]: 'Group details updated',
+      [ActionLabels.SiteGroupDelete]: 'Group deleted',
+      [ActionLabels.SiteGroupMemberAdd]: 'Member added',
+      [ActionLabels.SiteGroupMemberRemove]: 'Member removed',
+    };
+    return labels[label as ActionLabels] ?? formatActionLabel(label, action);
+  }
 
   function formatDatetime(iso: string) {
     return new Date(iso).toLocaleString(undefined, {
@@ -232,324 +333,319 @@
   }
 </script>
 
-{#if groupQuery.isLoading}
-  <Loader />
-{:else if groupQuery.error || !groupQuery.data}
-  <div class="p-8 text-sm text-destructive">Group not found.</div>
-{:else}
-  {@const group = groupQuery.data}
-  <FadeIn class="min-h-0 flex-1 overflow-auto">
-    <header class="border-b border-foreground/15 bg-card">
-      <div class="flex w-full flex-wrap items-end justify-between gap-3 px-6 pb-3 pt-4">
-        <div class="flex min-w-0 items-baseline gap-3">
-          <div class="min-w-0">
-            <h1 class="truncate text-xl font-semibold leading-tight tracking-tight">
-              {group.name}
-            </h1>
-            {#if group.description}
-              <p class="mt-0.5 max-w-3xl truncate text-xs text-muted-foreground">
-                {group.description}
-              </p>
-            {/if}
+<svelte:head><title>{groupQuery.data?.name ?? 'Group'} · Groups · MSPByte</title></svelte:head>
+
+{#snippet memberCell({ row }: { row: Member })}
+  <div class="flex min-w-0 items-center gap-2">
+    {#if row.kind === 'site'}<Building2
+        class="size-4 shrink-0 text-muted-foreground"
+      />{:else}<Link2 class="size-4 shrink-0 text-muted-foreground" />{/if}
+    <div class="min-w-0">
+      {#if row.kind === 'site'}<a
+          href={`/sites/${row.id}`}
+          class="inline-flex items-center gap-1 font-medium hover:text-primary hover:underline"
+          >{row.name}<ArrowUpRight class="size-3" /></a
+        >{:else}<span class="font-medium">{row.name}</span>{/if}
+      {#if row.description}<p
+          class="mt-1 max-w-sm truncate text-xs text-muted-foreground"
+          title={row.description}
+        >
+          {row.description}
+        </p>{/if}
+    </div>
+  </div>
+{/snippet}
+{#snippet typeCell({ row }: { row: Member })}<span class="text-xs text-muted-foreground"
+    >{row.kind === 'site' ? 'Site' : 'Tenant link'}</span
+  >{/snippet}
+{#snippet removeCell({ row }: { row: Member })}
+  <Button
+    variant="ghost"
+    size="icon-sm"
+    aria-label={`Remove ${row.name} from group`}
+    title="Remove from group"
+    onclick={() => {
+      memberToRemove = row;
+      removeMemberOpen = true;
+    }}><Trash2 class="size-3.5" /></Button
+  >
+{/snippet}
+{#snippet memberStrip(api: SignalStripApi)}
+  <nav
+    class="flex shrink-0 items-center gap-5 overflow-x-auto border-b border-border bg-muted/30 px-4"
+    aria-label="Member views"
+  >
+    {#each [{ id: undefined, label: 'All members', count: members.length }, { id: 'sites', label: 'Sites', count: memberSiteIds.size }, { id: 'links', label: 'Tenant links', count: memberLinkIds.size }] as view}
+      <button
+        class="flex shrink-0 items-center gap-2 border-b-2 py-2.5 text-xs focus-visible:outline-2 focus-visible:outline-ring {api.activeViewId ===
+        view.id
+          ? 'border-primary font-medium text-primary'
+          : 'border-transparent text-muted-foreground hover:text-foreground'}"
+        aria-pressed={api.activeViewId === view.id}
+        onclick={() => {
+          api.clearFilters();
+          api.setView(view.id);
+        }}>{view.label}<span class="font-mono text-[10px] tabular-nums">{view.count}</span></button
+      >
+    {/each}
+  </nav>
+{/snippet}
+
+<div class="flex h-full min-h-0 flex-col overflow-auto">
+  <header class="shrink-0 border-b border-border bg-card px-6 py-4">
+    <a
+      href="/groups"
+      class="mb-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary"
+      ><ArrowLeft class="size-3.5" />Groups</a
+    >
+    {#if groupQuery.data}
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div class="min-w-0 basis-full sm:flex-1 sm:basis-auto">
+          <h1 class="break-words text-2xl font-semibold tracking-tight">{groupQuery.data.name}</h1>
+          {#if groupQuery.data.description}<p
+              class="mt-1 max-w-3xl whitespace-pre-line break-words text-sm text-muted-foreground"
+            >
+              {groupQuery.data.description}
+            </p>{/if}
+          <div
+            class="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground"
+          >
+            <span
+              >Created <time title={formatDatetime(groupQuery.data.createdAt)}
+                >{formatRelativeDate(groupQuery.data.createdAt)}</time
+              ></span
+            ><span
+              >Last edited <time title={formatDatetime(groupQuery.data.updatedAt)}
+                >{formatRelativeDate(groupQuery.data.updatedAt)}</time
+              ></span
+            >
           </div>
         </div>
-
-        {#if canWrite}
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger>
-              {#snippet child({ props })}
-                <button
-                  class="rounded-sm border border-transparent p-1 text-muted-foreground transition-colors hover:border-border hover:bg-muted hover:text-foreground"
-                  title="Group options"
-                  aria-label="Group options"
-                  {...props}
-                >
-                  <Ellipsis class="size-4" />
-                </button>
-              {/snippet}
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Content class="w-40" align="end">
-              <DropdownMenu.Item class="gap-2 cursor-pointer" onclick={() => (renameOpen = true)}>
-                <Pencil class="size-3.5" /> Edit details
-              </DropdownMenu.Item>
-              <DropdownMenu.Separator />
-              <DropdownMenu.Item
-                class="gap-2 cursor-pointer text-destructive focus:text-destructive"
-                onclick={() => (deleteOpen = true)}
-              >
-                <Trash2 class="size-3.5" /> Delete
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Root>
-        {/if}
-      </div>
-    </header>
-
-    <div class="mx-auto max-w-[1200px] space-y-4 p-4 lg:p-6">
-      <div class="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
-        <SectionPanel code="01" title="SITES">
-          {#snippet aside()}
-            <div class="flex items-center gap-3">
-              <span>{group.memberCount} member{group.memberCount === 1 ? '' : 's'}</span>
-              {#if canWrite}
-                <button
-                  type="button"
-                  class="inline-flex items-center gap-1 border border-border bg-background px-1.5 py-0.5 text-foreground hover:border-primary hover:text-primary disabled:opacity-40"
-                  aria-label="Add sites to group"
-                  title="Add sites"
-                  disabled={!availableSiteOptions.length || adding}
-                  onclick={() => (addOpen = true)}
-                >
-                  <Plus class="size-3" />
-                  <span class="tracking-[0.14em]">ADD SITES</span>
-                </button>
-              {/if}
-            </div>
-          {/snippet}
-
-          {#if membersQuery.isLoading}
-            <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-              loading…
-            </p>
-          {:else if (membersQuery.data?.sites ?? []).length}
-            <dl>
-              {#each membersQuery.data?.sites ?? [] as member (member.id)}
-                {@const isRemoving = removingSiteId === member.id}
-                <div
-                  class="group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-border/50 py-[7px] last:border-b-0"
-                >
-                  <a
-                    href={`/sites/${member.id}`}
-                    class="flex min-w-0 items-center gap-2 hover:text-primary"
-                  >
-                    <div class="min-w-0">
-                      <div class="truncate text-sm">{member.name}</div>
-                      {#if member.description}
-                        <div class="truncate text-xs text-muted-foreground">
-                          {member.description}
-                        </div>
-                      {/if}
-                    </div>
-                    <ArrowUpRight
-                      class="size-3.5 shrink-0 text-muted-foreground/50 group-hover:text-primary"
-                    />
-                  </a>
-                  {#if canWrite}
-                    <button
-                      type="button"
-                      class="inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
-                      aria-label={`Remove ${member.name}`}
-                      title="Remove from group"
-                      disabled={isRemoving}
-                      onclick={() => removeMember(member.id)}
-                    >
-                      {#if isRemoving}
-                        <LoaderCircle class="size-3.5 animate-spin" />
-                      {:else}
-                        <X class="size-3.5" />
-                      {/if}
-                    </button>
-                  {/if}
-                </div>
-              {/each}
-            </dl>
-          {:else}
-            <div
-              class="flex flex-col items-start gap-2 py-4 font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70"
+        {#if canWrite}<div class="flex items-center gap-2">
+            <Button variant="outline" size="sm" onclick={() => (renameOpen = true)}
+              ><Pencil class="size-3.5" />Edit details</Button
+            ><Button
+              size="sm"
+              disabled={!membersQuery.data || membersQuery.isError}
+              onclick={() => {
+                addError = '';
+                addOpen = true;
+              }}><Plus class="size-3.5" />Add members</Button
             >
-              <span>no sites in this group</span>
-              {#if canWrite}
-                <button
-                  type="button"
-                  class="inline-flex items-center gap-1 border border-border bg-background px-2 py-0.5 text-foreground hover:border-primary hover:text-primary disabled:opacity-40"
-                  disabled={!availableSiteOptions.length}
-                  onclick={() => (addOpen = true)}
-                >
-                  <Plus class="size-3" />
-                  <span class="tracking-[0.14em]">ADD FIRST SITE</span>
-                </button>
-              {/if}
-            </div>
-          {/if}
-        </SectionPanel>
-
-        <aside class="space-y-4">
-          <SectionPanel code="02" title="TENANT LINKS">
-            {#snippet aside()}
-              <div class="flex items-center gap-3">
-                <span>{(membersQuery.data?.links ?? []).length} member{(membersQuery.data?.links ?? []).length === 1 ? '' : 's'}</span>
-                {#if canWrite}
-                  <button
-                    type="button"
-                    class="inline-flex items-center gap-1 border border-border bg-background px-1.5 py-0.5 text-foreground hover:border-primary hover:text-primary disabled:opacity-40"
-                    aria-label="Add tenant links to group"
-                    title="Add tenant links"
-                    disabled={!availableTenantLinkOptions.length || adding}
-                    onclick={() => (addOpen = true)}
-                  >
-                    <Plus class="size-3" />
-                    <span class="tracking-[0.14em]">ADD LINKS</span>
-                  </button>
-                {/if}
-              </div>
-            {/snippet}
-
-            {#if membersQuery.isLoading}
-              <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-                loading…
-              </p>
-            {:else if (membersQuery.data?.links ?? []).length}
-              <dl>
-                {#each membersQuery.data?.links ?? [] as member (member.id)}
-                  {@const isRemoving = removingLinkId === member.id}
-                  <div
-                    class="group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-border/50 py-[7px] last:border-b-0"
-                  >
-                    <div class="min-w-0">
-                      <div class="truncate text-sm">{member.name ?? member.id}</div>
-                      <div class="truncate text-xs text-muted-foreground">
-                        {member.integrationName}
-                      </div>
-                    </div>
-                    {#if canWrite}
-                      <button
-                        type="button"
-                        class="inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
-                        aria-label={`Remove ${member.name ?? member.id}`}
-                        title="Remove from group"
-                        disabled={isRemoving}
-                        onclick={() => removeLinkMember(member.id)}
-                      >
-                        {#if isRemoving}
-                          <LoaderCircle class="size-3.5 animate-spin" />
-                        {:else}
-                          <X class="size-3.5" />
-                        {/if}
-                      </button>
-                    {/if}
-                  </div>
-                {/each}
-              </dl>
-            {:else}
-              <div
-                class="flex flex-col items-start gap-2 py-4 font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70"
-              >
-                <span>no tenant links in this group</span>
-                {#if canWrite}
-                  <button
-                    type="button"
-                    class="inline-flex items-center gap-1 border border-border bg-background px-2 py-0.5 text-foreground hover:border-primary hover:text-primary disabled:opacity-40"
-                    disabled={!availableTenantLinkOptions.length}
-                    onclick={() => (addOpen = true)}
-                  >
-                    <Plus class="size-3" />
-                    <span class="tracking-[0.14em]">ADD FIRST LINK</span>
-                  </button>
-                {/if}
-              </div>
-            {/if}
-          </SectionPanel>
-
-          <SectionPanel code="~" title="ACTIVITY">
-            {#snippet aside()}
-              {#if hasMoreActivity}
-                <button
-                  type="button"
-                  class="tracking-[0.14em] hover:text-foreground"
-                  onclick={() => (logOpen = true)}
-                >
-                  VIEW LOG →
-                </button>
-              {/if}
-            {/snippet}
-
-            {#if activityQuery.isLoading}
-              <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-                loading…
-              </p>
-            {:else if recentActivity.length}
-              <ol class="space-y-1.5">
-                {#each recentActivity as event (event.id)}
-                  <li
-                    class="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-3 border-b border-border/40 pb-1.5 last:border-b-0"
-                  >
-                    <span
-                      class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70"
-                      title={formatDatetime(event.createdAt)}
-                    >
-                      {formatRelativeDate(event.createdAt)}
-                    </span>
-                    <span class="min-w-0">
-                      <span class="truncate text-xs text-foreground/90">
-                        {formatActionLabel(event.actionLabel, event.action)}
-                      </span>
-                      <span
-                        class="ml-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
-                        >· {event.actorLabel}</span
-                      >
-                      {#if event.result !== 'success'}
-                        <span class="ml-1 font-mono text-[10px] uppercase text-destructive"
-                          >· {event.result}</span
-                        >
-                      {/if}
-                    </span>
-                  </li>
-                {/each}
-              </ol>
-            {:else}
-              <p class="font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70">
-                no activity yet
-              </p>
-            {/if}
-          </SectionPanel>
-        </aside>
+          </div>{/if}
       </div>
+    {/if}
+  </header>
+  {#if groupQuery.isPending}<Loader />
+  {:else if groupQuery.isError || !groupQuery.data}<div
+      class="flex flex-col items-start gap-3 p-6"
+      role="alert"
+    >
+      <h2 class="text-lg font-semibold">Group unavailable</h2>
+      <p class="text-sm text-muted-foreground">
+        The group may have been removed, or you may not have access.
+      </p>
+      <Button variant="outline" onclick={() => groupQuery.refetch()}>Try again</Button>
     </div>
-  </FadeIn>
-{/if}
+  {:else}
+    <div class="grid min-h-0 flex-1 grid-cols-1 gap-5 p-6 xl:grid-cols-[minmax(0,1fr)_300px]">
+      <section
+        class="flex min-h-[28rem] min-w-0 flex-col gap-3 xl:min-h-0"
+        aria-label="Group members"
+      >
+        <h2 class="text-sm font-semibold">Members</h2>
+        {#if membersQuery.isPending}<Loader />
+        {:else if membersQuery.isError}<div
+            class="flex items-center gap-3 text-sm text-destructive"
+            role="alert"
+          >
+            Members couldn’t be loaded.<Button
+              variant="outline"
+              size="sm"
+              onclick={() => membersQuery.refetch()}>Try again</Button
+            >
+          </div>
+        {:else if !members.length}<div
+            class="flex flex-1 flex-col items-center justify-center gap-3 rounded-md border border-border bg-card p-6 text-center"
+          >
+            <Building2 class="size-6 text-muted-foreground" />
+            <h3 class="text-base font-medium">No members yet</h3>
+            <p class="max-w-sm text-sm text-muted-foreground">
+              Add sites or tenant links to include them in this group’s scope.
+            </p>
+            {#if canWrite}<Button
+                size="sm"
+                onclick={() => {
+                  addError = '';
+                  addOpen = true;
+                }}><Plus class="size-4" />Add members</Button
+              >{/if}
+          </div>
+        {:else}<DataTable
+            fetchData={fetchMembers}
+            columns={memberColumns}
+            views={memberViews}
+            refreshKey={memberRefreshKey}
+            enableFilters={false}
+            enableViewSelector={false}
+            defaultPageSize={25}
+            defaultSort={{ field: 'name', dir: 'asc' }}
+            signalStrip={memberStrip}
+          />{/if}
+      </section>
+      <aside class="space-y-4 overflow-auto">
+        <SectionPanel title="Recent activity">
+          {#snippet aside()}{#if hasMoreActivity}<button
+                class="hover:text-primary"
+                onclick={() => (logOpen = true)}>View log →</button
+              >{/if}{/snippet}
+          {#if activityQuery.isPending}<p class="text-xs text-muted-foreground" role="status">
+              Loading activity…
+            </p>
+          {:else if activityQuery.isError}<div class="text-xs text-destructive" role="alert">
+              Activity couldn’t be loaded. <button
+                class="underline"
+                onclick={() => activityQuery.refetch()}>Try again</button
+              >
+            </div>
+          {:else if recentActivity.length}<ol class="divide-y divide-border/50">
+              {#each recentActivity as event (event.id)}<li class="py-3 first:pt-0 last:pb-0">
+                  <p class="text-xs font-medium">
+                    {activityLabel(event.actionLabel, event.action)}
+                  </p>
+                  <div
+                    class="mt-1 flex flex-wrap justify-between gap-2 text-[11px] text-muted-foreground"
+                  >
+                    <span>{event.actorLabel}</span><time title={formatDatetime(event.createdAt)}
+                      >{formatRelativeDate(event.createdAt)}</time
+                    >
+                  </div>
+                  {#if event.result !== 'success'}<p class="mt-1 text-xs text-destructive">
+                      {event.result}
+                    </p>{/if}
+                </li>{/each}
+            </ol>
+          {:else}<p class="text-xs text-muted-foreground">No recorded changes yet.</p>{/if}
+        </SectionPanel>
+        <SectionPanel title="Membership scope"
+          ><p class="text-xs leading-relaxed text-muted-foreground">
+            Changes to membership affect policies, packages, and reports scoped to this group.
+            Removing a member keeps the site or tenant link available.
+          </p></SectionPanel
+        >
+        {#if canWrite}<Button
+            variant="ghost"
+            size="sm"
+            class="text-muted-foreground hover:text-destructive"
+            onclick={() => (deleteOpen = true)}><Trash2 class="size-3.5" />Delete group</Button
+          >{/if}
+      </aside>
+    </div>
+  {/if}
+</div>
+
+<AlertDialog.Root bind:open={removeMemberOpen}>
+  <AlertDialog.Content
+    onEscapeKeydown={(event) => {
+      if (removingMember) event.preventDefault();
+    }}
+  >
+    <AlertDialog.Header
+      ><AlertDialog.Title>Remove member from group?</AlertDialog.Title><AlertDialog.Description
+        >Remove {memberToRemove?.name} from {groupQuery.data?.name}? The {memberToRemove?.kind ===
+        'site'
+          ? 'site'
+          : 'tenant link'} will remain available, but assignments scoped to this group may no longer apply
+        to it.</AlertDialog.Description
+      ></AlertDialog.Header
+    >
+    <AlertDialog.Footer
+      ><AlertDialog.Cancel disabled={removingMember}>Cancel</AlertDialog.Cancel><Button
+        variant="destructive"
+        disabled={removingMember}
+        onclick={confirmRemoveMember}
+        >{#if removingMember}<LoaderCircle class="size-4 animate-spin" />Removing…{:else}Remove
+          member{/if}</Button
+      ></AlertDialog.Footer
+    >
+  </AlertDialog.Content>
+</AlertDialog.Root>
 
 <!-- Add sites (multi-select) -->
 <Dialog.Root bind:open={addOpen}>
-  <Dialog.Content class="sm:max-w-[520px]">
+  <Dialog.Content
+    class="sm:max-w-[520px]"
+    showCloseButton={!adding}
+    onInteractOutside={(event) => {
+      if (adding) event.preventDefault();
+    }}
+    onEscapeKeydown={(event) => {
+      if (adding) event.preventDefault();
+    }}
+  >
     <Dialog.Header>
       <Dialog.Title>Add members to group</Dialog.Title>
       <Dialog.Description>
-        Pick one or more sites or tenant links. Existing members are hidden.
+        Choose sites, tenant links, or both. Members already in this group are excluded.
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Body>
-    <div class="grid gap-3">
-      <div class="grid gap-2">
-        <Label>Sites</Label>
-        <MultiSelect
-          options={availableSiteOptions}
-          bind:selected={selectedSiteIds}
-          placeholder="Select sites..."
-          searchPlaceholder="Search sites..."
-          maxDisplay={3}
-          disabled={adding}
-        />
+      <div class="grid gap-3">
+        <fieldset class="grid gap-2">
+          <legend class="mb-2 text-sm font-medium">Sites</legend>
+          <MultiSelect
+            options={availableSiteOptions}
+            bind:selected={selectedSiteIds}
+            placeholder="Select sites…"
+            loading={sitesQuery.isLoading}
+            searchPlaceholder="Search sites..."
+            maxDisplay={3}
+            disabled={adding || sitesQuery.isError || sitesQuery.isLoading}
+          />
+        </fieldset>
+        <fieldset class="grid gap-2">
+          <legend class="mb-2 text-sm font-medium">Tenant links</legend>
+          <MultiSelect
+            options={availableTenantLinkOptions}
+            bind:selected={selectedLinkIds}
+            placeholder="Select tenant links…"
+            loading={tenantLinksQuery.isLoading}
+            searchPlaceholder="Search tenant links..."
+            maxDisplay={3}
+            disabled={adding || tenantLinksQuery.isError || tenantLinksQuery.isLoading}
+          />
+        </fieldset>
+        {#if sitesQuery.isError}<div class="text-sm text-destructive" role="alert">
+            Sites couldn’t be loaded. <button class="underline" onclick={() => sitesQuery.refetch()}
+              >Try again</button
+            >
+          </div>{:else if sitesQuery.isSuccess && !availableSiteOptions.length}<p
+            class="text-xs text-muted-foreground"
+          >
+            No additional sites are available to add.
+          </p>{/if}
+        {#if tenantLinksQuery.isError}<div class="text-sm text-destructive" role="alert">
+            Tenant links couldn’t be loaded. <button
+              class="underline"
+              onclick={() => tenantLinksQuery.refetch()}>Try again</button
+            >
+          </div>{:else if tenantLinksQuery.isSuccess && !availableTenantLinkOptions.length}<p
+            class="text-xs text-muted-foreground"
+          >
+            No additional active tenant links are available to add.
+          </p>{/if}
+        {#if addError}<p class="text-sm text-destructive" role="alert">{addError}</p>{/if}
+        <p class="text-xs text-muted-foreground" aria-live="polite">
+          {selectedSiteIds.length + selectedLinkIds.length} selected
+        </p>
       </div>
-      <div class="grid gap-2">
-        <Label>Tenant links</Label>
-        <MultiSelect
-          options={availableTenantLinkOptions}
-          bind:selected={selectedLinkIds}
-          placeholder="Select tenant links..."
-          searchPlaceholder="Search tenant links..."
-          maxDisplay={3}
-          disabled={adding}
-        />
-      </div>
-      <p class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70">
-        {selectedSiteIds.length + selectedLinkIds.length} selected
-      </p>
-    </div>
-
     </Dialog.Body><Dialog.Footer>
       <Button variant="ghost" disabled={adding} onclick={() => (addOpen = false)}>Cancel</Button>
       <Button
-        disabled={adding || selectedSiteIds.length + selectedLinkIds.length === 0}
+        disabled={adding ||
+          membersQuery.isError ||
+          !membersQuery.data ||
+          selectedSiteIds.length + selectedLinkIds.length === 0}
         onclick={addMembers}
         class="gap-2"
       >
@@ -569,41 +665,51 @@
 
 <!-- Rename / edit details -->
 <Dialog.Root bind:open={renameOpen}>
-  <Dialog.Content class="sm:max-w-[460px]">
+  <Dialog.Content
+    class="sm:max-w-[460px]"
+    showCloseButton={!rename.isPending}
+    onInteractOutside={(event) => {
+      if (rename.isPending) event.preventDefault();
+    }}
+    onEscapeKeydown={(event) => {
+      if (rename.isPending) event.preventDefault();
+    }}
+  >
     <Dialog.Header>
       <Dialog.Title>Edit group</Dialog.Title>
       <Dialog.Description>Update the group's name and description.</Dialog.Description>
     </Dialog.Header>
     <Dialog.Body>
-
-    <div class="grid gap-3">
-      <div class="grid gap-1.5">
-        <Label for="group-name">Name</Label>
-        <Input
-          id="group-name"
-          bind:value={renameName}
-          placeholder="Group name"
-          maxlength={200}
-          onkeydown={(event) => {
-            if (event.key === 'Enter' && canSaveRename) {
-              event.preventDefault();
-              rename.mutate();
-            }
-          }}
-        />
+      <div class="grid gap-3">
+        <div class="grid gap-1.5">
+          <Label for="group-name">Name</Label>
+          <Input
+            id="group-name"
+            bind:value={renameName}
+            placeholder="Group name"
+            maxlength={200}
+            disabled={rename.isPending}
+            onkeydown={(event) => {
+              if (event.key === 'Enter' && canSaveRename) {
+                event.preventDefault();
+                rename.mutate();
+              }
+            }}
+          />
+        </div>
+        <div class="grid gap-1.5">
+          <Label for="group-description">Description</Label>
+          <Textarea
+            id="group-description"
+            bind:value={renameDescription}
+            rows={3}
+            maxlength={2000}
+            disabled={rename.isPending}
+            class="rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            placeholder="Optional"
+          ></Textarea>
+        </div>
       </div>
-      <div class="grid gap-1.5">
-        <Label for="group-description">Description</Label>
-        <textarea
-          id="group-description"
-          bind:value={renameDescription}
-          rows="3"
-          class="rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          placeholder="Optional"></textarea>
-      </div>
-    </div>
-
-
     </Dialog.Body><Dialog.Footer>
       <Button variant="ghost" disabled={rename.isPending} onclick={() => (renameOpen = false)}>
         Cancel
@@ -613,7 +719,7 @@
           <LoaderCircle class="size-4 animate-spin" />
           Saving…
         {:else}
-          Save
+          Save changes
         {/if}
       </Button>
     </Dialog.Footer>
@@ -622,12 +728,16 @@
 
 <!-- Delete confirm -->
 <AlertDialog.Root bind:open={deleteOpen}>
-  <AlertDialog.Content>
+  <AlertDialog.Content
+    onEscapeKeydown={(event) => {
+      if (remove.isPending) event.preventDefault();
+    }}
+  >
     <AlertDialog.Header>
       <AlertDialog.Title>Delete this group?</AlertDialog.Title>
       <AlertDialog.Description>
-        Removes the group and all site memberships. Sites themselves stay put. Any policy or
-        framework assignments scoped to this group will stop matching.
+        Removes this group and its site and tenant link memberships. The sites and tenant links
+        remain available. Assignments scoped to this group will stop matching.
       </AlertDialog.Description>
     </AlertDialog.Header>
 
@@ -667,44 +777,44 @@
   <Dialog.Content class="sm:max-w-[620px]">
     <Dialog.Header>
       <Dialog.Title>Activity log</Dialog.Title>
-      <Dialog.Description>Full audit trail for this group.</Dialog.Description>
+      <Dialog.Description>The latest 50 recorded changes to this group.</Dialog.Description>
     </Dialog.Header>
     <Dialog.Body>
-    <div class="max-h-[60vh] overflow-y-auto">
-      {#if (activityQuery.data ?? []).length}
-        <ol class="divide-y divide-border/50">
-          {#each activityQuery.data ?? [] as event (event.id)}
-            <li class="grid grid-cols-[130px_minmax(0,1fr)] gap-3 px-4 py-2 text-sm">
-              <span
-                class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
-                title={formatDatetime(event.createdAt)}
-              >
-                {formatDatetime(event.createdAt)}
-              </span>
-              <span class="min-w-0">
-                <span class="block truncate">
-                  {formatActionLabel(event.actionLabel, event.action)}
-                </span>
+      <div class="max-h-[60vh] overflow-y-auto">
+        {#if (activityQuery.data ?? []).length}
+          <ol class="divide-y divide-border/50">
+            {#each activityQuery.data ?? [] as event (event.id)}
+              <li class="grid grid-cols-[130px_minmax(0,1fr)] gap-3 px-4 py-2 text-sm">
                 <span
-                  class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/80"
+                  class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                  title={formatDatetime(event.createdAt)}
                 >
-                  {event.actorLabel}
-                  {#if event.result !== 'success'}
-                    · <span class="text-destructive">{event.result}</span>
-                  {/if}
+                  {formatDatetime(event.createdAt)}
                 </span>
-              </span>
-            </li>
-          {/each}
-        </ol>
-      {:else}
-        <p
-          class="p-8 text-center font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70"
-        >
-          no activity
-        </p>
-      {/if}
-    </div>
-
-    </Dialog.Body></Dialog.Content>
+                <span class="min-w-0">
+                  <span class="block truncate">
+                    {activityLabel(event.actionLabel, event.action)}
+                  </span>
+                  <span
+                    class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/80"
+                  >
+                    {event.actorLabel}
+                    {#if event.result !== 'success'}
+                      · <span class="text-destructive">{event.result}</span>
+                    {/if}
+                  </span>
+                </span>
+              </li>
+            {/each}
+          </ol>
+        {:else}
+          <p
+            class="p-8 text-center font-mono text-[11px] uppercase tracking-wider text-muted-foreground/70"
+          >
+            no activity
+          </p>
+        {/if}
+      </div>
+    </Dialog.Body></Dialog.Content
+  >
 </Dialog.Root>

@@ -1,25 +1,10 @@
 <script lang="ts">
   import { formatRelativeDate, prettyText } from '$lib/utils/format';
-  import BriefingHeader from '$lib/components/domain/briefing-header.svelte';
+  import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+  import Monitor from '@lucide/svelte/icons/monitor';
+  import { Button } from '$lib/components/ui/button';
 
-  type Props = {
-    id: string;
-    hostname: string;
-    displayName: string | null | undefined;
-    type: string;
-    os: string | null | undefined;
-    status: string;
-    siteId: string | null | undefined;
-    siteName: string;
-    serialNumber: string | null | undefined;
-    sourceConfidence: string | null | undefined;
-    updatedAt: string | null | undefined;
-    openFindingCount: number;
-    sourceCount: number;
-    linkCount: number;
-  };
   let {
-    id,
     hostname,
     displayName,
     type,
@@ -27,80 +12,71 @@
     status,
     siteId,
     siteName,
-    serialNumber,
-    sourceConfidence,
     updatedAt,
     openFindingCount,
     sourceCount,
     linkCount,
-  }: Props = $props();
+  }: {
+    hostname: string;
+    displayName?: string | null;
+    type: string;
+    os?: string | null;
+    status: string;
+    siteId?: string | null;
+    siteName: string;
+    updatedAt?: string | null;
+    openFindingCount: number;
+    sourceCount: number;
+    linkCount: number;
+  } = $props();
 
-  const statusLabel = $derived(status ? status.replace('_', '-').toUpperCase() : 'UNKNOWN');
-  const statusAccent = $derived(status === 'inactive' || status === 'disabled' || status === 'error');
-  const findingsAccent = $derived(openFindingCount > 0);
-
-  const pillBase = 'inline-flex items-center gap-1.5 rounded-[3px] border px-1.5 py-px tracking-[0.14em]';
-  const pillMuted = `${pillBase} border-foreground/15 bg-foreground/4 text-foreground/90`;
+  const assetName = $derived(hostname.trim() || displayName?.trim() || 'Unnamed asset');
+  const alternateName = $derived(
+    displayName?.trim() && displayName.trim().toLowerCase() !== assetName.toLowerCase()
+      ? displayName.trim()
+      : null
+  );
 </script>
 
-<BriefingHeader
-  entityType="ASSET"
-  title={hostname}
-  subtitle={displayName && displayName !== hostname ? displayName : null}
-  breadcrumb={prettyText(type)}
->
-  {#snippet pills()}
-    <span
-      class="{pillBase} {statusAccent
-        ? 'border-destructive/40 bg-destructive/6 text-destructive'
-        : 'border-foreground/15 bg-foreground/4 text-foreground/90'}"
-    >
-      STATUS·{statusLabel}
-    </span>
-    <span class={pillMuted}>TYPE·{type.toUpperCase()}</span>
-    {#if os}
-      <span class={pillMuted}>OS·{os.toUpperCase()}</span>
-    {/if}
-    {#if sourceConfidence}
-      <span class={pillMuted}>CONF·{sourceConfidence.toUpperCase()}</span>
-    {/if}
-    {#if siteName}
-      <span class="ml-2 truncate text-xs text-muted-foreground">
-        {#if siteId}
-          <a href={`/sites/${siteId}`} class="hover:underline">{siteName}</a>
-        {:else}
-          {siteName}
-        {/if}
-      </span>
-    {/if}
-  {/snippet}
-
-  {#snippet ribbon()}
-    <span class="flex items-baseline gap-1.5">
-      <span class="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">FINDINGS</span>
-      <span class="font-semibold tabular-nums {findingsAccent ? 'text-destructive' : ''}">
-        {openFindingCount.toLocaleString()}
-      </span>
-    </span>
-    <span class="flex items-baseline gap-1.5">
-      <span class="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">SOURCES</span>
-      <span class="font-semibold tabular-nums">{sourceCount.toLocaleString()}</span>
-    </span>
-    <span class="flex items-baseline gap-1.5">
-      <span class="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">LINKS</span>
-      <span class="font-semibold tabular-nums">{linkCount.toLocaleString()}</span>
-    </span>
-    {#if serialNumber}
-      <span class="flex items-baseline gap-1.5">
-        <span class="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">SERIAL</span>
-        <span class="max-w-[220px] truncate font-semibold tabular-nums">{serialNumber}</span>
-      </span>
-    {/if}
-    {#if updatedAt}
-      <span class="flex items-baseline gap-1.5">
-        <span class="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">UPDATED</span>
-        <span class="font-semibold tabular-nums">{formatRelativeDate(updatedAt)}</span>
-      </span>
-    {/if}
-  {/snippet}
-</BriefingHeader>
+<a href="/assets" class="aw-back"><ArrowLeft class="size-3.5" /> All assets</a>
+<header class="aw-heading aw-asset-heading">
+  <div class="flex min-w-0 items-center gap-3">
+    <span class="aw-asset-icon"><Monitor class="size-6" /></span>
+    <div class="min-w-0">
+      <h1>{assetName}</h1>
+      {#if alternateName}<p class="aw-subtitle">{alternateName}</p>{/if}
+      <div class="aw-identity">
+        <span class="aw-status" class:is-active={status === 'active'}>{prettyText(status)}</span>
+        <span>{prettyText(type)}</span>
+        {#if os}<span>{os}</span>{/if}
+        {#if siteId}<a href={`/sites/${siteId}`}>{siteName}</a>{:else}<span>No site assigned</span
+          >{/if}
+      </div>
+    </div>
+  </div>
+  <Button href="#asset-findings" variant={openFindingCount ? 'default' : 'outline'}
+    >Review findings <span class="tabular-nums">{openFindingCount}</span></Button
+  >
+</header>
+<div class="aw-overview aw-detail-overview">
+  <a href="#asset-findings"
+    ><span>Open findings</span><strong>{openFindingCount.toLocaleString()}</strong><small
+      >{openFindingCount ? 'Review issues by severity' : 'No open issues reported'}</small
+    ></a
+  >
+  <a href="#asset-sources"
+    ><span>Source records</span><strong>{sourceCount.toLocaleString()}</strong><small
+      >Review matches and evidence</small
+    ></a
+  >
+  <a href="#asset-integrations"
+    ><span>Integrations</span><strong>{linkCount.toLocaleString()}</strong><small
+      >Connections linked to this asset</small
+    ></a
+  >
+  <div class="aw-coverage">
+    <span>Last updated</span><strong class="aw-date"
+      >{updatedAt ? formatRelativeDate(updatedAt) : 'Not available'}</strong
+    ><small>Latest inventory update</small>
+  </div>
+</div>

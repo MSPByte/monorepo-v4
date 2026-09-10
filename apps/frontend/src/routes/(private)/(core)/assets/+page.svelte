@@ -10,15 +10,15 @@
     type DataTableColumn,
     type PaginationInput,
     type SignalStripApi,
+    type TableView,
   } from '$lib/components/data-table';
   import { numberColumn, stateColumn, textColumn } from '$lib/components/data-table/column-defs';
   import SourceBadge from '$lib/components/domain/source-badge.svelte';
   import { toServerTableInput } from '$lib/components/domain/server-table';
   import { prettyText } from '$lib/utils/format';
-  import SignalStrip from '$lib/components/panel/signal-strip.svelte';
-  import SignalCell from '$lib/components/panel/signal-cell.svelte';
-  import SeverityRibbon from '$lib/components/panel/severity-ribbon.svelte';
-  import CoverageMeter from '$lib/components/panel/coverage-meter.svelte';
+  import Monitor from '@lucide/svelte/icons/monitor';
+  import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
+  import { Button } from '$lib/components/ui/button';
 
   const trpc = getContext<TRPCClient<AppRouter>>('trpc');
   type AssetRow = {
@@ -42,7 +42,12 @@
   }));
 
   const columns: DataTableColumn<AssetRow>[] = [
-    textColumn<AssetRow>('hostname', 'Hostname'),
+    {
+      ...textColumn<AssetRow>('hostname', 'Device'),
+      cellComponent: undefined,
+      cell: deviceCell,
+      hideable: false,
+    },
     textColumn<AssetRow>(
       'assetType',
       'Type',
@@ -56,9 +61,11 @@
             { label: 'Server', value: 'server' },
             { label: 'Workstation', value: 'workstation' },
             { label: 'Network', value: 'network' },
+            { label: 'Mobile', value: 'mobile' },
+            { label: 'Unknown', value: 'unknown' },
           ],
         },
-      },
+      }
     ),
     textColumn<AssetRow>('os', 'OS'),
     stateColumn<AssetRow>(
@@ -89,26 +96,58 @@
             { label: 'Unknown', value: 'unknown' },
           ],
         },
-      },
+      }
     ),
     textColumn<AssetRow>('siteName', 'Site'),
-    numberColumn<AssetRow>('openFindingCount', 'Open Findings'),
+    { ...numberColumn<AssetRow>('openFindingCount', 'Open findings'), cell: findingsCell },
     { key: 'sourceList', title: 'Sources', searchable: true, cell: sourcesCell, width: '240px' },
   ];
 
+  let tableError = $state(false);
+  let refreshKey = $state(0);
+  const views: TableView<AssetRow>[] = [
+    {
+      id: 'findings',
+      label: 'With findings',
+      filters: [{ field: 'openFindingCount', operator: 'gt', value: 0 }],
+      sort: { field: 'openFindingCount', dir: 'desc' },
+    },
+    {
+      id: 'active',
+      label: 'Active',
+      filters: [{ field: 'status', operator: 'eq', value: 'active' }],
+    },
+    {
+      id: 'inactive',
+      label: 'Inactive',
+      filters: [{ field: 'status', operator: 'eq', value: 'inactive' }],
+    },
+    {
+      id: 'unknown',
+      label: 'Unknown status',
+      filters: [{ field: 'status', operator: 'eq', value: 'unknown' }],
+    },
+  ];
+
   async function fetchData(input: PaginationInput) {
-    const result = await trpc.assets.tableData.query(
-      toServerTableInput(input, [
-        'hostname',
-        'displayName',
-        'assetType',
-        'os',
-        'status',
-        'siteName',
-        'sourceList',
-      ]),
-    );
-    return { rows: result.rows as AssetRow[], total: result.total };
+    try {
+      const result = await trpc.assets.tableData.query(
+        toServerTableInput(input, [
+          'hostname',
+          'displayName',
+          'assetType',
+          'os',
+          'status',
+          'siteName',
+          'sourceList',
+        ])
+      );
+      tableError = false;
+      return { rows: result.rows as AssetRow[], total: result.total };
+    } catch (error) {
+      tableError = true;
+      throw error;
+    }
   }
 
   const activeShare = $derived.by(() => {
@@ -122,126 +161,142 @@
     if (!d || d.total === 0) return 0;
     return Math.round(((d.total - d.withoutSources) / d.total) * 100);
   });
-
-  const openTotal = $derived.by(() => {
-    const s = overview.data?.severity;
-    return s ? s.critical + s.high + s.medium + s.low : 0;
-  });
 </script>
+
+<svelte:head><title>Assets · MSPByte</title></svelte:head>
+
+{#snippet deviceCell({ row }: { row: AssetRow })}
+  <a class="aw-device" href={`/assets/${row.id}`}>
+    <span class="aw-device-icon"><Monitor class="size-4" /></span>
+    <span class="min-w-0"
+      ><span class="aw-device-name">{row.hostname || row.displayName || 'Unnamed asset'}</span>
+      {#if row.displayName && row.hostname && row.displayName !== row.hostname}<span
+          class="aw-device-subtitle">{row.displayName}</span
+        >{/if}
+    </span>
+  </a>
+{/snippet}
+
+{#snippet findingsCell({ row }: { row: AssetRow })}
+  <span class="aw-finding-count" class:has-findings={row.openFindingCount > 0}
+    >{row.openFindingCount.toLocaleString()}</span
+  >
+{/snippet}
 
 {#snippet sourcesCell({ row }: { row: AssetRow; value: string })}
   <span class="flex flex-wrap gap-1">
-    {#each row.sources as source}
-      <SourceBadge {source} />
-    {/each}
+    {#each row.sources as source}<SourceBadge {source} />{:else}<span
+        class="text-xs text-muted-foreground">No linked sources</span
+      >{/each}
   </span>
 {/snippet}
 
 {#snippet strip(api: SignalStripApi)}
-  <SignalStrip code="01" title="Fleet Signal" meta={overview.data ? `${overview.data.total.toLocaleString()} assets tracked` : 'loading'}>
-    <SignalCell
-      code="A"
-      label="Active"
-      value={overview.data ? overview.data.byStatus.active.toLocaleString() : '—'}
-      detail={overview.data ? `${activeShare}% of fleet · ${overview.data.byStatus.inactive} inactive` : undefined}
-      tone="primary"
-      onclick={() => api.addFilter({ field: 'status', operator: 'eq', value: 'active' })}
-    />
-    <SignalCell
-      code="T"
-      label="By Type"
+  <nav class="aw-views" aria-label="Asset views">
+    <button
+      type="button"
+      class:active={!api.activeViewId}
+      aria-pressed={!api.activeViewId}
+      onclick={() => {
+        api.clearFilters();
+        api.setView();
+      }}>All assets</button
     >
-      {#if overview.data}
-        {@const t = overview.data.byType}
-        {@const total = t.workstation + t.server + t.network + t.mobile + t.unknown}
-        <div class="mt-0.5 space-y-1">
-          <div class="flex h-1.5 gap-[2px]" aria-hidden="true">
-            {#if total > 0}
-              <span class="bg-primary" style={`flex: ${t.workstation} 0 0`}></span>
-              <span class="bg-foreground/70" style={`flex: ${t.server} 0 0`}></span>
-              <span class="bg-warning/80" style={`flex: ${t.network} 0 0`}></span>
-              <span class="bg-foreground/30" style={`flex: ${t.mobile + t.unknown} 0 0`}></span>
-            {:else}
-              <span class="w-full bg-foreground/10"></span>
-            {/if}
-          </div>
-          <div class="flex flex-wrap gap-x-3 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            <button
-              type="button"
-              class="hover:text-foreground"
-              onclick={(e) => { e.stopPropagation(); api.addFilter({ field: 'assetType', operator: 'eq', value: 'workstation' }); }}
-            >W <span class="tabular-nums text-foreground">{t.workstation}</span></button>
-            <button
-              type="button"
-              class="hover:text-foreground"
-              onclick={(e) => { e.stopPropagation(); api.addFilter({ field: 'assetType', operator: 'eq', value: 'server' }); }}
-            >S <span class="tabular-nums text-foreground">{t.server}</span></button>
-            <button
-              type="button"
-              class="hover:text-foreground"
-              onclick={(e) => { e.stopPropagation(); api.addFilter({ field: 'assetType', operator: 'eq', value: 'network' }); }}
-            >N <span class="tabular-nums text-foreground">{t.network}</span></button>
-          </div>
-        </div>
-      {:else}
-        <div class="h-8"></div>
-      {/if}
-    </SignalCell>
-    <SignalCell
-      code="F"
-      label="Open Findings"
-      onclick={() => api.setSort('openFindingCount', 'desc')}
-    >
-      {#if overview.data}
-        <div class="mt-0.5 flex items-baseline gap-2">
-          <span class="font-mono text-xl font-semibold tabular-nums text-foreground">
-            {openTotal.toLocaleString()}
-          </span>
-        </div>
-        <div class="pt-1">
-          <SeverityRibbon buckets={overview.data.severity} />
-        </div>
-      {:else}
-        <div class="h-8"></div>
-      {/if}
-    </SignalCell>
-    <SignalCell
-      code="S"
-      label="Source Coverage"
-    >
-      {#if overview.data}
-        <div class="mt-0.5 flex items-baseline gap-2">
-          <span class="font-mono text-xl font-semibold tabular-nums text-foreground">
-            {sourceCoverage}<span class="text-[11px] text-muted-foreground">%</span>
-          </span>
-          <span class="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            {overview.data.withoutSources} unlinked
-          </span>
-        </div>
-        <div class="pt-1">
-          <CoverageMeter value={sourceCoverage} />
-        </div>
-      {:else}
-        <div class="h-8"></div>
-      {/if}
-    </SignalCell>
-  </SignalStrip>
+    {#each views as view}
+      <button
+        type="button"
+        class:active={api.activeViewId === view.id}
+        aria-pressed={api.activeViewId === view.id}
+        onclick={() => {
+          api.clearFilters();
+          api.setView(view.id);
+        }}>{view.label}</button
+      >
+    {/each}
+  </nav>
 {/snippet}
 
-<div class="flex size-full flex-col gap-4 overflow-hidden p-6">
-  <div>
-    <h1 class="text-2xl font-semibold tracking-normal">Assets</h1>
-    <p class="text-sm text-muted-foreground">
-      Canonical devices and infrastructure built from source evidence.
-    </p>
-  </div>
+<div class="aw-directory">
+  <header class="aw-heading">
+    <div>
+      <p class="aw-eyebrow">Infrastructure</p>
+      <h1>Assets</h1>
+      <p class="aw-subtitle">
+        Find a device, review its findings, and trace the sources behind it.
+      </p>
+    </div>
+    <span class="aw-context">Across your accessible sites</span>
+  </header>
 
-  <DataTable
-    {fetchData}
-    {columns}
-    defaultPageSize={25}
-    defaultSort={{ field: 'openFindingCount', dir: 'desc' }}
-    onrowclick={(row) => goto(`/assets/${row.id}`)}
-    signalStrip={strip}
-  />
+  <div class="aw-overview" aria-label="Fleet overview" aria-busy={overview.isPending}>
+    <div>
+      <span>Total assets</span><strong>{overview.data?.total.toLocaleString() ?? '—'}</strong><small
+        >Devices in your inventory</small
+      >
+    </div>
+    <div>
+      <span>Active assets</span><strong
+        >{overview.data?.byStatus.active.toLocaleString() ?? '—'}</strong
+      ><small>{overview.data ? `${activeShare}% of inventory` : 'Waiting for fleet data'}</small>
+    </div>
+    <div>
+      <span>Inactive assets</span><strong
+        >{overview.data?.byStatus.inactive.toLocaleString() ?? '—'}</strong
+      >
+      <small
+        >{overview.data
+          ? `${overview.data.byStatus.unknown.toLocaleString()} with unknown status`
+          : 'Waiting for fleet data'}</small
+      >
+    </div>
+    <div class="aw-coverage">
+      <span>Source coverage</span><strong>{overview.data ? `${sourceCoverage}%` : '—'}</strong
+      ><small
+        >{overview.data
+          ? `${overview.data.withoutSources.toLocaleString()} assets without linked sources`
+          : 'Waiting for source data'}</small
+      >
+    </div>
+  </div>
+  {#if overview.isError}<div class="aw-notice" role="alert">
+      Fleet totals could not be loaded. <button type="button" onclick={() => overview.refetch()}
+        >Retry totals</button
+      >
+    </div>{/if}
+  {#if tableError}<div class="aw-notice" role="alert">
+      Assets could not be loaded. <button type="button" onclick={() => refreshKey++}
+        >Retry assets</button
+      >
+    </div>{/if}
+
+  {#if overview.data?.total === 0 && !tableError}
+    <div class="aw-empty aw-panel">
+      <Monitor class="size-8 text-primary" />
+      <h2>No assets yet</h2>
+      <p>
+        Assets appear when your connected integrations sync device records. Check your integrations
+        to get started.
+      </p>
+      <Button href="/setup/integrations" variant="outline"
+        >View integrations <ArrowUpRight class="size-4" /></Button
+      >
+    </div>
+  {:else}
+    <div class="aw-inventory">
+      <DataTable
+        {fetchData}
+        {columns}
+        {views}
+        {refreshKey}
+        enableViewSelector={false}
+        defaultPageSize={25}
+        defaultSort={{ field: 'openFindingCount', dir: 'desc' }}
+        onrowclick={(row) => goto(`/assets/${row.id}`)}
+        signalStrip={strip}
+      />
+    </div>
+    <p class="aw-table-help">
+      Search by device, site, operating system, or source. Use filters to narrow the inventory.
+    </p>
+  {/if}
 </div>

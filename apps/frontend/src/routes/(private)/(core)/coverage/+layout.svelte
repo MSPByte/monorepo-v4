@@ -1,5 +1,4 @@
 <script lang="ts">
-  import './workspace.css';
   import UrlTabs from '$lib/components/url-tabs.svelte';
 
   const { children } = $props();

@@ -116,7 +116,7 @@
   }
 
   const canWritePolicies = $derived(authStore.isAllowed('Policies.Write'));
-  const canDeletePolicies = $derived(authStore.isAllowed('Assets.Delete'));
+  const canDeletePolicies = $derived(authStore.isAllowed('Policies.Delete'));
   const rowActions: RowAction<PolicyRow>[] = $derived([
     ...(canWritePolicies
       ? [
@@ -185,21 +185,27 @@
   <SourceBadge source={value} />
 {/snippet}
 
-<div class="flex size-full flex-col gap-4 overflow-hidden p-6">
-  <div class="flex items-start justify-between gap-3">
+<div class="pw-library flex size-full min-h-0 flex-col gap-4 overflow-hidden">
+  <div class="pw-heading shrink-0">
     <div>
-      <h1 class="text-2xl font-semibold tracking-normal">Policies</h1>
-      <p class="text-sm text-muted-foreground">Operational expectations that produce findings.</p>
+      <div class="pw-eyebrow">Operations / Policy library</div>
+      <h1>Policies</h1>
+      <p class="pw-description">Define what healthy looks like. Review findings and refine the rules that keep your sites on track.</p>
     </div>
-    <Button class="gap-2" onclick={() => goto('/policies/builder')}>
+    {#if canWritePolicies}<Button class="gap-2" onclick={() => goto('/policies/builder')}>
       <Plus class="size-4" />
-      New Policy
-    </Button>
+      Create policy
+    </Button>{/if}
   </div>
 
   <DataTable
     {fetchData}
     {columns}
+    views={[
+      { id: 'attention', label: 'With open findings', filters: [{ field: 'openFindingCount', operator: 'gt', value: 0 }] },
+      { id: 'enabled', label: 'Enabled', filters: [{ field: 'enabled', operator: 'eq', value: true }] },
+      { id: 'disabled', label: 'Disabled', filters: [{ field: 'enabled', operator: 'eq', value: false }] },
+    ]}
     enableRowSelection={canWritePolicies || canDeletePolicies}
     {rowActions}
     defaultPageSize={25}
