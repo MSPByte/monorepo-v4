@@ -205,15 +205,8 @@ export class HaloPSAConnector {
 
     this.tickets = {
       create: async (body) => {
-        const params = new URLSearchParams({
-          includedetails: 'false',
-          includetickettype: 'false',
-          includeuser: 'false',
-          includepriority: 'false',
-          idonly: 'true'
-        });
         const data = await this.client.post<{ id: string }>(
-          `/api/tickets?${params}`,
+          `/api/tickets`,
           [body],
           'application/json-patch+json'
         );
